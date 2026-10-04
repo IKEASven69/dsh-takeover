@@ -325,6 +325,17 @@ const CSS = `
 .bt-note[open] summary::before { transform: rotate(90deg); }
 .bt-note-body { margin-top: 6px; }
 /* 窄容器（侧栏收窄）：命令单列、矩阵行收掉会话数列，避免挤压换行 */
+/* 来源筛选 chips：全部/各家/只看新卡，pill 基座 + 选中态品牌描边 */
+.bt-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 8px; }
+.bt-chip { display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+  border: 1px solid var(--bt-line); border-radius: 999px; padding: 3px 12px;
+  background: transparent; color: var(--bt-mut); font-size: 11.5px; font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  transition: border-color .15s ease, color .15s ease, background .15s ease; }
+.bt-chip:hover { border-color: var(--bt-a); color: var(--bt-a); }
+.bt-chip-on { color: var(--bt-a); background: rgba(99,102,241,.12);
+  border-color: rgba(99,102,241,.45); font-weight: 600; }
+.bt-chip-count { font-size: 10px; opacity: .75; }
 @container (max-width: 430px) {
   .bt-cmds { grid-template-columns: 1fr; }
   .bt-mrow { grid-template-columns: minmax(0, auto) auto auto; }
