@@ -212,6 +212,12 @@ const CSS = `
   color: var(--bt-mut); background: rgba(127,127,127,.1); border: 1px solid var(--bt-line);
   font-variant-numeric: tabular-nums; }
 .bt-badge-hot { color: var(--bt-a); background: rgba(99,102,241,.1); border-color: rgba(99,102,241,.3); }
+/* 收件箱统计条：待取件/已消费/覆盖率/信封 四格，label+数字同 chip */
+.bt-statstrip { display: flex; gap: 6px; flex-wrap: wrap; }
+.bt-stat { font-size: 11px; color: var(--bt-mut); background: rgba(127,127,127,.08);
+  border: 1px solid var(--bt-line); border-radius: 999px; padding: 2px 10px;
+  font-variant-numeric: tabular-nums; }
+.bt-stat-hot { color: var(--bt-a); background: rgba(99,102,241,.1); border-color: rgba(99,102,241,.3); }
 .bt-btn { cursor: pointer; border-radius: 10px; font-size: 12.5px; font-weight: 500; padding: 6px 16px;
   border: 1px solid var(--bt-line); background: transparent; color: inherit; white-space: nowrap;
   transition: border-color .15s ease, color .15s ease, background .15s ease, transform .12s ease; }
@@ -252,7 +258,7 @@ const CSS = `
 .bt-preview-actions { display: flex; align-items: center; gap: 8px; justify-content: space-between;
   white-space: normal; }
 /* 收件箱工具行：即时过滤输入 + 导出全部（过滤词空 = 全量） */
-.bt-inbox-toolbar { display: flex; gap: 8px; align-items: center; }
+.bt-inbox-toolbar { display: flex; gap: 8px; align-items: center; margin-top: -2px; }
 .bt-filter { flex: 1; min-width: 0; height: 32px; box-sizing: border-box;
   border: 1px solid var(--bt-line); border-radius: 10px; background: var(--bt-card);
   color: inherit; font-size: 12.5px; padding: 0 10px; outline: none;
@@ -1112,21 +1118,6 @@ function Panel({ t, locale }: { t: Translate; locale: LocaleRuntime | undefined 
     createElement('div', { className: 'bt-card' },
       createElement('div', { className: 'bt-head' },
         createElement('span', { className: 'bt-title', style: { fontSize: 13 } }, t('inboxTitle')),
-        createElement('span', {
-          className: `bt-badge${(state?.pending.length ?? 0) > 0 ? ' bt-badge-hot' : ''}`,
-          title: t('pendingDirHint'),
-        }, t('badgePending', { n: state?.pending.length ?? '…' })),
-        createElement('span', {
-          className: `bt-badge${archivedCount > 0 ? ' bt-badge-hot' : ''}`,
-          title: t('archivedDirHint'),
-        }, t('badgeArchived', { n: archivedCount })),
-        // coverage 徽标位（0.3.2 预留）：host 侧 extras.coverage 落地后才渲染，缺席不占位
-        coverage !== null
-          ? createElement('span', {
-              className: 'bt-badge',
-              title: t('coverageBadgeTitle'),
-            }, t('coverageBadge', { v: coverage }))
-          : null,
         createElement('span', { className: 'bt-spacer' }),
         createElement('button', {
           className: `bt-btn bt-btn-danger${confirmClear ? ' bt-btn-confirm' : ''}`,
@@ -1135,44 +1126,61 @@ function Panel({ t, locale }: { t: Translate; locale: LocaleRuntime | undefined 
           title: t('clearArchivedTitle'),
         }, confirmClear ? t('clearConfirm', { n: archivedCount }) : t('clearArchived')),
       ),
+      // 统计条：四格横排（待取件 / 已消费 / 账本覆盖 / 信封），一个元素一行信息
       state !== null
-        ? createElement('div', null,
-            // 机器信封归档行（0.3.2 预留位）：host 侧字段落地后才显示，缺席整行不渲染
-            envelopeChars !== null
-              ? createElement('div', { className: 'bt-sub' }, t('envelopeArchived', { n: envelopeChars }))
+        ? createElement('div', { className: 'bt-statstrip' },
+            createElement('span', {
+              className: `bt-stat${(state?.pending.length ?? 0) > 0 ? ' bt-stat-hot' : ''}`,
+              title: t('pendingDirHint'),
+            }, t('badgePending', { n: state?.pending.length ?? '…' })),
+            createElement('span', {
+              className: 'bt-stat',
+              title: t('archivedDirHint'),
+            }, t('badgeArchived', { n: archivedCount })),
+            coverage !== null
+              ? createElement('span', { className: 'bt-stat', title: t('coverageBadgeTitle') },
+                  t('coverageBadge', { v: coverage }))
               : null,
-            // 工具行：即时过滤 + 导出全部 + 导出 HTML 报告（收件箱头部区，常驻——待取件为 0 时只禁用导出全部）
-            createElement('div', { className: 'bt-inbox-toolbar' },
-              createElement('input', {
-                className: 'bt-filter',
-                type: 'search',
-                value: query,
-                placeholder: t('filterPlaceholder'),
-                'aria-label': t('filterAria'),
-                title: t('filterAria'),
-                onChange: (e: { target: { value: string } }) => { setQuery(e.target.value) },
-              }),
-              createElement('button', {
-                className: 'bt-btn',
-                disabled: state.pending.length === 0,
-                onClick: exportAll,
-                title: t('exportAllTitle'),
-              }, t('exportAll')),
-              createElement('button', {
-                className: 'bt-btn',
-                onClick: exportHtmlReport,
-                title: t('exportHtmlTitle'),
-              }, t('exportHtml')),
-            ),
-            createElement(PendingList, {
-              rows: state.pending,
-              query,
-              home: state.home,
-              t,
-              lang,
-              onExport: exportOne,
-            }),
+            envelopeChars !== null
+              ? createElement('span', { className: 'bt-stat', title: t('envelopeArchived', { n: envelopeChars }) },
+                  t('envelopeArchived', { n: envelopeChars }))
+              : null,
           )
+        : null,
+      // 工具行：即时过滤 + 导出全部 + 导出 HTML 报告
+      state !== null
+        ? createElement('div', { className: 'bt-inbox-toolbar' },
+            createElement('input', {
+              className: 'bt-filter',
+              type: 'search',
+              value: query,
+              placeholder: t('filterPlaceholder'),
+              'aria-label': t('filterAria'),
+              title: t('filterAria'),
+              onChange: (e: { target: { value: string } }) => { setQuery(e.target.value) },
+            }),
+            createElement('button', {
+              className: 'bt-btn',
+              disabled: state.pending.length === 0,
+              onClick: exportAll,
+              title: t('exportAllTitle'),
+            }, t('exportAll')),
+            createElement('button', {
+              className: 'bt-btn',
+              onClick: exportHtmlReport,
+              title: t('exportHtmlTitle'),
+            }, t('exportHtml')),
+          )
+        : null,
+      state !== null
+        ? createElement(PendingList, {
+            rows: state.pending,
+            query,
+            home: state.home,
+            t,
+            lang,
+            onExport: exportOne,
+          })
         : createElement('div', { className: 'bt-sub' }, t('loading')),
     ),
 
