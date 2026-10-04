@@ -54,6 +54,12 @@ export const zh: Record<string, string> = {
     '来源会话、cwd、git 快照、tasks 与其余五段全文不在 state 内，未作臆造——' +
     '完整卡片请回会话用 /inbox 取件。',
   exportSectionMissing: '（该段全文不在此文件：设置卡 state 未提供。回会话用 /inbox 取件查看完整卡片。）',
+  exportHtml: '导出 HTML 报告',
+  exportHtmlTitle: '生成自包含单文件 HTML 报告并下载（八家支持矩阵 + 全部待取件卡片 + 已消费计数；' +
+    '零依赖纯前端生成，内容与 state 逐字段一致）',
+  envelopeArchived: '机器信封已随卡归档（{n} chars）',
+  coverageBadge: '覆盖率 {v}',
+  coverageBadgeTitle: '四态覆盖率：done 段陈述的账本状态标注比例（x/y；host 侧数据落地后显示）',
   matrixTitle: '支持矩阵（八家读取器）',
   sessionsCount: '{n} 个会话',
   sessionsProbeFail: '会话数探测失败',
@@ -71,6 +77,22 @@ export const zh: Record<string, string> = {
   loading: '加载中…',
   noTime: '（无时间）',
   renderErrorTitle: 'dsh-takeover 渲染出错（把下面这段发给维护者）',
+  reportTitle: 'dsh-takeover 交接报告',
+  reportSubtitle: '会话接管收件箱快照（八家读取器 · 待取件卡片 · 已消费计数）',
+  reportGenerated: '生成于 {n}',
+  reportNote: '本报告由 dsh-takeover 设置卡导出，为自包含单文件 HTML，内容仅来自 /dsh-takeover/state 当前返回：' +
+    '待取件卡片（编号 / 来源 / 标题 / 项目 / 推送时间与「目标」段预览）、八家支持矩阵与已消费计数。' +
+    '卡片其余五段全文、来源会话与 git 快照不在 state 内，未作臆造——完整卡片请回会话用 /inbox 取件。',
+  reportStatPending: '待取件',
+  reportStatArchived: '已消费',
+  reportStatProviders: '读取器（已启用/总数）',
+  reportPendingEmpty: '收件箱为空——当前没有待取件卡片。',
+  reportSkipped: '另有 {n} 张无法解析的卡片被跳过（不计入上方列表）',
+  reportLabelFrom: '来源',
+  reportLabelProject: '项目',
+  reportLabelTime: '推送时间',
+  reportLabelPreview: '目标预览',
+  reportDisabled: '已停用',
 }
 
 export const en: Record<string, string> = {
@@ -111,6 +133,12 @@ export const en: Record<string, string> = {
     'The source session, cwd, git snapshot, tasks and the other five sections are not in state and are not invented — ' +
     'pick up the full card with /inbox in a session.',
   exportSectionMissing: '(The full text of this section is not in this file: the settings-card state does not provide it. Pick up the full card with /inbox in a session.)',
+  exportHtml: 'Export HTML report',
+  exportHtmlTitle: 'Build a self-contained single-file HTML report and download it (8-reader support matrix + every pending card + consumed count; ' +
+    'zero-dependency, generated in the browser, field-for-field faithful to state)',
+  envelopeArchived: 'Machine envelope archived with the card ({n} chars)',
+  coverageBadge: 'Coverage {v}',
+  coverageBadgeTitle: 'Four-state coverage: share of done-section statements carrying a ledger state (x/y; shown once the host-side data lands)',
   matrixTitle: 'Support matrix (8 readers)',
   sessionsCount: '{n} sessions',
   sessionsProbeFail: 'session count probe failed',
@@ -129,6 +157,22 @@ export const en: Record<string, string> = {
   loading: 'Loading…',
   noTime: '(no time)',
   renderErrorTitle: 'dsh-takeover render error (paste the trace below to the maintainer)',
+  reportTitle: 'dsh-takeover Handoff Report',
+  reportSubtitle: 'Session takeover inbox snapshot (8 readers · pending cards · consumed count)',
+  reportGenerated: 'Generated at {n}',
+  reportNote: 'Exported by the dsh-takeover settings card as a self-contained single-file HTML. Contains only what /dsh-takeover/state returns right now: ' +
+    'pending cards (id / source / title / project / push time and the "goal" section preview), the 8-reader support matrix and the consumed count. ' +
+    'The other five card sections, the source session and git snapshots are not in state and are not invented — pick up full cards with /inbox in a session.',
+  reportStatPending: 'Pending',
+  reportStatArchived: 'Consumed',
+  reportStatProviders: 'Readers (enabled/total)',
+  reportPendingEmpty: 'Inbox is empty — no pending cards right now.',
+  reportSkipped: '{n} unparseable cards were skipped (not listed above)',
+  reportLabelFrom: 'Source',
+  reportLabelProject: 'Project',
+  reportLabelTime: 'Pushed at',
+  reportLabelPreview: 'Goal preview',
+  reportDisabled: 'disabled',
 }
 
 /** 全部内置语言词典（register 时逐一交宿主） */

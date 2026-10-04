@@ -2,13 +2,15 @@
  * dsh-takeover 浏览器半：设置页「dsh-takeover」卡。
  * 四区：命令速览（/handoff · /inbox · /resume-*，直接可见）/ 收件箱概览
  * （即时过滤 + 相邻重复卡分组 + 「新」卡徽标（localStorage 已见集，键含
- * HANDOFF_HOME 散列）+ 展开看目标段预览 + 单卡/全部导出 .md + archived 计数
- * + 清空归档）/ 支持矩阵（八家读取器：规范名+品牌图标、会话数、启用开关）/
- * 开关语义说明。
+ * HANDOFF_HOME 散列）+ 展开看目标段预览 + 单卡/全部导出 .md + 导出 HTML 报告
+ * （自包含单文件，state→html 为可单测纯函数）+ archived 计数 + 清空归档）/
+ * 支持矩阵（八家读取器：规范名+品牌图标、会话数、启用开关）/ 开关语义说明。
  * 文案走宿主 i18n：ctx.locale 注册本卡词典（zh/en）+ bind 出 t()，
  * 语言切换经 locale revision 驱动重渲染（宿主缺席时回退 zh 静态词典）。
  * 数据通路走同源 fetch 直连 host 路由 /dsh-takeover/*（dsh-hippo 先例）。
  * 取件不在设置卡做——会话里 /inbox。
+ * host 侧并行落地中的扩展字段（机器信封字符数 / 四态覆盖率）走防御式读取：
+ * 字段缺席即整行/徽标不显示，绝不硬造。
  * @module dsh-takeover/client
  */
 
@@ -38,8 +40,9 @@ import {
 import type { PendingGroup, SeenStore } from './inbox-view.ts'
 import type { TakeoverState, PendingRow, ProviderRow } from './settings.ts'
 
-/** 卡片渲染语言（跟随宿主 active locale；未登记语言回退 zh） */
-type Lang = 'zh' | 'en'
+/** 卡片渲染语言（跟随宿主 active locale；未登记语言回退 zh）。
+ * 导出——报告纯函数按 lang 出 <html lang> 与文案注入，单测两套词典都要能过。 */
+export type Lang = 'zh' | 'en'
 
 // ---------------------------------------------------------------------------
 // i18n：注册本卡词典并绑定 t。宿主 locale 服务缺席（旧宿主/非浏览器）时
@@ -370,9 +373,10 @@ function safeLocalStorage(): SeenStore | null {
   }
 }
 
-/** Blob 下载：零依赖（URL.createObjectURL + 隐形 <a> 点击）；异常由调用方进错误横幅 */
-function downloadText(filename: string, text: string): void {
-  const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' })
+/** Blob 下载：零依赖（URL.createObjectURL + 隐形 <a> 点击）；异常由调用方进错误横幅。
+ * mime 由调用方给：.md 走 text/markdown，HTML 报告走 text/html。 */
+function downloadText(filename: string, text: string, mime = 'text/markdown;charset=utf-8'): void {
+  const blob = new Blob([text], { type: mime })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
@@ -387,6 +391,317 @@ function downloadText(filename: string, text: string): void {
 function exportStamp(d = new Date()): string {
   const pad = (n: number): string => String(n).padStart(2, '0')
   return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`
+}
+
+// ---------------------------------------------------------------------------
+// host 侧并行落地字段的防御式读取（0.3.2 预留位）
+// 字段由 host 半（settings.ts/tools.ts，另一条工作线）稍后落地；客户端约定两处
+// 落点：state.extras.* 优先、顶层 * 兜底。任一都不在或形态不符 → null，
+// 对应整行/徽标不渲染——宁可少显示，不硬造。
+// ---------------------------------------------------------------------------
+
+/** 非负有限数才算计数（信封字符数 / coverage 计数）；NaN、负数、字符串数字不认 */
+function isCount(v: unknown): v is number {
+  return typeof v === 'number' && Number.isFinite(v) && v >= 0
+}
+
+/** state.extras 防御式取对象：host 侧未落地 / 形态漂移一律回空对象 */
+function extrasOf(state: TakeoverState): Record<string, unknown> {
+  const v: unknown = (state as unknown as Record<string, unknown>).extras
+  return v !== null && typeof v === 'object' ? (v as Record<string, unknown>) : {}
+}
+
+/**
+ * 机器信封字符数。host 半真实契约（src/tools.ts InboxLoadResult）：
+ * envelopeChars?: number（随卡消费的机器信封 JSON 字符数）。state 侧落地位置
+ * 未定稿前两处都探：extras.envelopeChars / envelopeChars，另容 envelope: { chars }
+ * 对象形态。全不在 → null（「机器信封已随卡归档」整行不显示）。
+ */
+export function envelopeCharsOf(state: TakeoverState): number | null {
+  const top = state as unknown as Record<string, unknown>
+  const extra = extrasOf(state)
+  for (const c of [extra.envelopeChars, top.envelopeChars]) {
+    if (isCount(c)) return c
+  }
+  for (const env of [extra.envelope, top.envelope]) {
+    if (env !== null && typeof env === 'object') {
+      const chars: unknown = (env as Record<string, unknown>).chars
+      if (isCount(chars)) return chars
+    }
+  }
+  return null
+}
+
+/**
+ * 四态覆盖率徽标文本（extras.coverage 优先、顶层 coverage 兜底——extras.coverage
+ * 即 host 半 coverageFromExtras 的取数位，src/tools.ts CoverageStats）：
+ * - 对象形态认真实契约 { statements, marked, unmarked }（三字段齐且全为非负数），
+ *   出 "marked/statements"，与工具侧 renderCoverageLine 的 x/y 口径一致；
+ * - 字符串形态（如 "3/8"）trim 后非空即原样展示；
+ * - 兜底对象形态 { done, total }（x / y 字面键再兜一层）拼成 "x/y"。
+ * 全不在/形态不符 → null（徽标位整体不渲染）。
+ */
+export function coverageTextOf(state: TakeoverState): string | null {
+  const top = state as unknown as Record<string, unknown>
+  const extra = extrasOf(state)
+  for (const c of [extra.coverage, top.coverage]) {
+    if (typeof c === 'string') {
+      const s = c.trim()
+      if (s !== '') return s
+    } else if (c !== null && typeof c === 'object') {
+      const o = c as Record<string, unknown>
+      if (isCount(o.statements) && isCount(o.marked) && isCount(o.unmarked)) {
+        return `${o.marked}/${o.statements}`
+      }
+      const x = isCount(o.done) ? o.done : isCount(o.x) ? o.x : null
+      const y = isCount(o.total) ? o.total : isCount(o.y) ? o.y : null
+      if (x !== null && y !== null) return `${x}/${y}`
+    }
+  }
+  return null
+}
+
+// ---------------------------------------------------------------------------
+// HTML 单文件报告导出（docs/需求调研-1003.md P2：对标 Claude Code /export 需求）。
+// state→html 是可导出纯函数：单测直接喂 state + 双语词典 + 固定时刻，无 DOM。
+// 诚实纪律：内容仅来自 state 真有字段（pending 全卡 / 八家矩阵 / archived 计数 /
+// pendingSkipped / inboxError），不硬造；卡片标题与预览是模型生成文本，进 HTML
+// 前一律过 escHtml——自包含单文件没有 CSP 兜底，转义是唯一防线。
+// ---------------------------------------------------------------------------
+
+/** HTML 文本转义：& < > " ' 全量，任何 state 来的字符串进模板前必须过这里 */
+function escHtml(v: string): string {
+  return v
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+/** 报告里的绝对时间：解析失败原样返回（诚实优于臆造）；成功给本地 YYYY-MM-DD HH:mm */
+function absTime(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+/** 报告文案包（调用方按语言现配，本函数保持无 i18n 依赖——同 inbox-view 的 ExportNotes 纪律） */
+export interface ReportWords {
+  title: string
+  subtitle: string
+  /** 「生成于 {n}」模板，{n} 由 buildReportHtml 代入 */
+  generated: string
+  /** 顶部边界说明：内容仅来自 state，完整卡片回会话 /inbox 取 */
+  note: string
+  statPending: string
+  statArchived: string
+  statProviders: string
+  sectionInbox: string
+  sectionMatrix: string
+  pendingEmpty: string
+  /** 「另有 {n} 张无法解析的卡片被跳过」模板 */
+  skipped: string
+  labelFrom: string
+  labelProject: string
+  labelTime: string
+  labelPreview: string
+  previewEmpty: string
+  /** 矩阵行：会话数 / 探测失败 / 不支持 / 启用状态 */
+  sessionsCount: string
+  sessionsProbeFail: string
+  unsupported: string
+  unsupportedNote: string
+  pillOk: string
+  pillNo: string
+  disabled: string
+}
+
+/** 从本卡词典组装报告文案包（zh/en 全量对齐，漏译在 tests/locales.spec.ts 拦下） */
+export function reportWords(lang: Lang): ReportWords {
+  const d = DICTS[lang]
+  const w = (key: string): string => d[key] ?? key
+  return {
+    title: w('reportTitle'),
+    subtitle: w('reportSubtitle'),
+    generated: w('reportGenerated'),
+    note: w('reportNote'),
+    statPending: w('reportStatPending'),
+    statArchived: w('reportStatArchived'),
+    statProviders: w('reportStatProviders'),
+    sectionInbox: w('inboxTitle'),
+    sectionMatrix: w('matrixTitle'),
+    pendingEmpty: w('reportPendingEmpty'),
+    skipped: w('reportSkipped'),
+    labelFrom: w('reportLabelFrom'),
+    labelProject: w('reportLabelProject'),
+    labelTime: w('reportLabelTime'),
+    labelPreview: w('reportLabelPreview'),
+    previewEmpty: w('previewEmpty'),
+    sessionsCount: w('sessionsCount'),
+    sessionsProbeFail: w('sessionsProbeFail'),
+    unsupported: w('unsupported'),
+    unsupportedNote: w('unsupportedNote'),
+    pillOk: w('pillOk'),
+    pillNo: w('pillNo'),
+    disabled: w('reportDisabled'),
+  }
+}
+
+/** 报告样式：内联进单文件（自包含、离线可开）；品牌渐变头 #6366F1→#8B5CF6 */
+const REPORT_CSS = `
+:root { color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: #f4f5fb; color: #1e293b;
+  font: 14px/1.65 system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; }
+.rt-hero { background: linear-gradient(135deg, #6366F1, #8B5CF6); color: #fff; padding: 34px 28px 28px; }
+.rt-hero h1 { margin: 0; font-size: 22px; letter-spacing: .01em; overflow-wrap: anywhere; }
+.rt-sub { margin: 6px 0 0; font-size: 13.5px; opacity: .85; }
+.rt-meta { margin: 14px 0 0; font-size: 12px; opacity: .78; }
+.rt-main { max-width: 860px; margin: 0 auto; padding: 22px 20px 8px; display: flex; flex-direction: column; gap: 16px; }
+.rt-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.rt-stat { background: #fff; border: 1px solid rgba(99,102,241,.18); border-radius: 12px; padding: 14px 16px;
+  display: flex; flex-direction: column; gap: 2px; box-shadow: 0 1px 2px rgba(30,41,59,.06); }
+.rt-stat-n { font-size: 24px; font-weight: 700; color: #4f46e5; }
+.rt-stat-label { font-size: 12px; color: #64748b; }
+.rt-note { margin: 0; font-size: 12px; line-height: 1.7; color: #64748b; background: rgba(99,102,241,.06);
+  border: 1px solid rgba(99,102,241,.16); border-radius: 10px; padding: 10px 14px; }
+.rt-card { background: #fff; border: 1px solid rgba(30,41,59,.08); border-radius: 12px; padding: 16px 18px; }
+.rt-card h2 { margin: 0 0 12px; font-size: 15px; color: #312e81; }
+.rt-empty { color: #64748b; font-size: 13px; background: rgba(127,127,127,.07); border-radius: 8px; padding: 12px 14px; }
+.rt-warn { color: #b45309; font-size: 12.5px; line-height: 1.6; background: rgba(251,191,36,.13);
+  border-radius: 8px; padding: 10px 14px; margin: 0 0 10px; overflow-wrap: anywhere; }
+.rt-pcard { border: 1px solid rgba(30,41,59,.08); border-radius: 10px; padding: 12px 14px; }
+.rt-pcard + .rt-pcard { margin-top: 10px; }
+.rt-ptitle { margin: 0 0 4px; font-weight: 600; font-size: 14px; overflow-wrap: anywhere; }
+.rt-pid { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px;
+  font-weight: 500; color: #6366F1; background: rgba(99,102,241,.08); border-radius: 6px; padding: 1px 7px; margin-left: 6px; }
+.rt-pmeta { margin: 0 0 8px; font-size: 12px; color: #64748b; display: flex; flex-wrap: wrap; gap: 2px 14px; }
+.rt-plabel { font-size: 11px; opacity: .82; margin-right: 3px; }
+.rt-preview { margin-top: 2px; padding: 8px 12px; border-left: 3px solid #6366F1; background: #f8f9ff;
+  border-radius: 0 8px 8px 0; }
+.rt-preview-body { font-size: 12.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.rt-mrow { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 7px 2px;
+  border-bottom: 1px dashed rgba(30,41,59,.1); font-size: 13px; }
+.rt-mrow:last-child { border-bottom: none; }
+.rt-mrow-off { opacity: .55; }
+.rt-mname { font-weight: 600; min-width: 140px; }
+.rt-mid { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; color: #94a3b8; }
+.rt-pill { font-size: 11px; font-weight: 600; border-radius: 999px; padding: 1px 10px; white-space: nowrap; }
+.rt-pill-ok { color: #15803d; background: rgba(21,128,61,.1); border: 1px solid rgba(21,128,61,.35); }
+.rt-pill-no { color: #b45309; background: rgba(180,83,9,.1); border: 1px solid rgba(180,83,9,.35); }
+.rt-mstat { color: #64748b; font-size: 12px; }
+.rt-mnote { flex-basis: 100%; color: #b45309; font-size: 11px; line-height: 1.55; overflow-wrap: anywhere; }
+.rt-foot { text-align: center; color: #94a3b8; font-size: 11.5px; padding: 14px 0 30px; }
+@media (max-width: 560px) { .rt-stats { grid-template-columns: 1fr; } }
+`
+
+/**
+ * state → 自包含 HTML 报告（纯函数，无 DOM / 无 i18n / 无时钟依赖）：
+ * - generatedAt 由调用方给定（展示与 <title> 用；文件名时间戳在调用方拼），
+ *   单测喂固定串即可逐字断言；
+ * - 内容面：头部品牌渐变 + 三张统计卡（待取件 / 已消费 / 读取器已启用-总数）+
+ *   边界说明 + 收件箱全卡（空态出横幅；inboxError / pendingSkipped 诚实浮出）+
+ *   八家支持矩阵（启用与否、支持 pill、会话数、note 浮出）。
+ */
+export function buildReportHtml(
+  state: TakeoverState,
+  words: ReportWords,
+  lang: Lang,
+  generatedAt: string,
+): string {
+  const esc = escHtml
+  const enabled = state.providers.filter((p) => p.enabled).length
+
+  const statCards =
+    `<div class="rt-stat"><span class="rt-stat-n">${state.pending.length}</span>` +
+    `<span class="rt-stat-label">${esc(words.statPending)}</span></div>` +
+    `<div class="rt-stat"><span class="rt-stat-n">${state.archivedCount}</span>` +
+    `<span class="rt-stat-label">${esc(words.statArchived)}</span></div>` +
+    `<div class="rt-stat"><span class="rt-stat-n">${enabled}/${state.providers.length}</span>` +
+    `<span class="rt-stat-label">${esc(words.statProviders)}</span></div>`
+
+  // 收件箱诚实浮出：概览不可用 / 坏卡跳过——只转述 state 给的原文，不粉饰成「为空」
+  const inboxFlags =
+    (state.inboxError !== undefined && state.inboxError !== ''
+      ? `<div class="rt-warn">${esc(state.inboxError)}</div>`
+      : '') +
+    (state.pendingSkipped > 0
+      ? `<div class="rt-warn">${esc(interpolate(words.skipped, { n: state.pendingSkipped }))}</div>`
+      : '')
+
+  const pendingCards = state.pending.map((p) => {
+    const hasTitle = p.title !== ''
+    const title = hasTitle ? p.title : p.id
+    const idChip = hasTitle ? `<span class="rt-pid">${esc(p.id)}</span>` : ''
+    const project = p.project !== ''
+      ? `<span><span class="rt-plabel">${esc(words.labelProject)}</span>${esc(p.project)}</span>`
+      : ''
+    const previewBody = p.preview !== '' ? p.preview : words.previewEmpty
+    return `<div class="rt-pcard">` +
+      `<p class="rt-ptitle">${esc(title)}${idChip}</p>` +
+      `<p class="rt-pmeta">` +
+      `<span><span class="rt-plabel">${esc(words.labelFrom)}</span>${esc(PROVIDER_LABEL[p.agent] ?? p.agent)}</span>` +
+      project +
+      `<span><span class="rt-plabel">${esc(words.labelTime)}</span>${esc(absTime(p.pushedAt))}</span>` +
+      `</p>` +
+      `<div class="rt-preview"><span class="rt-plabel">${esc(words.labelPreview)}</span>` +
+      `<div class="rt-preview-body">${esc(previewBody)}</div></div>` +
+      `</div>`
+  }).join('')
+
+  const inboxBody = state.pending.length === 0
+    ? `<div class="rt-empty">${esc(words.pendingEmpty)}</div>`
+    : pendingCards
+
+  const matrixRows = state.providers.map((r) => {
+    const label = PROVIDER_LABEL[r.name] ?? r.name
+    const stat = r.supported
+      ? (r.sessions >= 0 ? interpolate(words.sessionsCount, { n: r.sessions }) : words.sessionsProbeFail)
+      : (r.note !== '' ? interpolate(words.unsupportedNote, { note: r.note }) : words.unsupported)
+    // 假 0 哨兵浮出与设置卡同口径：supported 且 note 非空才浮出
+    const note = r.supported && r.note !== '' ? `<span class="rt-mnote">${esc(r.note)}</span>` : ''
+    return `<div class="rt-mrow${r.enabled ? '' : ' rt-mrow-off'}">` +
+      `<span class="rt-mname">${esc(label)}</span>` +
+      `<span class="rt-mid">${esc(r.name)}</span>` +
+      `<span class="rt-pill ${r.supported ? 'rt-pill-ok' : 'rt-pill-no'}">${esc(r.supported ? words.pillOk : words.pillNo)}</span>` +
+      `<span class="rt-mstat">${esc(stat)}${r.enabled ? '' : ` · ${esc(words.disabled)}`}</span>` +
+      note +
+      `</div>`
+  }).join('')
+
+  return `<!DOCTYPE html>
+<html lang="${lang}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${esc(words.title)} · ${esc(generatedAt)}</title>
+<style>${REPORT_CSS}</style>
+</head>
+<body>
+<header class="rt-hero">
+<h1>${esc(words.title)}</h1>
+<p class="rt-sub">${esc(words.subtitle)}</p>
+<p class="rt-meta">${esc(interpolate(words.generated, { n: generatedAt }))} · dsh-takeover</p>
+</header>
+<main class="rt-main">
+<div class="rt-stats">${statCards}</div>
+<p class="rt-note">${esc(words.note)}</p>
+<section class="rt-card">
+<h2>${esc(words.sectionInbox)}</h2>
+${inboxFlags}
+${inboxBody}
+</section>
+<section class="rt-card">
+<h2>${esc(words.sectionMatrix)}</h2>
+${matrixRows}
+</section>
+</main>
+<footer class="rt-foot">dsh-takeover · handoff: 1</footer>
+</body>
+</html>
+`
 }
 
 // ---------------------------------------------------------------------------
@@ -725,6 +1040,9 @@ function Panel({ t, locale }: { t: Translate; locale: LocaleRuntime | undefined 
   }
 
   const archivedCount = state?.archivedCount ?? 0
+  // host 侧并行字段（0.3.2 预留位）：state 缺席或字段未落地 → null，行/徽标整体不渲染
+  const envelopeChars = state !== null ? envelopeCharsOf(state) : null
+  const coverage = state !== null ? coverageTextOf(state) : null
 
   // 导出说明文案随当前语言现取；生成/下载全程 try 包住，异常进错误横幅不塌卡
   const exportNotes = (): { top: string; missing: string } => ({
@@ -744,6 +1062,22 @@ function Panel({ t, locale }: { t: Translate; locale: LocaleRuntime | undefined 
     if (state === null || state.pending.length === 0) return
     try {
       downloadText(`handoff-pending-${exportStamp()}.md`, pendingListMarkdown(state.pending, exportNotes()))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+  // 导出 HTML 报告：自包含单文件（八家矩阵 + 全部待取件 + 已消费计数；pending 为空也
+  // 有矩阵与计数可报，故不随 pending 禁用）。state→html 组装在 buildReportHtml 纯函数，
+  // 文案按当前语言现取（reportWords）；文件名带导出时刻，生成失败进错误横幅不塌卡
+  const exportHtmlReport = (): void => {
+    if (state === null) return
+    try {
+      const d = new Date()
+      downloadText(
+        `handoff-report-${exportStamp(d)}.html`,
+        buildReportHtml(state, reportWords(lang), lang, absTime(d.toISOString())),
+        'text/html;charset=utf-8',
+      )
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
@@ -781,6 +1115,13 @@ function Panel({ t, locale }: { t: Translate; locale: LocaleRuntime | undefined 
           className: `bt-badge${archivedCount > 0 ? ' bt-badge-hot' : ''}`,
           title: t('archivedDirHint'),
         }, t('badgeArchived', { n: archivedCount })),
+        // coverage 徽标位（0.3.2 预留）：host 侧 extras.coverage 落地后才渲染，缺席不占位
+        coverage !== null
+          ? createElement('span', {
+              className: 'bt-badge',
+              title: t('coverageBadgeTitle'),
+            }, t('coverageBadge', { v: coverage }))
+          : null,
         createElement('span', { className: 'bt-spacer' }),
         createElement('button', {
           className: `bt-btn bt-btn-danger${confirmClear ? ' bt-btn-confirm' : ''}`,
@@ -791,7 +1132,11 @@ function Panel({ t, locale }: { t: Translate; locale: LocaleRuntime | undefined 
       ),
       state !== null
         ? createElement('div', null,
-            // 工具行：即时过滤 + 导出全部（收件箱头部区，常驻——待取件为 0 时只禁用导出）
+            // 机器信封归档行（0.3.2 预留位）：host 侧字段落地后才显示，缺席整行不渲染
+            envelopeChars !== null
+              ? createElement('div', { className: 'bt-sub' }, t('envelopeArchived', { n: envelopeChars }))
+              : null,
+            // 工具行：即时过滤 + 导出全部 + 导出 HTML 报告（收件箱头部区，常驻——待取件为 0 时只禁用导出全部）
             createElement('div', { className: 'bt-inbox-toolbar' },
               createElement('input', {
                 className: 'bt-filter',
@@ -808,6 +1153,11 @@ function Panel({ t, locale }: { t: Translate; locale: LocaleRuntime | undefined 
                 onClick: exportAll,
                 title: t('exportAllTitle'),
               }, t('exportAll')),
+              createElement('button', {
+                className: 'bt-btn',
+                onClick: exportHtmlReport,
+                title: t('exportHtmlTitle'),
+              }, t('exportHtml')),
             ),
             createElement(PendingList, {
               rows: state.pending,

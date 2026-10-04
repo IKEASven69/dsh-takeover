@@ -66,6 +66,13 @@ export declare function todoToTasks(facts: SessionFacts): Array<{
 }>;
 //#endregion
 //#region src/tools.d.ts
+/** 覆盖率统计：done 段的完成/交付陈述总数与其中带四态标注的条数 */
+interface CoverageStats {
+  statements: number;
+  marked: number;
+  unmarked: number;
+  [k: string]: number;
+}
 /** handoff_push 参数：六段文本可选，缺省段走事件流确定性兜底 */
 interface PushArgs {
   goal?: string;
@@ -86,6 +93,7 @@ type PushResult = {
   path: string;
   skipped: boolean;
   note: string;
+  coverage: CoverageStats;
 } | {
   ok: false;
   error: string;
@@ -132,6 +140,10 @@ type InboxLoadResult = {
   text: string;
   mismatches: string[];
   unavailable?: string;
+  /** 卡内 extras.coverage（防御式提取，外来卡/坏数据缺省） */
+  coverage?: CoverageStats;
+  /** 随卡消费的机器信封 JSON 字符数；卡无信封（旧卡/外写卡）缺省 */
+  envelopeChars?: number;
 } | {
   ok: false;
   error: string;
@@ -361,6 +373,15 @@ interface TakeoverState {
   /** 收件箱概览不可用时的降级说明（pending 位置异常等）；正常时缺省 */
   inboxError?: string;
   archivedCount: number;
+  /** 待取件卡账本覆盖聚合（各卡 extras.coverage 求和）；无数据缺省。
+   * 口径纪律：只聚合不强制——防「为覆盖率假标」污染账本 */
+  coverage?: {
+    statements: number;
+    marked: number;
+    unmarked: number;
+  };
+  /** 待取件机器信封字符总量（*.envelope.json 文件字节数求和）；无信封缺省 */
+  envelopeChars?: number;
   providers: ProviderRow[];
 }
 /**

@@ -209,3 +209,22 @@ test('clearArchived：清空归档并返回份数；目录不存在=0 不视为�
   assert.equal(clearArchived(home), 2)
   assert.equal(buildState(fakeReaders(), home).archivedCount, 0)
 })
+
+test('buildState：coverage 聚合（extras.coverage 求和），坏形态不计入', () => {
+  const home = freshHome()
+  const good1 = makeCard({ extras: { coverage: { statements: 3, marked: 2, unmarked: 1 } } })
+  const good2 = makeCard({ extras: { coverage: { statements: 4, marked: 1, unmarked: 2 } } })
+  const badShape = makeCard({ extras: { coverage: { statements: 'x' } } })
+  writeCard(good1, home)
+  writeCard(good2, home)
+  writeCard(badShape, home)
+  const st = buildState(fakeReaders(), home)
+  assert.deepEqual(st.coverage, { statements: 7, marked: 3, unmarked: 3 })
+})
+
+test('buildState：无 coverage 卡时不产出 coverage 字段', () => {
+  const home = freshHome()
+  writeCard(makeCard(), home)
+  const st = buildState(fakeReaders(), home)
+  assert.equal(st.coverage, undefined)
+})

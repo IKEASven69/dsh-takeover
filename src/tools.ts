@@ -7,6 +7,8 @@
  * @module dsh-takeover/tools
  */
 
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -20,6 +22,7 @@ import {
   generateId,
   listPendingReport,
   loadCard,
+  pendingDir,
   renderCard,
   verifyGit,
   writeCard,
@@ -71,11 +74,179 @@ export function readableError(e: unknown): string {
   return String(e)
 }
 
-/** 渲染：execute 返回规范值对象，render 包成中文 text block */
-function renderPush(_args: unknown, value: unknown): Array<{ type: 'text'; text: string }> {
-  const v = value as { ok?: boolean; id?: string; path?: string; skipped?: boolean; note?: string; error?: unknown }
+// ---------------------------------------------------------------------------
+// A. 四态覆盖率统计（审计语义产品化）
+// ---------------------------------------------------------------------------
+
+/** 四态证据标记（README「四态审计」口径：CURRENT_OBSERVED / HISTORY_REPORTED / MISMATCH / UNAVAILABLE） */
+export const COVERAGE_MARKERS = ['CURRENT_OBSERVED', 'HISTORY_REPORTED', 'MISMATCH', 'UNAVAILABLE'] as const
+
+/** 覆盖率统计：done 段的完成/交付陈述总数与其中带四态标注的条数 */
+export interface CoverageStats {
+  statements: number
+  marked: number
+  unmarked: number
+  // 索引签名：让输出满足 defineTool 的 JsonValue 契约（InboxItem 同款）
+  [k: string]: number
+}
+
+/**
+ * 四态覆盖率统计（确定性、纯函数）。
+ *
+ * 口径纪律：只统计，不强制。这里只产出数字供取件方参考，push 侧绝不做
+ * 「覆盖率不达标就拒卡/改写」一类的强制——一旦把覆盖率当门槛，就会诱导
+ * 推送方「为覆盖率假标」（给每行无脑贴 HISTORY_REPORTED），污染账本本身，
+ * 比未标注危害更大。未标注行的消费口径由取件侧兜底：按 HISTORY_REPORTED 处理。
+ *
+ * 计数规则：done 段按行拆分，空行与 # 开头的小节标题行不计；其余每行算一条
+ * 完成/交付陈述，行内含任一四态标记计 marked，否则计 unmarked。
+ */
+export function coverageOfDone(done: string): CoverageStats {
+  if (typeof done !== 'string') return { statements: 0, marked: 0, unmarked: 0 }
+  let statements = 0
+  let marked = 0
+  for (const raw of done.split(/\r?\n/)) {
+    const line = raw.trim()
+    if (line === '' || line.startsWith('#')) continue
+    statements += 1
+    if (COVERAGE_MARKERS.some((m) => line.includes(m))) marked += 1
+  }
+  return { statements, marked, unmarked: statements - marked }
+}
+
+/** 防御式取数：非负整数三字段齐才认；外来卡/坏数据一律 undefined（不渲染不报错） */
+function normalizeCoverage(v: unknown): CoverageStats | undefined {
+  if (v === null || typeof v !== 'object') return undefined
+  const { statements, marked, unmarked } = v as Record<string, unknown>
+  if (typeof statements !== 'number' || !Number.isInteger(statements) || statements < 0) return undefined
+  if (typeof marked !== 'number' || !Number.isInteger(marked) || marked < 0) return undefined
+  if (typeof unmarked !== 'number' || !Number.isInteger(unmarked) || unmarked < 0) return undefined
+  return { statements, marked, unmarked }
+}
+
+/** 从卡片 extras 防御式取覆盖率（core parseCard 把顶层未知键收进 extras） */
+export function coverageFromExtras(extras: unknown): CoverageStats | undefined {
+  if (extras === null || typeof extras !== 'object') return undefined
+  return normalizeCoverage((extras as Record<string, unknown>).coverage)
+}
+
+/** 「账本覆盖：…」提示行；无有效统计返回 null（渲染侧静默省行） */
+export function renderCoverageLine(coverage: unknown): string | null {
+  const c = normalizeCoverage(coverage)
+  if (c === undefined) return null
+  return `账本覆盖：${c.marked}/${c.statements} 条已标注状态（${c.unmarked} 条未标——取件方按 HISTORY_REPORTED 处理）`
+}
+
+// ---------------------------------------------------------------------------
+// B. 机器信封（双形态输出：人的卡片 .md + 机器的接手信封 .envelope.json）
+// ---------------------------------------------------------------------------
+
+/** 接手信封：卡片纯派生物，机器消费用（token 受限接手场景），可随时由卡片重建 */
+export interface HandoffEnvelope {
+  handoff: 1
+  kind: 'envelope'
+  id: string
+  from: { agent: string; title: string }
+  goal: string
+  done: string
+  remaining: string
+  stopped: string
+  warnings: string
+  files: string[]
+}
+
+/**
+ * 协议扩展提案（CHANGELOG 0.4.0）：handoff: 1 SPEC 一字不动——信封是独立第二文件
+ * 而非 frontmatter 扩展，不认识它的旧实现（core listDirCards 只认 .md）天然忽略，
+ * 收件箱语义零影响；认识它的实现取件消费 .md 时同步删除信封。
+ */
+
+/** 信封各段确定性截断上限。段上限合计（300+300+200+200+200）+ files/元信息
+ * 决定了「总 JSON ≤1200 字」在典型蒸馏文本下可达；四段全顶着上限时会超——
+ * 上限的职责是封顶（最坏有界），≤1200 是目标不是硬保证，这里如实声明。 */
+export const ENVELOPE_GOAL_MAX = 300
+export const ENVELOPE_DONE_MAX = 300
+export const ENVELOPE_REMAINING_MAX = 200
+export const ENVELOPE_STOPPED_MAX = 200
+/** 截断清单未列 warnings 段；沿用 200 档——放任 128K 警告直通会击穿任何预算 */
+export const ENVELOPE_WARNINGS_MAX = 200
+/** from 字段防御性上限（卡片侧标量上限 500，信封里收得更紧） */
+export const ENVELOPE_FROM_MAX = 100
+/** files 段取前 10 条非空行 */
+export const ENVELOPE_FILES_MAX = 10
+/** files 单条行上限（防超长单行把数组撑爆） */
+export const ENVELOPE_FILE_LINE_MAX = 120
+
+/** buildEnvelope 的结构化入参：Card 天然满足，单测可用最小字面量 */
+export interface EnvelopeSource {
+  id?: string
+  from?: { agent?: string; title?: string }
+  sections: { goal?: string; done?: string; remaining?: string; stopped?: string; warnings?: string; files?: string }
+}
+
+/** 卡片 → 接手信封（确定性：同一张卡永远产出同一个 JSON） */
+export function buildEnvelope(card: EnvelopeSource): HandoffEnvelope {
+  const clip = (v: unknown, max: number): string => {
+    const s = typeof v === 'string' ? v : ''
+    return s.length > max ? s.slice(0, max) : s
+  }
+  const sec = card?.sections ?? {}
+  const files = typeof sec.files === 'string'
+    ? sec.files
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l !== '')
+      .slice(0, ENVELOPE_FILES_MAX)
+      .map((l) => l.slice(0, ENVELOPE_FILE_LINE_MAX))
+    : []
+  return {
+    handoff: 1,
+    kind: 'envelope',
+    id: clip(card?.id, MAX_ID_CHARS),
+    from: { agent: clip(card?.from?.agent, ENVELOPE_FROM_MAX), title: clip(card?.from?.title, ENVELOPE_FROM_MAX) },
+    goal: clip(sec.goal, ENVELOPE_GOAL_MAX),
+    done: clip(sec.done, ENVELOPE_DONE_MAX),
+    remaining: clip(sec.remaining, ENVELOPE_REMAINING_MAX),
+    stopped: clip(sec.stopped, ENVELOPE_STOPPED_MAX),
+    warnings: clip(sec.warnings, ENVELOPE_WARNINGS_MAX),
+    files,
+  }
+}
+
+/** 信封落盘路径（与卡片同屋 pending/，取件时同步消费） */
+export function envelopePath(id: string, dir?: string): string {
+  return join(pendingDir(dir), `${id}.envelope.json`)
+}
+
+/**
+ * 取件时同步消费信封：读出字符数（供人渲染）后删除 pending/ 下的信封文件。
+ * 只在 loadCard 成功后调用（id 已过 SAFE_ID 闸，无路径穿越面）；信封是纯派生物，
+ * 残留无害（core 列表只认 .md），读/删任一步失败都吞掉，绝不影响取件主流程成败。
+ */
+function consumeEnvelope(id: string, dir?: string): number | undefined {
+  const p = envelopePath(id, dir)
+  try {
+    if (!existsSync(p)) return undefined
+    let chars: number | undefined
+    try {
+      chars = readFileSync(p, 'utf-8').length
+    } catch { /* 读失败不挡删除 */ }
+    try {
+      rmSync(p, { force: true })
+    } catch { /* 删失败也不挡取件：残留信封会被列表忽略 */ }
+    return chars
+  } catch {
+    return undefined
+  }
+}
+
+/** 渲染：execute 返回规范值对象，render 包成中文 text block（导出仅为单测） */
+export function renderPush(_args: unknown, value: unknown): Array<{ type: 'text'; text: string }> {
+  const v = value as { ok?: boolean; id?: string; path?: string; skipped?: boolean; note?: string; coverage?: unknown; error?: unknown }
   if (v?.ok === true) {
     const lines = [`✅ 交接卡片已寄存：${v.id ?? ''}`, `路径：${v.path ?? ''}`]
+    const coverageLine = renderCoverageLine(v.coverage)
+    if (coverageLine !== null) lines.push(coverageLine)
     if (typeof v.note === 'string' && v.note !== '') lines.push(`⚠️ ${v.note}`)
     lines.push('任何 agent 可用 handoff_inbox（或 /inbox）取件。')
     return [{ type: 'text', text: lines.join('\n') }]
@@ -83,7 +254,7 @@ function renderPush(_args: unknown, value: unknown): Array<{ type: 'text'; text:
   return [{ type: 'text', text: `❌ 寄存失败：${typeof v?.error === 'string' ? v.error : JSON.stringify(v?.error)}` }]
 }
 
-function renderInbox(_args: unknown, value: unknown): Array<{ type: 'text'; text: string }> {
+export function renderInbox(_args: unknown, value: unknown): Array<{ type: 'text'; text: string }> {
   const v = value as {
     ok?: boolean
     action?: string
@@ -92,6 +263,8 @@ function renderInbox(_args: unknown, value: unknown): Array<{ type: 'text'; text
     text?: string
     mismatches?: string[]
     unavailable?: string
+    coverage?: unknown
+    envelopeChars?: number
     error?: unknown
   }
   if (v?.ok !== true) {
@@ -108,6 +281,11 @@ function renderInbox(_args: unknown, value: unknown): Array<{ type: 'text'; text
   }
   // load
   const lines = ['📥 已取件（消费即弃，卡片已归档）：', '', v.text ?? '']
+  const coverageLine = renderCoverageLine(v.coverage)
+  if (coverageLine !== null) lines.push('', coverageLine)
+  if (typeof v.envelopeChars === 'number' && v.envelopeChars >= 0) {
+    lines.push('', `机器信封已随卡归档（${v.envelopeChars} chars）`)
+  }
   if (v.mismatches !== undefined && v.mismatches.length > 0) {
     lines.push('', '⚠️ git 核验冲突（MISMATCH）：', ...v.mismatches.map((m) => `- ${m}`))
   }
@@ -144,7 +322,7 @@ export interface PushArgs {
 }
 
 export type PushResult =
-  | { ok: true; id: string; path: string; skipped: boolean; note: string }
+  | { ok: true; id: string; path: string; skipped: boolean; note: string; coverage: CoverageStats }
   | { ok: false; error: string }
 
 /** 确定性兜底：事件流事实 → 六段正文草稿（中文，证据一律 HISTORY_REPORTED） */
@@ -246,6 +424,9 @@ export function pushHandoff(session: unknown, args: PushArgs, opts?: { dir?: str
     const suggested = pick(args.suggested, '')
     if (suggested !== '') sections.suggested = section(suggested, '')
 
+    // 四态覆盖率：只统计不强制（纪律见 coverageOfDone 注释），随卡进 extras 持久化，
+    // 取件侧 parseCard 后可从 extras.coverage 读回
+    const coverage = coverageOfDone(sections.done)
     const card: Card = {
       handoff: 1,
       id: generateId(),
@@ -257,11 +438,19 @@ export function pushHandoff(session: unknown, args: PushArgs, opts?: { dir?: str
       git: collectGitSnapshot(cwd),
       tasks: todoToTasks(facts).filter((t): t is TaskSnapshot => true),
       sections,
-      extras: {},
+      extras: { coverage },
     }
     const path = writeCard(card, opts?.dir)
-    const note = [probe.note, ...truncated].filter(Boolean).join('；')
-    return { ok: true, id: card.id, path, skipped: probe.skipped, note }
+    // 机器信封（协议扩展提案，handoff: 1 SPEC 不动）：卡片落盘成功后落第二文件。
+    // 信封是纯派生物——写失败只降级进 note，不回滚已寄存的卡片
+    let envelopeNote = ''
+    try {
+      writeFileSync(envelopePath(card.id, opts?.dir), JSON.stringify(buildEnvelope(card)), 'utf-8')
+    } catch (e) {
+      envelopeNote = `机器信封落盘失败（卡片本体已寄存）：${readableError(e)}`
+    }
+    const note = [probe.note, ...truncated, envelopeNote].filter(Boolean).join('；')
+    return { ok: true, id: card.id, path, skipped: probe.skipped, note, coverage }
   } catch (e) {
     return { ok: false, error: readableError(e) }
   }
@@ -303,7 +492,18 @@ export function inboxList(opts?: { dir?: string }): InboxListResult {
 }
 
 export type InboxLoadResult =
-  | { ok: true; action: 'load'; id: string; text: string; mismatches: string[]; unavailable?: string }
+  | {
+      ok: true
+      action: 'load'
+      id: string
+      text: string
+      mismatches: string[]
+      unavailable?: string
+      /** 卡内 extras.coverage（防御式提取，外来卡/坏数据缺省） */
+      coverage?: CoverageStats
+      /** 随卡消费的机器信封 JSON 字符数；卡无信封（旧卡/外写卡）缺省 */
+      envelopeChars?: number
+    }
   | { ok: false; error: string }
 
 /** 取件（消费即弃）：pending → archived，附 verifyGit 的 MISMATCH/UNAVAILABLE 警告 */
@@ -317,6 +517,9 @@ export function inboxLoad(id: string, opts?: { dir?: string }): InboxLoadResult 
   try {
     const card = loadCard(trimmed, opts?.dir)
     const check = verifyGit(card)
+    // 机器信封随卡消费：core 的 loadCard 只搬 .md，信封生命周期归本插件管
+    const envelopeChars = consumeEnvelope(trimmed, opts?.dir)
+    const coverage = coverageFromExtras(card.extras)
     const out: InboxLoadResult = {
       ok: true,
       action: 'load',
@@ -325,6 +528,8 @@ export function inboxLoad(id: string, opts?: { dir?: string }): InboxLoadResult 
       mismatches: check.mismatches,
     }
     if (check.unavailable !== undefined) out.unavailable = check.unavailable
+    if (coverage !== undefined) out.coverage = coverage
+    if (envelopeChars !== undefined) out.envelopeChars = envelopeChars
     return out
   } catch (e) {
     // core 层中文错误（收件箱无此待取件等）原样透传；系统错误包中文口径
@@ -407,7 +612,7 @@ function safeUserQuestions(ctx: Context): unknown {
 export function registerPushTool(ctx: Context): void {
   ctx.tools.register(defineTool({
     name: 'handoff_push',
-    description: '把当前 DSH 会话寄存为一张 handoff: 1 交接卡片到共享收件箱 ~/.handoff/pending/（任何 agent 可取件）。六段文本（goal/files/done/remaining/stopped/warnings/suggested）可选传入；留空段从会话事件流确定性兜底，不调 LLM。返回 { ok, id, path } 规范值。',
+    description: '把当前 DSH 会话寄存为一张 handoff: 1 交接卡片到共享收件箱 ~/.handoff/pending/（任何 agent 可取件）。六段文本（goal/files/done/remaining/stopped/warnings/suggested）可选传入；留空段从会话事件流确定性兜底，不调 LLM。另落机器信封 <id>.envelope.json（协议扩展提案）并对 done 段产出四态覆盖率统计 coverage（只统计不强制）。返回 { ok, id, path, coverage } 规范值。',
     parameters: {
       goal: { type: 'string', description: '「目标」段：会话在做什么、最后一条用户请求' },
       files: { type: 'string', description: '「涉及文件」段：碰过的文件/命令；计划文档只写路径' },
@@ -429,6 +634,7 @@ export function registerPushTool(ctx: Context): void {
           ok: { type: 'boolean', description: '是否成功寄存' },
           id: { type: 'string', description: '卡片 id（文件名去 .md）' },
           path: { type: 'string', description: '落盘绝对路径' },
+          coverage: { type: 'json', description: '四态覆盖率统计 { statements, marked, unmarked }（只统计不强制）' },
           skipped: { type: 'boolean', description: '事件流不可用时为 true' },
           note: { type: 'string', description: '降级说明' },
           error: { type: 'json', description: '失败原因' },
@@ -449,7 +655,7 @@ export function registerPushTool(ctx: Context): void {
 export function registerInboxTool(ctx: Context): void {
   ctx.tools.register(defineTool({
     name: 'handoff_inbox',
-    description: '交接卡片收件箱：action=list 列 ~/.handoff/pending/ 待取件（id/来源/项目/时间）；action=load + id 取件（消费即弃，卡片移到 archived/，附 git 核验 MISMATCH/UNAVAILABLE 警告）。返回 { ok, ... } 规范值。',
+    description: '交接卡片收件箱：action=list 列 ~/.handoff/pending/ 待取件（id/来源/项目/时间）；action=load + id 取件（消费即弃，卡片移到 archived/，随卡消费机器信封，附 git 核验 MISMATCH/UNAVAILABLE 警告与四态覆盖率）。返回 { ok, ... } 规范值。',
     parameters: {
       action: { type: 'string', required: true, enum: ['list', 'load'], description: 'list 列待取件；load 取件（消费即弃）' },
       id: { type: 'string', description: 'load 必填：卡片 id' },
@@ -466,6 +672,8 @@ export function registerInboxTool(ctx: Context): void {
           text: { type: 'string', description: 'load：卡片全文（frontmatter + 六段）' },
           mismatches: { type: 'json', description: 'load：git 核验冲突（MISMATCH）' },
           unavailable: { type: 'string', description: 'load：无法核验说明（UNAVAILABLE）' },
+          coverage: { type: 'json', description: 'load：卡片 extras.coverage 的四态覆盖率统计（无则缺省）' },
+          envelopeChars: { type: 'number', description: 'load：随卡消费的机器信封 JSON 字符数（卡无信封时缺省）' },
           error: { type: 'json', description: '失败原因' },
         },
       },

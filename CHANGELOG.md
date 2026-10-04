@@ -2,6 +2,12 @@
 
 > **版本体系重置（2026-10-01）**：0.1–0.5 时期的版本号随开发过程推进过快、颗粒度失真，经用户要求自本日起**重置为 0.1.0 重新起算**——0.1.0 = 当前功能全集（八家拉取 / 交接寄存 / 收件箱取件 / 设置卡四区 / 双语 i18n / 八家品牌图标）经完整真用户流测试通过后的首个版本。此前的版本号历史见文末归档，仅作记录，不再构成发布序列。
 
+## [0.4.0] — 未发布
+
+### 新增
+- **四态覆盖率统计（审计语义产品化）**：`handoff_push` 落卡前对「做到哪」段逐行确定性统计——空行与 `#` 小节标题行不计，其余每行算一条完成/交付陈述，含 CURRENT_OBSERVED / HISTORY_REPORTED / MISMATCH / UNAVAILABLE 任一计已标注；结果写入卡片 `extras.coverage`（`{ statements, marked, unmarked }`）随卡持久化（取件侧可读回），push 结果同步返回 `coverage`。push 与取件渲染各追加一行「账本覆盖：x/y 条已标注状态（z 条未标——取件方按 HISTORY_REPORTED 处理）」。**口径纪律：只统计不强制**——不为覆盖率设任何门槛，防止「为覆盖率假标」污染账本；未标注行的消费口径由取件方按 HISTORY_REPORTED 兜底
+- **机器信封（双形态输出：人的卡片 + 机器的接手信封；协议扩展提案）**：`handoff_push` 成功后在 pending/ 落第二文件 `<id>.envelope.json`（`{ handoff: 1, kind: "envelope", id, from: {agent, title}, goal, done, remaining, stopped, warnings, files }`），各段确定性截断（goal/done ≤300 字，remaining/stopped/warnings ≤200 字，from ≤100 字，files 取卡片 files 段前 10 条非空行、单条 ≤120 字），总 JSON ≤1200 字为目标（段上限负责封顶最坏情形）；`handoff_inbox` load 取件消费 .md 时同步删除对应信封，并提示「机器信封已随卡归档（n chars）」——信封读/删失败只降级，绝不影响取件成败，残留信封对不认识它的实现天然无害。**handoff: 1 SPEC 一字未动**：信封是独立派生文件而非 frontmatter 扩展，作为协议扩展提案提交上游（agent-handoff 协议仓）
+
 ## [0.3.1] — 2026-10-03
 
 ### 修正

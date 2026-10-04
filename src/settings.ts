@@ -122,6 +122,11 @@ export interface TakeoverState {
   /** 收件箱概览不可用时的降级说明（pending 位置异常等）；正常时缺省 */
   inboxError?: string
   archivedCount: number
+  /** 待取件卡账本覆盖聚合（各卡 extras.coverage 求和）；无数据缺省。
+   * 口径纪律：只聚合不强制——防「为覆盖率假标」污染账本 */
+  coverage?: { statements: number; marked: number; unmarked: number }
+  /** 待取件机器信封字符总量（*.envelope.json 文件字节数求和）；无信封缺省 */
+  envelopeChars?: number
   providers: ProviderRow[]
 }
 /**
@@ -136,6 +141,10 @@ export function buildState(readers: ForeignReaders, dir?: string): TakeoverState
   let pending: PendingRow[] = []
   let pendingSkipped = 0
   let inboxError: string | undefined
+  // 收件箱聚合：待取件卡的账本覆盖求和 + 机器信封字符总量（0.4.0，显示位在 client 侧防御消费）。
+  // 聚合失败只影响这两个字段，不拖垮整体 state（settings 头注释契约同款）。
+  let coverage: TakeoverState['coverage']
+  let envelopeChars: number | undefined
   try {
     const report = listPendingReport(dir)
     pending = report.cards.map((c) => ({
@@ -147,6 +156,25 @@ export function buildState(readers: ForeignReaders, dir?: string): TakeoverState
       preview: previewOf(c),
     }))
     pendingSkipped = report.skipped.length
+
+    const pd = join(resolveHome(dir), 'pending')
+    for (const c of report.cards) {
+      const cov = (c.extras as { coverage?: { statements?: unknown; marked?: unknown; unmarked?: unknown } } | undefined)?.coverage
+      if (cov && [cov.statements, cov.marked, cov.unmarked].every((x) => typeof x === 'number' && Number(x) >= 0)) {
+        coverage ??= { statements: 0, marked: 0, unmarked: 0 }
+        coverage.statements += Number(cov.statements)
+        coverage.marked += Number(cov.marked)
+        coverage.unmarked += Number(cov.unmarked)
+      }
+    }
+    for (const f of readdirSync(pd)) {
+      if (!f.endsWith('.envelope.json')) continue
+      try {
+        envelopeChars = (envelopeChars ?? 0) + statSync(join(pd, f)).size
+      } catch {
+        /* 单项 stat 失败不计入 */
+      }
+    }
   } catch (e) {
     inboxError = `收件箱概览不可用：${e instanceof Error ? e.message : String(e)}`
     console.warn(`[dsh-takeover] buildState：${inboxError}`)
@@ -181,8 +209,9 @@ export function buildState(readers: ForeignReaders, dir?: string): TakeoverState
     return { name, supported, sessions, enabled: !switches.disabledProviders.includes(name), note }
   })
 
-  return { home: resolveHome(dir), pending, pendingSkipped, inboxError, archivedCount: countArchived(dir), providers }
+  return { home: resolveHome(dir), pending, pendingSkipped, inboxError, archivedCount: countArchived(dir), coverage, envelopeChars, providers }
 }
+
 
 /** archived 计数：按目录枚举+stat，不逐卡解析（此前为个数全量 parse 每张归档卡） */
 function countArchived(dir?: string): number {
