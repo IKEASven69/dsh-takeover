@@ -31,15 +31,30 @@ export function filterPending(
   rows: PendingRow[],
   query: string,
   labelOf: (agent: string) => string,
+  source?: string | null,
+  newOnlyIds?: Set<string> | null,
 ): PendingRow[] {
+  let out = rows
+  if (source) out = out.filter((p) => p.agent === source)
+  if (newOnlyIds) {
+    const ids = newOnlyIds
+    out = out.filter((p) => ids.has(p.id))
+  }
   const q = query.trim().toLowerCase()
-  if (q === '') return rows
-  return rows.filter((p) =>
+  if (q === '') return out
+  return out.filter((p) =>
     p.title.toLowerCase().includes(q)
     || p.id.toLowerCase().includes(q)
     || p.agent.toLowerCase().includes(q)
     || labelOf(p.agent).toLowerCase().includes(q),
   )
+}
+
+/** 待取件卡的来源去重清单（出现顺序），供来源筛选 chips 渲染 */
+export function sourceFacets(rows: PendingRow[]): Array<{ agent: string; count: number }> {
+  const counts = new Map<string, number>()
+  for (const r of rows) counts.set(r.agent, (counts.get(r.agent) ?? 0) + 1)
+  return [...counts.entries()].map(([agent, count]) => ({ agent, count }))
 }
 
 // ---------------------------------------------------------------------------

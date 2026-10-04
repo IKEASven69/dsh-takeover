@@ -33,8 +33,10 @@ import {
   filterPending,
   groupAdjacent,
   loadSeenSet,
+  newIdsOf,
   pendingListMarkdown,
   saveSeenSet,
+  sourceFacets,
   seenStorageKey,
 } from './inbox-view.ts'
 import type { PendingGroup, SeenStore } from './inbox-view.ts'
@@ -768,13 +770,51 @@ function PendingList({ rows, query, home, t, lang, onExport }: {
     if (willOpen) markSeen(g.rows.map((r) => r.id))
   }
 
-  // 先滤后组：过滤改变可见序列，「相邻」在滤后的列表上判定
-  const visible = filterPending(rows, query, (a) => PROVIDER_LABEL[a] ?? a)
-  const groups = groupAdjacent(visible)
+  // 来源筛选 + 只看新卡：收件箱自持的筛选状态（重开设置卡即重置，轻量符合直觉）
+  const [sourceSel, setSourceSel] = useState<string | null>(null)
+  const [newOnly, setNewOnly] = useState(false)
 
+  // 先滤（来源 → 只看新卡 → 文本）后组：过滤改变可见序列，「相邻」在滤后的列表上判定
+  const newIds = new Set(newIdsOf(rows, seen))
+  const visible = filterPending(
+    rows,
+    query,
+    (a) => PROVIDER_LABEL[a] ?? a,
+    sourceSel,
+    newOnly ? newIds : null,
+  )
+  const groups = groupAdjacent(visible)
+  const facets = sourceFacets(rows)
+
+  if (visible.length === 0 && rows.length > 0) {
+    return createElement('div', { className: 'bt-banner bt-banner-info' }, t('filterEmpty'))
+  }
   if (rows.length === 0) {
     return createElement('div', { className: 'bt-banner bt-banner-info' }, t('emptyInbox'))
   }
+
+  // 来源筛选 chips：全部 + 各家（带计数）+ 只看新卡
+  const chip = (label: string, count: number, on: boolean, onClick: () => void, key: string): ReturnType<typeof createElement> =>
+    createElement('button', {
+      key,
+      className: `bt-chip${on ? ' bt-chip-on' : ''}`,
+      onClick,
+      type: 'button',
+    },
+      createElement('span', { className: 'bt-chip-label' }, label),
+      createElement('span', { className: 'bt-chip-count' }, String(count)),
+    )
+  const chipBar = createElement('div', { className: 'bt-chips', role: 'group', 'aria-label': t('chipSourceAria') },
+    chip(t('chipAll'), rows.length, sourceSel === null, () => setSourceSel(null), 'chip-all'),
+    ...facets.map((f) => chip(
+      (PROVIDER_LABEL[f.agent] ?? f.agent),
+      f.count,
+      sourceSel === f.agent,
+      () => setSourceSel(sourceSel === f.agent ? null : f.agent),
+      'chip-' + f.agent,
+    )),
+    chip(t('newOnlyChip'), newIds.size, newOnly, () => setNewOnly(!newOnly), 'chip-new'),
+  )
 
   const rowNode = (p: PendingRow, inGroup: boolean): ReturnType<typeof createElement> => {
     const open = openIds.has(p.id)
@@ -865,6 +905,7 @@ function PendingList({ rows, query, home, t, lang, onExport }: {
   }
 
   return createElement('div', { className: 'bt-rows' },
+    chipBar,
     groups.length === 0
       ? createElement('div', { className: 'bt-banner bt-banner-info' }, t('filterEmpty'))
       : groups.map((g) => (g.rows.length > 1 ? groupNode(g) : rowNode(g.rows[0] as PendingRow, false))),
