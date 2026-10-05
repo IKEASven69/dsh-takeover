@@ -11,6 +11,7 @@ import { Context } from '@deepseek-ai/cordis'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import SkillRegistry from '@deepseek-ai/dsh-skill'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
+import UserQuestions from '@deepseek-ai/dsh-user-questions'
 import { pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -22,6 +23,7 @@ const root = new Context()
 root.plugin(SystemPrompt)
 root.plugin(ToolRuntime)
 root.plugin(SkillRegistry)
+root.plugin(UserQuestions)
 root.plugin(takeover)
 
 // cordis 服务挂载是异步的：等 inject 链全部就绪

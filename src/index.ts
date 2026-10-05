@@ -16,7 +16,7 @@ import { isProviderEnabled } from './settings.ts'
 import { skillRegistrations } from '../skills/index.ts'
 
 export const name = 'dsh-takeover'
-export const inject = ['tools', 'skills', 'userQuestions']
+export const inject = ['tools', 'skills'] // userQuestions 为软依赖（safeUserQuestions 兜缺席），硬声明会卡最小 cordis 上下文
 
 export function apply(ctx: Context): void {
   registerPushTool(ctx)
