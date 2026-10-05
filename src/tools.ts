@@ -647,7 +647,12 @@ export function registerPushTool(ctx: Context): void {
     async execute(args: PushArgs, exec: { agent?: Agent; signal?: AbortSignal }) {
       const result = pushHandoff(sessionOf(exec), args)
       // 寄存成功后的宿主通知（阻塞式问答面板；服务缺席/客户端离线静默降级）
-      if (result.ok) await handoffHostNotice(safeUserQuestions(ctx), 'push', result.id, exec, (m) => ctx.logger.info(m))
+      if (result.ok) {
+        // 通知 fire-and-forget：面板弹在客户端，agent 不等应答（阻塞式通知会让
+        // 回合无限挂起——0.4.0 真机实锤）；面板留存客户端直到用户处理
+        void handoffHostNotice(safeUserQuestions(ctx), 'push', result.id, exec, (m) => ctx.logger.info(m))
+          .catch(() => { /* 降级已内部处理 */ })
+      }
       return result
     },
   }))
@@ -686,7 +691,11 @@ export function registerInboxTool(ctx: Context): void {
       if (args.action === 'load') {
         const result = inboxLoad(args.id ?? '')
         // 取件成功后的宿主通知（同 push：阻塞式问答面板，失败静默降级）
-        if (result.ok) await handoffHostNotice(safeUserQuestions(ctx), 'load', result.id, exec, (m) => ctx.logger.info(m))
+        if (result.ok) {
+          // 通知 fire-and-forget：同 push 侧
+          void handoffHostNotice(safeUserQuestions(ctx), 'load', result.id, exec, (m) => ctx.logger.info(m))
+            .catch(() => { /* 降级已内部处理 */ })
+        }
         return result
       }
       return { ok: false, error: `未知 action：${String(args.action)}（支持 list / load）` }
