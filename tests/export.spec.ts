@@ -56,6 +56,7 @@ function makeState(partial?: Partial<TakeoverState>): TakeoverState {
       makeRow({ id: 'ho-two-0002', agent: 'codex', title: '写报告', project: '', preview: '' }),
     ],
     pendingSkipped: 0,
+    pendingDuplicates: 0,
     archivedCount: 3,
     providers: makeProviders(),
     ...partial,

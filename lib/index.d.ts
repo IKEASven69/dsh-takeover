@@ -353,6 +353,8 @@ interface PendingRow {
   pushedAt: string;
   /** 目标段（sections.goal）预览，截 240 字；空段回退 done 段 */
   preview: string;
+  /** preview 实际取自 done 段（目标段为空的回退）——导出侧据此归段，避免段级错位 */
+  previewFromDone?: boolean;
 }
 /** 支持矩阵行：本机是否支持 / 发现的会话数 / 启用开关 */
 interface ProviderRow {
@@ -370,6 +372,8 @@ interface TakeoverState {
   pending: PendingRow[];
   /** 收件箱概览里被跳过的坏卡数（不再静默） */
   pendingSkipped: number;
+  /** 同 frontmatter id 的重复文件数（已按首见去重；多方可写收件箱的防御计数） */
+  pendingDuplicates: number;
   /** 收件箱概览不可用时的降级说明（pending 位置异常等）；正常时缺省 */
   inboxError?: string;
   archivedCount: number;

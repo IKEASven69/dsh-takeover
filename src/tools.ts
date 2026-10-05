@@ -576,10 +576,12 @@ export async function handoffHostNotice(
     return
   }
   const pushed = action === 'push'
+  // id 来自卡内 frontmatter（外来可写），消毒成单行短串再进面板文案与日志
+  const safeId = String(id).replace(/[\r\n\u0000-\u001F]+/g, ' ').slice(0, 100)
   const request: AskUserQuestionRequest = {
     questions: [{
       id: pushed ? 'handoff-pushed' : 'handoff-picked',
-      question: pushed ? `已寄存会话卡片 handoff:${id}，需继续吗？` : `已取件会话卡片 handoff:${id}，需继续吗？`,
+      question: pushed ? `已寄存会话卡片 handoff:${safeId}，需继续吗？` : `已取件会话卡片 handoff:${safeId}，需继续吗？`,
       options: [{ label: '继续' }],
     }],
     ...(exec?.agent !== undefined ? { agent: exec.agent } : {}),
@@ -589,12 +591,12 @@ export async function handoffHostNotice(
   try {
     const answer = await (ask as (req: AskUserQuestionRequest) => Promise<unknown>).call(userQuestions, request)
     // 有人接受并回答了——记录回答内容（谁在消费通知请求的关键观测）
-    say(`${action} 通知 ask 已解答（${id}）：${JSON.stringify(answer)?.slice(0, 400)}`)
+    say(`${action} 通知 ask 已解答（${safeId}）：${JSON.stringify(answer)?.slice(0, 400)}`)
   } catch (e) {
     // NO_PROVIDER / DELEGATED_CALLER / ASK_ABORTED / 无 open turn：通知降级，主流程照常。
     // 降级码进日志（e.code 区分未认领 vs 已中止），为 0.3.x 通知形态结论留观测。
     const err = e as { code?: string; name?: string; message?: string }
-    say(`${action} 通知降级（${id}）：${err.code ?? err.name ?? 'unknown'} ${err.message ?? ''}`.trim())
+    say(`${action} 通知降级（${safeId}）：${err.code ?? err.name ?? 'unknown'} ${err.message ?? ''}`.trim())
   }
 }
 

@@ -756,7 +756,8 @@ function PendingList({ rows, query, home, t, lang, onExport }: {
       if (fresh.length === 0) return prev
       const next = new Set(prev)
       for (const id of fresh) next.add(id)
-      saveSeenSet(store, seenStorageKey(home), next)
+      // 副作用（localStorage 持久化）在 updater 外做：updater 须为纯函数
+      queueMicrotask(() => saveSeenSet(store, seenStorageKey(home), next))
       return next
     })
   }
@@ -797,18 +798,12 @@ function PendingList({ rows, query, home, t, lang, onExport }: {
   const groups = groupAdjacent(visible)
   const facets = sourceFacets(rows)
 
-  if (visible.length === 0 && rows.length > 0) {
-    return createElement('div', { className: 'bt-banner bt-banner-info' }, t('filterEmpty'))
-  }
-  if (rows.length === 0) {
-    return createElement('div', { className: 'bt-banner bt-banner-info' }, t('emptyInbox'))
-  }
-
   // 来源筛选 chips：全部 + 各家（带计数）+ 只看新卡
   const chip = (label: string, count: number, on: boolean, onClick: () => void, key: string): ReturnType<typeof createElement> =>
     createElement('button', {
       key,
       className: `bt-chip${on ? ' bt-chip-on' : ''}`,
+      'aria-pressed': on,
       onClick,
       type: 'button',
     },
@@ -1196,6 +1191,10 @@ function Panel({ t, locale }: { t: Translate; locale: LocaleRuntime | undefined 
             envelopeChars !== null
               ? createElement('span', { className: 'bt-stat', title: t('envelopeArchived', { n: envelopeChars }) },
                   t('envelopeArchived', { n: envelopeChars }))
+              : null,
+            (state?.pendingDuplicates ?? 0) > 0
+              ? createElement('span', { className: 'bt-stat bt-stat-warn', title: t('pendingDupTitle') },
+                  t('pendingDupChip', { n: state.pendingDuplicates }))
               : null,
           )
         : null,

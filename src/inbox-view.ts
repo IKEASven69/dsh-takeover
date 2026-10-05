@@ -23,8 +23,10 @@ import type { PendingRow } from './settings.ts'
 // ---------------------------------------------------------------------------
 
 /**
- * 即时过滤：query 去首尾空白后为空 → 原样返回（同一数组引用，方便调用方判等）。
+ * 即时过滤：query 去首尾空白后为空 → 原样返回（同一数组引用，方便调用方判等）；
+ * 带 source/newOnlyIds 时即使 query 为空也会产出过滤后的新数组。
  * 匹配字段：标题、编号、来源原始 id、来源显示名（labelOf 注入，避免本模块依赖品牌表）。
+ * 防御：字段非字符串按空串处理（state 经 fetch 而来，外来坏数据不抛错）。
  * 全部大小写不敏感的子串匹配。
  */
 export function filterPending(
@@ -32,22 +34,22 @@ export function filterPending(
   query: string,
   labelOf: (agent: string) => string,
   source?: string | null,
-  newOnlyIds?: Set<string> | null,
+  newOnlyIds?: ReadonlySet<string> | null,
 ): PendingRow[] {
   let out = rows
   if (source) out = out.filter((p) => p.agent === source)
-  if (newOnlyIds) {
-    const ids = newOnlyIds
-    out = out.filter((p) => ids.has(p.id))
-  }
+  if (newOnlyIds) out = out.filter((p) => !newOnlyIds.has(p.id))
   const q = query.trim().toLowerCase()
   if (q === '') return out
-  return out.filter((p) =>
-    p.title.toLowerCase().includes(q)
-    || p.id.toLowerCase().includes(q)
-    || p.agent.toLowerCase().includes(q)
-    || labelOf(p.agent).toLowerCase().includes(q),
-  )
+  return out.filter((p) => {
+    const title = typeof p.title === 'string' ? p.title : ''
+    const id = typeof p.id === 'string' ? p.id : ''
+    const agent = typeof p.agent === 'string' ? p.agent : ''
+    return title.toLowerCase().includes(q)
+      || id.toLowerCase().includes(q)
+      || agent.toLowerCase().includes(q)
+      || labelOf(p.agent ?? '').toLowerCase().includes(q)
+  })
 }
 
 /** 待取件卡的来源去重清单（出现顺序），供来源筛选 chips 渲染 */
@@ -215,7 +217,11 @@ export function cardMarkdown(p: PendingRow, notes: ExportNotes): string {
     '',
   ]
   for (const [key, heading] of SECTION_HEADINGS) {
-    const body = key === 'goal' && p.preview !== '' ? p.preview : notes.missing
+    // 目标段为空时预览取自 done 段（settings.previewOf 同款回退）——导出时各归各段：
+    // 回退内容写进「做到哪」，「目标」段如实标 missing，不再段级错位
+    let body = notes.missing
+    if (key === 'goal' && !p.previewFromDone && p.preview !== '') body = p.preview
+    if (key === 'done' && p.previewFromDone && p.preview !== '') body = p.preview
     lines.push(`## ${heading}`, '', body, '')
   }
   // 末位已垫空串元素，join 后恰一个收尾换行；不再追加

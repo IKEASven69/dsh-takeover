@@ -92,14 +92,20 @@ export interface PendingRow {
   pushedAt: string
   /** 目标段（sections.goal）预览，截 240 字；空段回退 done 段 */
   preview: string
+  /** preview 实际取自 done 段（目标段为空的回退）——导出侧据此归段，避免段级错位 */
+  previewFromDone?: boolean
 }
 
 /** 预览截断长度（服务端截，避免长卡片把 state 撑大） */
 const PREVIEW_MAX = 240
 
-function previewOf(c: { sections: { goal: string; done: string } }): string {
-  const raw = c.sections.goal !== '' ? c.sections.goal : c.sections.done
-  return raw.length > PREVIEW_MAX ? `${raw.slice(0, PREVIEW_MAX)}…` : raw
+function previewOf(c: { sections: { goal: string; done: string } }): { text: string; fromDone: boolean } {
+  const fromDone = c.sections.goal === ''
+  const raw = fromDone ? c.sections.done : c.sections.goal
+  return {
+    text: raw.length > PREVIEW_MAX ? `${raw.slice(0, PREVIEW_MAX)}…` : raw,
+    fromDone,
+  }
 }
 
 /** 支持矩阵行：本机是否支持 / 发现的会话数 / 启用开关 */
@@ -119,6 +125,8 @@ export interface TakeoverState {
   pending: PendingRow[]
   /** 收件箱概览里被跳过的坏卡数（不再静默） */
   pendingSkipped: number
+  /** 同 frontmatter id 的重复文件数（已按首见去重；多方可写收件箱的防御计数） */
+  pendingDuplicates: number
   /** 收件箱概览不可用时的降级说明（pending 位置异常等）；正常时缺省 */
   inboxError?: string
   archivedCount: number
@@ -140,6 +148,7 @@ export function buildState(readers: ForeignReaders, dir?: string): TakeoverState
   // （settings 头注释契约「任何一步失败都回规范值，绝不抛出」此前在 listPending/listArchived 上失守）
   let pending: PendingRow[] = []
   let pendingSkipped = 0
+  let pendingDuplicates = 0
   let inboxError: string | undefined
   // 收件箱聚合：待取件卡的账本覆盖求和 + 机器信封字符总量（0.4.0，显示位在 client 侧防御消费）。
   // 聚合失败只影响这两个字段，不拖垮整体 state（settings 头注释契约同款）。
@@ -147,18 +156,31 @@ export function buildState(readers: ForeignReaders, dir?: string): TakeoverState
   let envelopeChars: number | undefined
   try {
     const report = listPendingReport(dir)
-    pending = report.cards.map((c) => ({
-      id: c.id,
-      agent: c.from.agent !== '' ? c.from.agent : '（未知来源）',
-      title: c.from.title,
-      project: c.project,
-      pushedAt: c.pushed_at,
-      preview: previewOf(c),
-    }))
+    // 同 frontmatter id 的重复文件只保留首次出现（core 宽松解析放行，重复会让
+    // React key 冲突、覆盖率重复计数——0.4.0 审计 F1）
+    const seenCardIds = new Set<string>()
+    const uniqueCards = report.cards.filter((c) => {
+      if (seenCardIds.has(c.id)) return false
+      seenCardIds.add(c.id)
+      return true
+    })
     pendingSkipped = report.skipped.length
+    pendingDuplicates = report.cards.length - uniqueCards.length
+    pending = uniqueCards.map((c) => {
+      const pv = previewOf(c)
+      return {
+        id: c.id,
+        agent: c.from.agent !== '' ? c.from.agent : '（未知来源）',
+        title: c.from.title,
+        project: c.project,
+        pushedAt: c.pushed_at,
+        preview: pv.text,
+        previewFromDone: pv.fromDone,
+      }
+    })
 
     const pd = join(resolveHome(dir), 'pending')
-    for (const c of report.cards) {
+    for (const c of uniqueCards) {
       const cov = (c.extras as { coverage?: { statements?: unknown; marked?: unknown; unmarked?: unknown } } | undefined)?.coverage
       if (cov && [cov.statements, cov.marked, cov.unmarked].every((x) => typeof x === 'number' && Number(x) >= 0)) {
         coverage ??= { statements: 0, marked: 0, unmarked: 0 }
@@ -209,7 +231,7 @@ export function buildState(readers: ForeignReaders, dir?: string): TakeoverState
     return { name, supported, sessions, enabled: !switches.disabledProviders.includes(name), note }
   })
 
-  return { home: resolveHome(dir), pending, pendingSkipped, inboxError, archivedCount: countArchived(dir), coverage, envelopeChars, providers }
+  return { home: resolveHome(dir), pending, pendingSkipped, pendingDuplicates, inboxError, archivedCount: countArchived(dir), coverage, envelopeChars, providers }
 }
 
 
