@@ -90,6 +90,7 @@ npm run typecheck
 npm test           # node:test + tsx
 npm run build      # tsdown → lib/（@agent-handoff/core + readers 内联打包）
 node scripts/smoke-foreign.mjs   # 实机冒烟：进程内挂载 lib/，真实 dispatch foreign_session_read
+node scripts/smoke-userflow.mjs  # 真用户旅程实机测试：拉本机真实 zcode/opencode 会话 → 蒸馏 → 寄存 → 取件全链路（46 项断言）
 ```
 
 `@agent-handoff/core` 与 `@agent-handoff/readers` 未发布 npm，以 `file:../agent-handoff/packages/*` 依赖、构建时 bundle 进 `lib/`。离线且有 dsh checkout 时可用 `node scripts/link-deps.mjs`（DSH_CHECKOUT 环境变量）链接宿主包替代 npm。

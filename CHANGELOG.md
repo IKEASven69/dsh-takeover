@@ -8,6 +8,9 @@
 - **四态覆盖率统计（审计语义产品化）**：`handoff_push` 落卡前对「做到哪」段逐行确定性统计——空行与 `#` 小节标题行不计，其余每行算一条完成/交付陈述，含 CURRENT_OBSERVED / HISTORY_REPORTED / MISMATCH / UNAVAILABLE 任一计已标注；结果写入卡片 `extras.coverage`（`{ statements, marked, unmarked }`）随卡持久化（取件侧可读回），push 结果同步返回 `coverage`。push 与取件渲染各追加一行「账本覆盖：x/y 条已标注状态（z 条未标——取件方按 HISTORY_REPORTED 处理）」。**口径纪律：只统计不强制**——不为覆盖率设任何门槛，防止「为覆盖率假标」污染账本；未标注行的消费口径由取件方按 HISTORY_REPORTED 兜底
 - **机器信封（双形态输出：人的卡片 + 机器的接手信封；协议扩展提案）**：`handoff_push` 成功后在 pending/ 落第二文件 `<id>.envelope.json`（`{ handoff: 1, kind: "envelope", id, from: {agent, title}, goal, done, remaining, stopped, warnings, files }`），各段确定性截断（goal/done ≤300 字，remaining/stopped/warnings ≤200 字，from ≤100 字，files 取卡片 files 段前 10 条非空行、单条 ≤120 字），总 JSON ≤1200 字为目标（段上限负责封顶最坏情形）；`handoff_inbox` load 取件消费 .md 时同步删除对应信封，并提示「机器信封已随卡归档（n chars）」——信封读/删失败只降级，绝不影响取件成败，残留信封对不认识它的实现天然无害。**handoff: 1 SPEC 一字未动**：信封是独立派生文件而非 frontmatter 扩展，作为协议扩展提案提交上游（agent-handoff 协议仓）
 
+### 测试
+- **真用户旅程实机测试**（`scripts/smoke-userflow.mjs`，46 项断言）：用本机真实 opencode（109 条）与 zcode（149 条）会话走完整接管环——list 候选 → show 蒸馏 → push 寄存（覆盖率吃到真实 HISTORY_REPORTED 行、信封落盘且体量受控）→ 换身份 inbox 取件（六段完整、信封随卡消费、消费即弃二次取件报规范错误值）→ 歧义引用与全空段兜底 → 设置卡 state API 分屋诚实跳过；另在运行中宿主浏览器实测设置卡全件（新卡徽标、展开预览、筛选 chips 计数联动、八家品牌图标支持矩阵、覆盖率徽标与信封行）
+
 ## [0.3.1] — 2026-10-03
 
 ### 修正
