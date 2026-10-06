@@ -245,3 +245,14 @@ test('pendingListMarkdown：全部待取件拼一个文件；空列表回空串'
   assert.equal(two.endsWith('\n'), true)
   assert.equal(two.endsWith('\n\n'), false)
 })
+
+// 回归（0.4.1）：filterPending 曾把新 id 集写反（!has），「只看新卡」实际只显旧卡
+test('filterPending：newOnly 只留新卡（回归：曾写反成只显旧卡）', () => {
+  const rows = [makeRow(), makeRow({ id: 'ho-test-0002' })]
+  const seen = new Set(['ho-test-0002'])
+  const newIds = new Set(newIdsOf(rows, seen))
+  assert.deepEqual(newIds, new Set(['ho-test-0001']))
+  const out = filterPending(rows, '', labelOf, null, newIds)
+  assert.deepEqual(out.map((r) => r.id), ['ho-test-0001'])
+  assert.deepEqual(filterPending(rows, '', labelOf, null, null).map((r) => r.id), ['ho-test-0001', 'ho-test-0002'])
+})

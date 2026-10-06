@@ -2,11 +2,48 @@
 
 > **版本体系重置（2026-10-01）**：0.1–0.5 时期的版本号随开发过程推进过快、颗粒度失真，经用户要求自本日起**重置为 0.1.0 重新起算**——0.1.0 = 当前功能全集（八家拉取 / 交接寄存 / 收件箱取件 / 设置卡四区 / 双语 i18n / 八家品牌图标）经完整真用户流测试通过后的首个版本。此前的版本号历史见文末归档，仅作记录，不再构成发布序列。
 
-## [0.4.0] — 未发布
+## [0.4.1] — 未发布
+
+### 安全与加固
+- **连接级回环闸**：`/dsh-takeover/*` 全路由先校验 `socket.remoteAddress` 是本机回环（127.0.0.1/::1），非回环一律 403——此前只验 Host/Origin/Sec-Fetch-Site 请求头，而宿主 webServer 一等支持 0.0.0.0 绑定，头部对非浏览器客户端全可伪造（LAN 直连可未鉴权读卡/翻开关/清归档）
+- **读侧尺寸闸**（姊妹仓 core 同步修）：`listDirCards`/`loadCard` 读前 statSync，超 8 MiB 的外来巨卡列表跳过 / 取件拒载不消费——共享收件箱是多写方目录，巨文件同步读会放大进宿主事件循环；信封消费同步加同款闸
+- **tasks 快照封顶**：todo 条数 ≤50、单条 text ≤120 字、priority ≤10 字；keyFiles 去重集合 ≤200——六段之外唯一全量入卡的结构不再能被构造事件流撑爆
+
+### 修正
+- **「只看新卡」过滤反转**（P1）：`filterPending` 把新 id 集写反成「只显旧卡」，开筛后真正的新卡全被藏掉——修正并补回归测试
+- **「最后一条用户请求」保头弃尾**：userMessages/commands/gitCommits 超上限时保头，长会话蒸馏出的「最后一条用户请求」实际是几百轮前的旧请求——改保尾弃头（`at(-1)` 恒为真·最后一条）
+- **全新安装误报「收件箱概览不可用：ENOENT」**：pending/ 目录在首次 push 前不存在，buildState 无条件 readdir 抛错进降级态——目录缺失按空收件箱语义处理（与 core listDirCards 对齐）
+- **provider 开关并发丢更新**：读-改-写 config.json 无串行化，双开同停 A/B 只停了 B——路由层写队列串行化
+- **孤儿信封无清理**：旧版实现取走 .md 后信封永留 pending/，envelopeChars 无界失真——buildState 顺手清扫无主信封（纯派生物，删除无害）
+- **空收件箱误显「没有匹配」**：rows 为空与筛选无命中共用 filterEmpty 文案——空收件箱改用 emptyInbox（原为死键）
+- **刷新竞态**：30s 轮询慢 GET 晚于开关 POST 返回会把开关弹回旧状态——请求代数守卫，过期响应丢弃
+- **opencode 图标坏 path**：`d="#5A5858"` 颜色串当路径数据（浏览器静默忽略）——删除使代码与渲染一致
+- **重复计数 chip 无样式**：`.bt-stat-warn` 类没有对应 CSS 规则——补上（接 warn 色轴）
+- **主题探测退化**：body 背景透明时不回退 html 根元素；oklch/oklab 等 modern 色彩函数被 `\d+` 抓成 `r=0,g=98` 误判深色——透明回退 + 亮度分量解析
+- **aria-description 不是有效 ARIA**：读屏不识别——改 `aria-describedby` 指向可见 note 节点
+- **行内嵌套可交互**：展开态预览与「导出 .md」按钮嵌在 role=button 行内（ARIA 禁则）——预览块移出为兄弟节点，外壳承接 flex-wrap 布局
+- **组头读屏串混中文标点**：aria-label 硬编码全角逗号——改走词典模板 `groupAria`
+- **「（未知来源）」中文字面量泄漏 EN 界面与导出**：host 侧改下发空串，客户端词典渲染兜底（新增 `unknownSource` 键）
+- **报告跳过横幅方向错**：「不计入上方列表」实际列表在下方——zh/en 同步改「下方 / below」
+
+### 测试
+- **真宿主可见测试会话（跨会话交接实证）**：宿主部署 0.4.1 构建后，浏览器驱动真实创建两个会话跑完接管环——会话 A `/resume-zcode` 拉真实「dsh-baton」会话（2466 轮）蒸馏六段卡（四态标注齐全）→ 用户答「寄存」→ `handoff_push` 落卡+信封；会话 B `/inbox` 列 13 张 → 用户答「取 1 号」→ 消费即弃归档 + 六段接管简报（git 核验 UNAVAILABLE 如实标注）。盘面核对无孤儿无残留。0.3.0 已知项「阻塞面板不弹」以实证关闭：寄存确认以会话内文本问答形态工作，与 P0 定案一致
+- 单测 123/123（新增 7 条审查回归）；smoke-foreign 与 smoke-userflow（46 断言）双绿
+
+### 文档
+- skill 两处承诺对齐实现：/resume-claude 边界由「沿可恢复分支读取，排除私密与被替换内容」改为如实描述（全量读取，thinking 以 [thinking] 标记保留）；inert-history 段「隐藏推理已排除」改为「[thinking] 标记段不蒸馏进卡片」——姊妹仓 zcode 读取器同批补上此前缺失的推理标记
+- README 双语「协议语义五条」补第六条「反向锚定+剪枝」；en 版开发节补 smoke-userflow 一行
+- handoff_push 工具描述「六段（…suggested）」实列 7 项——改为「六段 + 可选 suggested」
+
+## [0.4.0] — 2026-10-04
 
 ### 新增
 - **四态覆盖率统计（审计语义产品化）**：`handoff_push` 落卡前对「做到哪」段逐行确定性统计——空行与 `#` 小节标题行不计，其余每行算一条完成/交付陈述，含 CURRENT_OBSERVED / HISTORY_REPORTED / MISMATCH / UNAVAILABLE 任一计已标注；结果写入卡片 `extras.coverage`（`{ statements, marked, unmarked }`）随卡持久化（取件侧可读回），push 结果同步返回 `coverage`。push 与取件渲染各追加一行「账本覆盖：x/y 条已标注状态（z 条未标——取件方按 HISTORY_REPORTED 处理）」。**口径纪律：只统计不强制**——不为覆盖率设任何门槛，防止「为覆盖率假标」污染账本；未标注行的消费口径由取件方按 HISTORY_REPORTED 兜底
 - **机器信封（双形态输出：人的卡片 + 机器的接手信封；协议扩展提案）**：`handoff_push` 成功后在 pending/ 落第二文件 `<id>.envelope.json`（`{ handoff: 1, kind: "envelope", id, from: {agent, title}, goal, done, remaining, stopped, warnings, files }`），各段确定性截断（goal/done ≤300 字，remaining/stopped/warnings ≤200 字，from ≤100 字，files 取卡片 files 段前 10 条非空行、单条 ≤120 字），总 JSON ≤1200 字为目标（段上限负责封顶最坏情形）；`handoff_inbox` load 取件消费 .md 时同步删除对应信封，并提示「机器信封已随卡归档（n chars）」——信封读/删失败只降级，绝不影响取件成败，残留信封对不认识它的实现天然无害。**handoff: 1 SPEC 一字未动**：信封是独立派生文件而非 frontmatter 扩展，作为协议扩展提案提交上游（agent-handoff 协议仓）
+
+- **HTML 单文件报告导出**：「导出 HTML 报告」把整个 state 编译成自包含 styled HTML（品牌渐变头 / 统计卡 / 全部待取件卡 / 八家支持矩阵），escHtml 全量转义，零依赖 Blob 下载，zh/en 双语；`reportWords` 从本卡词典组装报告文案包（漏译在 locales 键位对齐测试拦下）
+- **state 聚合透出**：`TakeoverState` 新增 `coverage` / `envelopeChars` 聚合字段，设置卡防御式消费（字段缺席整行不渲染）；statstrip 徽章行升级为统计条
+- **设置卡高级感走查**：间距/圆角/层级体系化打磨（0cbf1b6、9c03ae8）
 
 ### 测试
 - **真用户旅程实机测试**（`scripts/smoke-userflow.mjs`，46 项断言）：用本机真实 opencode（109 条）与 zcode（149 条）会话走完整接管环——list 候选 → show 蒸馏 → push 寄存（覆盖率吃到真实 HISTORY_REPORTED 行、信封落盘且体量受控）→ 换身份 inbox 取件（六段完整、信封随卡消费、消费即弃二次取件报规范错误值）→ 歧义引用与全空段兜底 → 设置卡 state API 分屋诚实跳过；另在运行中宿主浏览器实测设置卡全件（新卡徽标、展开预览、筛选 chips 计数联动、八家品牌图标支持矩阵、覆盖率徽标与信封行）

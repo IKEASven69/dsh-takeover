@@ -27,6 +27,19 @@ function loopbackHost(host: string): boolean {
   return hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]' || hostname === 'localhost'
 }
 
+/** TCP 对端是否本机回环。请求头（Host/Origin/Sec-Fetch-Site）对非浏览器客户端全部可伪造，
+ * 唯一伪造不了的是连接本身：宿主按一等配置可能绑 0.0.0.0（LAN 可达），此时只看头部等于没防——
+ * 连接源地址不是回环一律 403，与头部无关。导出仅为测试。 */
+export function isLoopbackRemote(remoteAddress: string | undefined): boolean {
+  if (remoteAddress === undefined) return false
+  return remoteAddress === '127.0.0.1' || remoteAddress === '::1'
+    || remoteAddress === '::ffff:127.0.0.1'
+}
+
+/** provider 开关写队列：读-改-写 config.json 的串行化——两个并发 POST 同基线改写会丢失更新
+ * （同时停 A/B 只停了 B），链式串行消除同进程竞态。 */
+let providerWriteQueue: Promise<unknown> = Promise.resolve()
+
 /** 同源守卫：带 Origin 的请求必须与 Host 一致，且 Host 必须回环（防跨站 POST 与 rebinding）。
  * 不再裸比 `new URL(origin).host === Host`——Host 头客户端完全可控，等价于没防。 */
 function sameOrigin(request: { headers: { origin?: string; host?: string } }): boolean {
@@ -93,6 +106,12 @@ export function registerTakeoverRoutes(ctx: Context): void {
       // '/dsh-takeover/' 会要求 '/dsh-takeover//' 才命中（dsh-hippo 的 '/dsh-hippo/app' 先例）。
       path: '/dsh-takeover',
       handler: (request, response) => {
+        // 连接级回环闸先行：源地址非本机一律 403（0.0.0.0 绑定下 LAN 请求在此被拒，
+        // 头部守卫只对已进门的回环连接继续做浏览器面防护）
+        if (!isLoopbackRemote(request.socket.remoteAddress)) {
+          sendJson(response, 403, { error: '面板仅服务本机回环连接' })
+          return
+        }
         const sub = (request.url ?? '/').replace(/^\/dsh-takeover\/?/, '').split('?')[0] ?? ''
 
         if (sub === 'state') {
@@ -124,15 +143,18 @@ export function registerTakeoverRoutes(ctx: Context): void {
             return
           }
           void readJsonBody(request).then(
-            async (body) => {
-              try {
-                const provider = String(body['provider'] ?? '').trim().toLowerCase()
-                const enabled = body['enabled'] === true
-                setProviderEnabled(provider as ForeignProvider | string, enabled)
-                sendJson(response, 200, { ok: true, state: await stateBody() })
-              } catch (e) {
-                sendJson(response, 400, { ok: false, error: e instanceof Error ? e.message : String(e) })
-              }
+            (body) => {
+              // 写操作进串行队列：上一个 provider 写完成（含回读 state）才开始下一个
+              providerWriteQueue = providerWriteQueue.then(async () => {
+                try {
+                  const provider = String(body['provider'] ?? '').trim().toLowerCase()
+                  const enabled = body['enabled'] === true
+                  setProviderEnabled(provider as ForeignProvider | string, enabled)
+                  sendJson(response, 200, { ok: true, state: await stateBody() })
+                } catch (e) {
+                  sendJson(response, 400, { ok: false, error: e instanceof Error ? e.message : String(e) })
+                }
+              })
             },
             (error: unknown) => { sendJson(response, 400, { ok: false, error: error instanceof Error ? error.message : String(error) }) },
           )

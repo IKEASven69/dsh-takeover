@@ -14,7 +14,7 @@
  * @module dsh-takeover/client
  */
 
-import { Component, createElement, useEffect, useState, useSyncExternalStore } from 'react'
+import { Component, createElement, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 // 0.2.0：一方客户端插件直接收 cordis Context。
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: ctx.slots（SlotRegistry 服务）由 ui-renderer 的 cordis Context 合并提供。
@@ -106,10 +106,23 @@ function langOf(locale: LocaleRuntime | undefined): Lang {
 function themeVars(): Record<string, string> {
   let dark = true
   try {
-    const m = getComputedStyle(document.body).backgroundColor.match(/\d+/g)
-    if (m && m.length >= 3) {
-      const [r = 0, g = 0, b = 0] = m.map(Number)
-      dark = (0.299 * r + 0.587 * g + 0.114 * b) / 255 <= 0.5
+    // body 背景透明（rgba alpha 0 / 空）时退化到 html 根元素——部分宿主只给根上底色
+    let bg = getComputedStyle(document.body).backgroundColor
+    if (bg === '' || /rgba?\([^)]*\/\s*0\s*\)/.test(bg) || bg === 'transparent') {
+      bg = getComputedStyle(document.documentElement).backgroundColor
+    }
+    // oklch/oklab 等 modern 色彩函数抓不出 r/g/b（`oklch(0.98 0 0)` 会被 \d+ 抓成 r=0,g=98）——
+    // 提取首参亮度分量判明暗（0~1 或百分比），解析不了再退 rgb/深色保底
+    const modern = /^(oklch|oklab|lab|lch)\(\s*([\d.]+)(%?)/.exec(bg)
+    if (modern) {
+      const l = Number(modern[2]) * (modern[3] === '%' ? 0.01 : 1)
+      dark = l <= 0.5
+    } else {
+      const m = bg.match(/\d+/g)
+      if (m && m.length >= 3) {
+        const [r = 0, g = 0, b = 0] = m.map(Number)
+        dark = (0.299 * r + 0.587 * g + 0.114 * b) / 255 <= 0.5
+      }
     }
   } catch {
     /* 保底按深色 */
@@ -220,6 +233,7 @@ const CSS = `
   border: 1px solid var(--bt-line); border-radius: 999px; padding: 2px 10px;
   font-variant-numeric: tabular-nums; }
 .bt-stat-hot { color: var(--bt-a); background: rgba(99,102,241,.1); border-color: rgba(99,102,241,.3); }
+.bt-stat-warn { color: var(--bt-warn); background: rgba(251,191,36,.12); border-color: rgba(251,191,36,.4); }
 .bt-btn { cursor: pointer; border-radius: 10px; font-size: 12.5px; font-weight: 500; padding: 6px 16px;
   border: 1px solid var(--bt-line); background: transparent; color: inherit; white-space: nowrap;
   transition: border-color .15s ease, color .15s ease, background .15s ease, transform .12s ease; }
@@ -274,6 +288,8 @@ const CSS = `
 .bt-tag-group { color: var(--bt-a); background: rgba(99,102,241,.12); border: 1px solid transparent; }
 /* 组内成员行：整体右缩进，视觉上挂在组头下 */
 .bt-pending-member { margin-left: 20px; }
+/* 行外壳（中性容器，内含 role=button 行 + 兄弟预览块）：延续原先行内 flex-wrap 布局 */
+.bt-pending-wrap { display: flex; flex-wrap: wrap; }
 .bt-cmds { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 10px; }
 .bt-cmd { display: flex; align-items: center; gap: 8px; min-width: 0; border: 1px solid var(--bt-line);
   border-radius: 10px; padding: 7px 12px; font-size: 12px; background: transparent;
@@ -540,6 +556,8 @@ export interface ReportWords {
   pillOk: string
   pillNo: string
   disabled: string
+  /** 来源为空时的兜底显示名（host 侧 0.4.0 起下发空串） */
+  unknownSource: string
 }
 
 /** 从本卡词典组装报告文案包（zh/en 全量对齐，漏译在 tests/locales.spec.ts 拦下） */
@@ -570,6 +588,7 @@ export function reportWords(lang: Lang): ReportWords {
     pillOk: w('pillOk'),
     pillNo: w('pillNo'),
     disabled: w('reportDisabled'),
+    unknownSource: w('unknownSource'),
   }
 }
 
@@ -666,7 +685,7 @@ export function buildReportHtml(
     return `<div class="rt-pcard">` +
       `<p class="rt-ptitle">${esc(title)}${idChip}</p>` +
       `<p class="rt-pmeta">` +
-      `<span><span class="rt-plabel">${esc(words.labelFrom)}</span>${esc(PROVIDER_LABEL[p.agent] ?? p.agent)}</span>` +
+      `<span><span class="rt-plabel">${esc(words.labelFrom)}</span>${esc(PROVIDER_LABEL[p.agent] ?? (p.agent === '' ? words.unknownSource : p.agent))}</span>` +
       project +
       `<span><span class="rt-plabel">${esc(words.labelTime)}</span>${esc(absTime(p.pushedAt))}</span>` +
       `</p>` +
@@ -791,7 +810,7 @@ function PendingList({ rows, query, home, t, lang, onExport }: {
   const visible = filterPending(
     rows,
     query,
-    (a) => PROVIDER_LABEL[a] ?? a,
+    (a) => PROVIDER_LABEL[a] ?? (a === '' ? t('unknownSource') : a),
     sourceSel,
     newOnly ? newIds : null,
   )
@@ -810,10 +829,12 @@ function PendingList({ rows, query, home, t, lang, onExport }: {
       createElement('span', { className: 'bt-chip-label' }, label),
       createElement('span', { className: 'bt-chip-count' }, String(count)),
     )
+  // 来源显示名：host 侧空串回退（0.4.0 起不再下发中文字面量），由词典渲染兜底
+  const agentLabel = (a: string): string => PROVIDER_LABEL[a] ?? (a === '' ? t('unknownSource') : a)
   const chipBar = createElement('div', { className: 'bt-chips', role: 'group', 'aria-label': t('chipSourceAria') },
     chip(t('chipAll'), rows.length, sourceSel === null, () => setSourceSel(null), 'chip-all'),
     ...facets.map((f) => chip(
-      (PROVIDER_LABEL[f.agent] ?? f.agent),
+      agentLabel(f.agent),
       f.count,
       sourceSel === f.agent,
       () => setSourceSel(sourceSel === f.agent ? null : f.agent),
@@ -825,9 +846,11 @@ function PendingList({ rows, query, home, t, lang, onExport }: {
   const rowNode = (p: PendingRow, inGroup: boolean): ReturnType<typeof createElement> => {
     const open = openIds.has(p.id)
     const isNew = !seen.has(p.id)
-    return createElement('div', {
-      key: p.id,
-      className: `bt-pending${open ? ' bt-pending-open' : ''}${inGroup ? ' bt-pending-member' : ''}`,
+    // 外层是中性容器：预览与「导出 .md」按钮必须是 role=button 行的**兄弟**节点——
+    // 嵌套可交互元素违反 ARIA 禁则（stopPropagation 只解决事件，不解决语义）
+    return createElement('div', { key: p.id, className: inGroup ? 'bt-pending-member' : undefined },
+      createElement('div', {
+      className: `bt-pending${open ? ' bt-pending-open' : ''}`,
       title: p.id,
       role: 'button',
       tabIndex: 0,
@@ -848,7 +871,7 @@ function PendingList({ rows, query, home, t, lang, onExport }: {
           className: 'bt-pend-meta',
           title: `${t('from', { name: '' }).trim()} · ${t('project', { name: '' }).trim()} · ${t('idLabel', { id: '' }).trim()}`,
         },
-          createElement('span', { className: 'bt-pend-src' }, PROVIDER_LABEL[p.agent] ?? p.agent),
+          createElement('span', { className: 'bt-pend-src' }, agentLabel(p.agent)),
           p.project !== '' ? createElement('span', { className: 'bt-pend-dot' }, '·') : null,
           p.project !== '' ? createElement('span', null, p.project) : null,
           createElement('span', { className: 'bt-pend-dot' }, '·'),
@@ -856,6 +879,7 @@ function PendingList({ rows, query, home, t, lang, onExport }: {
         ),
       ),
       createElement('span', { className: 'bt-pending-chev', 'aria-hidden': true }, '▸'),
+      ),
       open ? createElement('div', { className: 'bt-preview', onClick: (e: Event) => e.stopPropagation() },
         createElement('span', null, p.preview !== '' ? p.preview : t('previewEmpty')),
         createElement('span', { className: 'bt-preview-actions' },
@@ -881,7 +905,7 @@ function PendingList({ rows, query, home, t, lang, onExport }: {
         role: 'button',
         tabIndex: 0,
         'aria-expanded': open,
-        'aria-label': `${g.title}，${t('groupCount', { n: g.rows.length })}`,
+        'aria-label': t('groupAria', { title: g.title, n: g.rows.length }),
         onClick: () => { toggleGroup(g) },
         onKeyDown: (e: { key: string; preventDefault(): void }) => {
           if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleGroup(g) }
@@ -901,7 +925,7 @@ function PendingList({ rows, query, home, t, lang, onExport }: {
             className: 'bt-pend-meta',
             title: t('from', { name: '' }).trim(),
           },
-            createElement('span', { className: 'bt-pend-src' }, PROVIDER_LABEL[g.agent] ?? g.agent),
+            createElement('span', { className: 'bt-pend-src' }, agentLabel(g.agent)),
           ),
         ),
         createElement('span', { className: 'bt-pending-chev', 'aria-hidden': true }, '▸'),
@@ -912,9 +936,11 @@ function PendingList({ rows, query, home, t, lang, onExport }: {
 
   return createElement('div', { className: 'bt-rows' },
     chipBar,
-    groups.length === 0
-      ? createElement('div', { className: 'bt-banner bt-banner-info' }, t('filterEmpty'))
-      : groups.map((g) => (g.rows.length > 1 ? groupNode(g) : rowNode(g.rows[0] as PendingRow, false))),
+    rows.length === 0
+      ? createElement('div', { className: 'bt-banner bt-banner-info' }, t('emptyInbox'))
+      : groups.length === 0
+        ? createElement('div', { className: 'bt-banner bt-banner-info' }, t('filterEmpty'))
+        : groups.map((g) => (g.rows.length > 1 ? groupNode(g) : rowNode(g.rows[0] as PendingRow, false))),
   )
 }
 
@@ -930,11 +956,13 @@ function ProviderMatrix({ rows, busy, onToggle, t }: {
       // 假 0 哨兵浮出：supported 且 note 非空（布局迁移提示等）→ 行内橙色小字 +
       // title 悬浮 + aria-description，三处同源；unsupported 行仍走 stat 列的 unsupportedNote
       const showNote = r.supported && r.note !== ''
+      const noteId = `bt-mnote-${r.name}`
       return createElement('div', {
         key: r.name,
         className: `bt-mrow${!r.supported || r.sessions === 0 ? ' bt-mrow-idle' : ''}`,
         title: r.note !== '' ? r.note : undefined,
-        'aria-description': showNote ? r.note : undefined,
+        // aria-description 不是有效 ARIA 属性（读屏不识别）——改 aria-describedby 指向可见 note 节点
+        'aria-describedby': showNote ? noteId : undefined,
       },
         createElement('span', { className: 'bt-mname-col' },
           createElement('span', { className: 'bt-mname-wrap' },
@@ -942,7 +970,7 @@ function ProviderMatrix({ rows, busy, onToggle, t }: {
             createElement('span', { className: 'bt-mname' }, label),
             createElement('span', { className: 'bt-mid' }, r.name),
           ),
-          showNote ? createElement('span', { className: 'bt-mnote' }, r.note) : null,
+          showNote ? createElement('span', { className: 'bt-mnote', id: noteId }, r.note) : null,
         ),
         createElement('span', { className: 'bt-mstat' },
           r.supported
@@ -1054,10 +1082,20 @@ function Panel({ t, locale }: { t: Translate; locale: LocaleRuntime | undefined 
   )
   const lang: Lang = langOf(locale)
 
+  // 请求代数：30s 轮询的慢 GET 若晚于 toggle POST 返回，会把开关弹回旧状态——
+  // 每次发起请求自增代数，响应落地时只接受仍是最新代的结果
+  const generationRef = useRef(0)
   const reload = (): void => {
+    const gen = ++generationRef.current
     void getState().then(
-      (s) => { setState(s); setError(null) },
-      (e: unknown) => { setError(e instanceof Error ? e.message : String(e)) },
+      (s) => {
+        if (gen !== generationRef.current) return
+        setState(s); setError(null)
+      },
+      (e: unknown) => {
+        if (gen !== generationRef.current) return
+        setError(e instanceof Error ? e.message : String(e))
+      },
     )
   }
   useEffect(reload, [])
@@ -1077,9 +1115,16 @@ function Panel({ t, locale }: { t: Translate; locale: LocaleRuntime | undefined 
 
   const toggle = (name: string, enabled: boolean): void => {
     setBusy(name)
+    const gen = ++generationRef.current
     void post<{ ok: true; state: TakeoverState }>('/dsh-takeover/provider', { provider: name, enabled })
-      .then((r) => { setState(r.state); setError(null) })
-      .catch((e: unknown) => { setError(e instanceof Error ? e.message : String(e)) })
+      .then((r) => {
+        if (gen !== generationRef.current) return
+        setState(r.state); setError(null)
+      })
+      .catch((e: unknown) => {
+        if (gen !== generationRef.current) return
+        setError(e instanceof Error ? e.message : String(e))
+      })
       .finally(() => { setBusy(null) })
   }
 

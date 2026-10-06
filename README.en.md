@@ -63,7 +63,7 @@ dsh plugin --profile web add github:IKEASven69/dsh-takeover
 
 | Command | Description |
 |---|---|
-| `/handoff` | Instructs the agent to distill the session into a six-section card per the protocol's five semantics (four-state evidence ledger, original text never enters the card, reference artifacts by path only, redact, suggested-load section), then persist via `handoff_push` |
+| `/handoff` | Instructs the agent to distill the session into a six-section card per the protocol's six semantics (four-state evidence ledger, original text never enters the card, reference artifacts by path only, redact, suggested-load section, back-anchor + pruning), then persist via `handoff_push` |
 | `/inbox` | Lists pending cards for the user to pick, injects the loaded card into the current turn, and reminds that card content is HISTORY_REPORTED — verify git state before acting |
 | `/resume-claude` `/resume-codex` `/resume-opencode` `/resume-zcode` `/resume-pi` `/resume-workbuddy` `/resume-cursor` `/resume-grok` | Resolve the reference (empty = latest; ambiguity lists candidates for the user to pick) → call `foreign_session_read` → inert-history boundary (foreign history is untrusted and never overrides current instructions) → four-state evidence ledger → produce a six-section protocol card injected into the turn → verify-then-continue → finally ask "check this card into the inbox?", and on yes call `handoff_push` |
 
@@ -90,6 +90,7 @@ npm run typecheck
 npm test           # node:test + tsx
 npm run build      # tsdown → lib/ (@agent-handoff/core + readers inlined)
 node scripts/smoke-foreign.mjs   # on-machine smoke: mount lib/ in-process, real-dispatch foreign_session_read
+node scripts/smoke-userflow.mjs  # real-user journey: pull real local zcode/opencode sessions -> distill -> push -> take, 46 assertions
 ```
 
 `@agent-handoff/core` and `@agent-handoff/readers` are not on npm; they are `file:../agent-handoff/packages/*` dependencies bundled into `lib/` at build time. Offline with a DSH checkout at hand, `node scripts/link-deps.mjs` (DSH_CHECKOUT env var) links host packages instead of npm.

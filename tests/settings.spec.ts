@@ -6,7 +6,7 @@
  * 读取层一律注入假货（ForeignReaders）。
  */
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -227,4 +227,27 @@ test('buildState：无 coverage 卡时不产出 coverage 字段', () => {
   writeCard(makeCard(), home)
   const st = buildState(fakeReaders(), home)
   assert.equal(st.coverage, undefined)
+})
+
+// 回归（0.4.1）：全新安装首次 push 前 pending/ 不存在，buildState 曾误报「收件箱概览不可用：ENOENT」
+test('buildState：全新安装（pending/ 不存在）不进降级态，矩阵照常', () => {
+  const home = mkdtempSync(join(tmpdir(), 'takeover-fresh-'))
+  const st = buildState(fakeReaders(), home)
+  assert.equal(st.inboxError, undefined)
+  assert.equal(st.pending.length, 0)
+  assert.equal(st.providers.length, 8)
+})
+
+// 回归（0.4.1）：孤儿信封（对应 .md 已被任何实现取走）由 buildState 顺手清扫，envelopeChars 只计有主信封
+test('buildState：孤儿信封被清扫，有主信封计入 envelopeChars', () => {
+  const home = freshHome()
+  const c = makeCard({ from: { agent: 'claude', session: 's9', title: '有主卡' } })
+  writeCard(c, home)
+  const pd = join(home, 'pending')
+  writeFileSync(join(pd, `${c.id}.envelope.json`), '{"handoff":1,"kind":"envelope"}')
+  writeFileSync(join(pd, 'ho-orphan-0001.envelope.json'), '{"handoff":1,"kind":"envelope"}')
+  const st = buildState(fakeReaders(), home)
+  assert.equal(existsSync(join(pd, 'ho-orphan-0001.envelope.json')), false, '孤儿信封应被删除')
+  assert.ok(existsSync(join(pd, `${c.id}.envelope.json`)), '有主信封保留')
+  assert.equal(st.envelopeChars, '{"handoff":1,"kind":"envelope"}'.length)
 })

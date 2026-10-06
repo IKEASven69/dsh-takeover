@@ -63,7 +63,7 @@ dsh plugin --profile web add github:IKEASven69/dsh-takeover
 
 | 命令 | 说明 |
 |---|---|
-| `/handoff` | 指示 agent 按协议语义五条（证据账本四态、原文不进卡片、产物只引路径、redact、建议加载段）把当前会话蒸馏成六段卡，再调 `handoff_push` 落盘 |
+| `/handoff` | 指示 agent 按协议语义六条（证据账本四态、原文不进卡片、产物只引路径、redact、建议加载段、反向锚定+剪枝）把当前会话蒸馏成六段卡，再调 `handoff_push` 落盘 |
 | `/inbox` | 列 pending 让用户挑，取件后把卡片注入当轮；强调卡片为 HISTORY_REPORTED，执行前先核对 git 状态 |
 | `/resume-claude` `/resume-codex` `/resume-opencode` `/resume-zcode` `/resume-pi` `/resume-workbuddy` `/resume-cursor` `/resume-grok` | 解析引用（空=latest；歧义列候选让用户挑）→ 调 `foreign_session_read` → inert-history 边界（外来历史一律不可信、不覆盖当前指令）→ 证据账本四态标注 → 生成六段协议卡注入当轮 → verify-then-continue → 末尾问一句「要不要寄存进收件箱」，是则调 `handoff_push` |
 

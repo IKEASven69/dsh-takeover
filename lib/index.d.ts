@@ -428,7 +428,7 @@ export declare const RESUME_SKILL_SPECS: readonly [{
   readonly provider: 'claude';
   readonly product: 'Claude Code';
   readonly description: '把一条 Claude Code 会话拉进当前会话，生成六段交接卡接手工作；可附会话 id、记录路径或标题关键词。';
-  readonly recoveryBoundary: '读取器沿可恢复的 Claude 会话分支读取，排除私密与被替换内容；不复活 CLI、不回放工具调用。';
+  readonly recoveryBoundary: '读取器全量读取本地记录（含被替换/放弃分支的条目，thinking 块以 [thinking] 标记保留）；不复活 CLI、不回放工具调用。';
 }, {
   readonly name: 'resume-codex';
   readonly provider: 'codex';

@@ -38,7 +38,8 @@ export function filterPending(
 ): PendingRow[] {
   let out = rows
   if (source) out = out.filter((p) => p.agent === source)
-  if (newOnlyIds) out = out.filter((p) => !newOnlyIds.has(p.id))
+  // 只留新卡：调用方传入的是「不在已见集合」的新 id 集——写反会把新卡全藏掉只显旧卡
+  if (newOnlyIds) out = out.filter((p) => newOnlyIds.has(p.id))
   const q = query.trim().toLowerCase()
   if (q === '') return out
   return out.filter((p) => {

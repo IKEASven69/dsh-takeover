@@ -1,6 +1,6 @@
 /**
  * 设置卡支撑层（host 半，可脱离 cordis 单测）：
- * - provider 开关：持久化在 <HANDOFF_HOME>/config.json（与 pending/archived 同屋，
+ * - provider 开关：持久化在 <HANDOFF_HOME>/config.json（与 pending/archived 同屋，每次调用现读、改动即刻生效，
  *   重启生效）；foreign_session_read 对停用家返回规范错误值「已停用」。
  * - buildState：设置卡 /dsh-takeover/state 的组装逻辑——收件箱概览 + 八家支持矩阵。
  * - clearArchived：清空 archived/ 全部 .md，返回清除份数。
@@ -170,7 +170,7 @@ export function buildState(readers: ForeignReaders, dir?: string): TakeoverState
       const pv = previewOf(c)
       return {
         id: c.id,
-        agent: c.from.agent !== '' ? c.from.agent : '（未知来源）',
+        agent: c.from.agent, // 空串交给客户端词典渲染兜底文案（host 侧中文字面量会漏进 EN 界面与导出）
         title: c.from.title,
         project: c.project,
         pushedAt: c.pushed_at,
@@ -180,6 +180,8 @@ export function buildState(readers: ForeignReaders, dir?: string): TakeoverState
     })
 
     const pd = join(resolveHome(dir), 'pending')
+    // 目录缺失 = 空收件箱（与 listDirCards 同语义）：全新安装首次 push 前不该显示降级态
+    const pdExists = existsSync(pd)
     for (const c of uniqueCards) {
       const cov = (c.extras as { coverage?: { statements?: unknown; marked?: unknown; unmarked?: unknown } } | undefined)?.coverage
       if (cov && [cov.statements, cov.marked, cov.unmarked].every((x) => typeof x === 'number' && Number(x) >= 0)) {
@@ -189,12 +191,22 @@ export function buildState(readers: ForeignReaders, dir?: string): TakeoverState
         coverage.unmarked += Number(cov.unmarked)
       }
     }
-    for (const f of readdirSync(pd)) {
-      if (!f.endsWith('.envelope.json')) continue
-      try {
-        envelopeChars = (envelopeChars ?? 0) + statSync(join(pd, f)).size
-      } catch {
-        /* 单项 stat 失败不计入 */
+    if (pdExists) {
+      const liveIds = new Set(uniqueCards.map((c) => c.id))
+      for (const f of readdirSync(pd)) {
+        if (!f.endsWith('.envelope.json')) continue
+        try {
+          // 孤儿信封清扫：信封是纯派生物，对应 .md 已被任何实现取走（含不认识信封的旧版）
+          // 即成孤儿——顺手删除，envelopeChars 不随时间无界失真；正在推送的卡 .md 先落盘，不会误删
+          const ownerId = f.slice(0, -'.envelope.json'.length)
+          if (!liveIds.has(ownerId)) {
+            rmSync(join(pd, f))
+            continue
+          }
+          envelopeChars = (envelopeChars ?? 0) + statSync(join(pd, f)).size
+        } catch {
+          /* 单项 stat/删除失败不计入 */
+        }
       }
     }
   } catch (e) {

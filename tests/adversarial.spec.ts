@@ -23,8 +23,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
-import { generateId, loadCard, parseCard, resolveHome, writeCard, type Card } from '@agent-handoff/core'
-import { collectFacts } from '../src/collect.ts'
+import { generateId, listPendingReport, loadCard, parseCard, resolveHome, writeCard, type Card } from '@agent-handoff/core'
+import { collectFacts, todoToTasks } from '../src/collect.ts'
 import { inboxList, inboxLoad, pushHandoff } from '../src/tools.ts'
 import { registerTakeoverRoutes } from '../src/server.ts'
 import {
@@ -215,13 +215,15 @@ function routeHandler(): (req: IncomingMessage, res: ServerResponse) => void {
 
 async function callRoute(
   handler: ReturnType<typeof routeHandler>,
-  opts: { method?: string; url?: string; headers?: Record<string, string>; body?: string },
+  opts: { method?: string; url?: string; headers?: Record<string, string>; body?: string; remote?: string },
 ): Promise<{ status: number; body: string }> {
   return await new Promise((resolve, reject) => {
     const req = Object.assign(new EventEmitter(), {
       method: opts.method ?? 'GET',
       url: opts.url ?? '/dsh-takeover/state',
       headers: opts.headers ?? {},
+      // 连接级回环闸（0.4.1）：默认模拟本机回环连接，remote 覆盖模拟 LAN 对端
+      socket: { remoteAddress: opts.remote ?? '127.0.0.1' },
     })
     let settle: ((r: { status: number; body: string }) => void) | undefined
     const res = {
@@ -724,4 +726,63 @@ test('locales：previewHint/exportNoteTop 双语声明 goal 空时回退 done（
   assert.ok(DICTS.en.previewHint?.includes('falls back') === true, 'en previewHint does not declare the fallback')
   assert.ok(DICTS.zh.exportNoteTop?.includes('回退') === true, 'zh exportNoteTop 未声明回退')
   assert.ok(DICTS.en.exportNoteTop?.includes('falls back') === true, 'en exportNoteTop does not declare the fallback')
+})
+
+// ---------------------------------------------------------------------------
+// 0.4.1 审查修复回归
+// ---------------------------------------------------------------------------
+test('读侧尺寸闸：>8MiB 外来巨卡列表跳过、取件拒载且卡片原地保留', () => {
+  const home = mkdtempSync(join(tmpdir(), 'takeover-big-'))
+  const big = join(home, 'pending')
+  mkdirSync(big, { recursive: true })
+  const p = join(big, 'ho-big-0001.md')
+  writeFileSync(p, 'x'.repeat(8 * 1024 * 1024 + 1))
+  const rep = listPendingReport(home)
+  assert.equal(rep.cards.length, 0, '巨卡不应进列表')
+  assert.equal(rep.skipped.length, 1, '巨卡应计入 skipped')
+  assert.throws(() => loadCard('ho-big-0001', home), /上限/, '取件应报规范错误值')
+  assert.equal(existsSync(p), true, '拒载不消费：卡片原地保留')
+})
+
+test('保尾弃头：超限 userMessages 的 at(-1) 是真·最后一条（回归：曾保头取到旧请求）', () => {
+  const msgs = Array.from({ length: 130 }, (_, i) => ({
+    type: 'user/message', time: i,
+    data: { source: { kind: 'user' }, content: [{ type: 'text', text: `消息${i}` }] },
+  }))
+  const facts = collectFacts(msgs)
+  assert.equal(facts.userMessages.length, 100)
+  assert.equal(facts.userMessages[0]?.text, '消息30', '保尾弃头：最早的 30 条被淘汰')
+  assert.equal(facts.userMessages.at(-1)?.text, '消息129', 'at(-1) 必须是真·最后一条用户请求')
+})
+
+test('tasks 快照封顶：条数 ≤50、单条 text ≤120、priority ≤10（回归：tasks 曾无上限全量入卡）', () => {
+  const todos = Array.from({ length: 500 }, (_, i) => ({
+    text: 'T'.repeat(5000) + i,
+    status: i % 3 === 0 ? 'completed' : 'pending',
+    priority: 'P'.repeat(500),
+  }))
+  const facts = collectFacts([{ type: 'todo/write', time: 0, data: { todos } }])
+  const tasks = todoToTasks(facts)
+  assert.ok(tasks.length <= 50, `tasks 条数无上限：${tasks.length}`)
+  for (const t of tasks) {
+    assert.ok(t.text.length <= 121, `task text 未截断：${t.text.length}`)
+    if (t.priority !== undefined) assert.ok(t.priority.length <= 11, 'priority 未截断')
+  }
+})
+
+test('连接级回环闸：socket.remoteAddress 非回环一律 403（头部再合法也不放行）', async () => {
+  const { isLoopbackRemote } = await import('../src/server.ts')
+  // 纯函数面
+  assert.equal(isLoopbackRemote('127.0.0.1'), true)
+  assert.equal(isLoopbackRemote('::1'), true)
+  assert.equal(isLoopbackRemote('::ffff:127.0.0.1'), true)
+  assert.equal(isLoopbackRemote('192.168.1.10'), false)
+  assert.equal(isLoopbackRemote(undefined), false)
+  // 路由面：LAN 对端 + 完全合法的回环头，仍然 403
+  const handler = routeHandler()
+  const lan = await callRoute(handler, {
+    headers: { host: '127.0.0.1:65001', origin: 'http://127.0.0.1:65001' },
+    remote: '192.168.1.10',
+  })
+  assert.equal(lan.status, 403)
 })

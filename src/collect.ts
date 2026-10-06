@@ -44,6 +44,12 @@ export const MAX_USER_MESSAGES = 100
 export const MAX_GIT_COMMITS = 100
 /** 单条 file 路径上限 */
 const FILE_PATH_MAX = 200
+/** tasks 快照上限：条数与单条字段都封顶——tasks 是六段之外唯一全量入卡的结构，不能成为「push 50MB」的漏网侧门 */
+export const MAX_TASKS = 50
+export const TASK_TEXT_MAX = 120
+export const TASK_PRIORITY_MAX = 10
+/** keyFiles 去重集合上限（collectPaths 无上限累加，长会话可膨胀到数千条） */
+export const MAX_KEY_FILES = 200
 
 /** 从 content block 数组里抽出可见文本 */
 function contentText(blocks: unknown): string {
@@ -107,7 +113,10 @@ function parseArgs(raw: unknown): Record<string, unknown> | null {
 function collectPaths(parsed: Record<string, unknown>, into: Set<string>): void {
   for (const key of ['file_path', 'path', 'dest']) {
     const v = parsed[key]
-    if (typeof v === 'string' && v !== '' && !/^https?:\/\//i.test(v)) into.add(v)
+    if (typeof v === 'string' && v !== '' && !/^https?:\/\//i.test(v)) {
+      if (into.size >= MAX_KEY_FILES) return
+      into.add(v)
+    }
   }
 }
 
@@ -142,7 +151,9 @@ export function collectFacts(events: unknown[]): SessionFacts {
         const source = data?.['source'] as { kind?: unknown } | undefined
         if (source && source.kind === 'user') {
           const text = contentText(data?.['content']).trim()
-          if (text !== '' && facts.userMessages.length < MAX_USER_MESSAGES) {
+          if (text !== '') {
+            // 保尾弃头：goal 段取 at(-1) 标注「最后一条用户请求」——保头会让长会话取到几百轮前的旧请求
+            if (facts.userMessages.length >= MAX_USER_MESSAGES) facts.userMessages.shift()
             facts.userMessages.push({ time: Number.isFinite(e.time) ? (e.time as number) : 0, text: truncate(text, 200) })
           }
         }
@@ -159,8 +170,10 @@ export function collectFacts(events: unknown[]): SessionFacts {
         }
         if (toolName !== '' && COMMAND_TOOLS.has(toolName) && parsed && typeof parsed['command'] === 'string') {
           const cmd = truncate(parsed['command'], 120)
-          if (facts.commands.length < 10) facts.commands.push(cmd)
-          if (facts.gitCommits.length < MAX_GIT_COMMITS && /\bgit\s+commit\b/.test(parsed['command'])) {
+          if (facts.commands.length >= 10) facts.commands.shift()
+          facts.commands.push(cmd)
+          if (/\bgit\s+commit\b/.test(parsed['command'])) {
+            if (facts.gitCommits.length >= MAX_GIT_COMMITS) facts.gitCommits.shift()
             facts.gitCommits.push(truncate(parsed['command'], 160))
           }
         }
@@ -201,14 +214,15 @@ export function todoToTasks(facts: SessionFacts): Array<{ text: string; status: 
   const VALID = new Set(['pending', 'in_progress', 'completed'])
   const out: Array<{ text: string; status: string; priority?: string }> = []
   for (const t of facts.lastTodo) {
+    if (out.length >= MAX_TASKS) break
     const text = typeof t['text'] === 'string' ? t['text'] : typeof t['content'] === 'string' ? t['content'] : ''
     if (text === '') continue
     const rawStatus = typeof t['status'] === 'string' ? t['status'] : 'pending'
     const snap: { text: string; status: string; priority?: string } = {
-      text,
+      text: truncate(text, TASK_TEXT_MAX),
       status: VALID.has(rawStatus) ? rawStatus : 'pending',
     }
-    if (typeof t['priority'] === 'string' && t['priority'] !== '') snap.priority = t['priority']
+    if (typeof t['priority'] === 'string' && t['priority'] !== '') snap.priority = truncate(t['priority'], TASK_PRIORITY_MAX)
     out.push(snap)
   }
   return out

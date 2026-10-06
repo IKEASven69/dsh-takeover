@@ -7,7 +7,7 @@
  * @module dsh-takeover/tools
  */
 
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -229,7 +229,8 @@ function consumeEnvelope(id: string, dir?: string): number | undefined {
     if (!existsSync(p)) return undefined
     let chars: number | undefined
     try {
-      chars = readFileSync(p, 'utf-8').length
+      // 读侧尺寸闸：外来巨信封不整体读进内存——信封是 ≤1200 字目标的派生物，超限直接按异常丢弃
+      if (statSync(p).size <= 8 * 1024 * 1024) chars = readFileSync(p, 'utf-8').length
     } catch { /* 读失败不挡删除 */ }
     try {
       rmSync(p, { force: true })
@@ -614,7 +615,7 @@ function safeUserQuestions(ctx: Context): unknown {
 export function registerPushTool(ctx: Context): void {
   ctx.tools.register(defineTool({
     name: 'handoff_push',
-    description: '把当前 DSH 会话寄存为一张 handoff: 1 交接卡片到共享收件箱 ~/.handoff/pending/（任何 agent 可取件）。六段文本（goal/files/done/remaining/stopped/warnings/suggested）可选传入；留空段从会话事件流确定性兜底，不调 LLM。另落机器信封 <id>.envelope.json（协议扩展提案）并对 done 段产出四态覆盖率统计 coverage（只统计不强制）。返回 { ok, id, path, coverage } 规范值。',
+    description: '把当前 DSH 会话寄存为一张 handoff: 1 交接卡片到共享收件箱 ~/.handoff/pending/（任何 agent 可取件）。六段文本（goal/files/done/remaining/stopped/warnings）+ 可选 suggested（建议加载段，非协议段）可选传入；留空段从会话事件流确定性兜底，不调 LLM。另落机器信封 <id>.envelope.json（协议扩展提案）并对 done 段产出四态覆盖率统计 coverage（只统计不强制）。返回 { ok, id, path, coverage } 规范值。',
     parameters: {
       goal: { type: 'string', description: '「目标」段：会话在做什么、最后一条用户请求' },
       files: { type: 'string', description: '「涉及文件」段：碰过的文件/命令；计划文档只写路径' },
