@@ -11,6 +11,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { archivedDir, listPendingReport, resolveHome } from '@agent-handoff/core'
+import { isLowInfoCardMarkdown } from './lowinfo.ts'
 import { FOREIGN_PROVIDERS, PROVIDER_TO_ADAPTER, type ForeignProvider, type ForeignReaders } from './foreign.ts'
 
 // 停用规范错误值文案在 foreign.ts（disabledError），本模块只管开关存取与状态组装
@@ -94,6 +95,8 @@ export interface PendingRow {
   preview: string
   /** preview 实际取自 done 段（目标段为空的回退）——导出侧据此归段，避免段级错位 */
   previewFromDone?: boolean
+  /** 空壳卡：六段全是兜底占位文本（噪音治理判据，客户端据此打标/折叠） */
+  lowInfo: boolean
 }
 
 /** 预览截断长度（服务端截，避免长卡片把 state 撑大） */
@@ -166,8 +169,22 @@ export function buildState(readers: ForeignReaders, dir?: string): TakeoverState
     })
     pendingSkipped = report.skipped.length
     pendingDuplicates = report.cards.length - uniqueCards.length
+
+    const pd = join(resolveHome(dir), 'pending')
+    // 目录缺失 = 空收件箱（与 listDirCards 同语义）：全新安装首次 push 前不该显示降级态
+    const pdExists = existsSync(pd)
+    const cardTexts = new Map<string, string>()
+    if (pdExists) {
+      for (const f of readdirSync(pd)) {
+        if (!f.endsWith('.md')) continue
+        try {
+          cardTexts.set(f.slice(0, -3), readFileSync(join(pd, f), 'utf-8'))
+        } catch { /* 单项读失败按未知，不强判低信息 */ }
+      }
+    }
     pending = uniqueCards.map((c) => {
       const pv = previewOf(c)
+      const raw = cardTexts.get(c.id)
       return {
         id: c.id,
         agent: c.from.agent, // 空串交给客户端词典渲染兜底文案（host 侧中文字面量会漏进 EN 界面与导出）
@@ -176,12 +193,10 @@ export function buildState(readers: ForeignReaders, dir?: string): TakeoverState
         pushedAt: c.pushed_at,
         preview: pv.text,
         previewFromDone: pv.fromDone,
+        lowInfo: raw !== undefined ? isLowInfoCardMarkdown(raw) : false,
       }
     })
 
-    const pd = join(resolveHome(dir), 'pending')
-    // 目录缺失 = 空收件箱（与 listDirCards 同语义）：全新安装首次 push 前不该显示降级态
-    const pdExists = existsSync(pd)
     for (const c of uniqueCards) {
       const cov = (c.extras as { coverage?: { statements?: unknown; marked?: unknown; unmarked?: unknown } } | undefined)?.coverage
       if (cov && [cov.statements, cov.marked, cov.unmarked].every((x) => typeof x === 'number' && Number(x) >= 0)) {

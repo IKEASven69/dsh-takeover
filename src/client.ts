@@ -285,6 +285,7 @@ const CSS = `
 .bt-tag { font-size: 10px; font-weight: 700; line-height: 1.5; padding: 1px 8px;
   border-radius: 999px; flex: none; white-space: nowrap; box-sizing: border-box; letter-spacing: .02em; }
 .bt-tag-new { color: var(--bt-warn); background: rgba(251,191,36,.16); border: 1px solid rgba(251,191,36,.4); }
+.bt-tag-lowinfo { color: var(--bt-mut); background: rgba(127,127,127,.12); border: 1px solid var(--bt-line); }
 .bt-tag-group { color: var(--bt-a); background: rgba(99,102,241,.12); border: 1px solid transparent; }
 /* 组内成员行：整体右缩进，视觉上挂在组头下 */
 .bt-pending-member { margin-left: 20px; }
@@ -805,7 +806,8 @@ function PendingList({ rows, query, home, t, lang, onExport }: {
   const [sourceSel, setSourceSel] = useState<string | null>(null)
   const [newOnly, setNewOnly] = useState(false)
 
-  // 先滤（来源 → 只看新卡 → 文本）后组：过滤改变可见序列，「相邻」在滤后的列表上判定
+  // 先滤（来源 → 只看新卡 → 文本）后组：过滤改变可见序列，「相邻」在滤后的列表上判定。
+  // 空壳卡分离成「低信息」次级组（默认折叠）——主列表只留实质工作卡（Linear/Gmail 范式）
   const newIds = new Set(newIdsOf(rows, seen))
   const visible = filterPending(
     rows,
@@ -814,7 +816,9 @@ function PendingList({ rows, query, home, t, lang, onExport }: {
     sourceSel,
     newOnly ? newIds : null,
   )
-  const groups = groupAdjacent(visible)
+  const lowRows = visible.filter((r) => r.lowInfo === true)
+  const mainRows = visible.filter((r) => r.lowInfo !== true)
+  const groups = groupAdjacent(mainRows)
   const facets = sourceFacets(rows)
 
   // 来源筛选 chips：全部 + 各家（带计数）+ 只看新卡
@@ -843,6 +847,30 @@ function PendingList({ rows, query, home, t, lang, onExport }: {
     chip(t('newOnlyChip'), newIds.size, newOnly, () => setNewOnly(!newOnly), 'chip-new'),
   )
 
+  // 低信息次级组：可展开（与普通组同一 openIds 机制），组头带数量与「低信息」语义
+  const lowInfoNode = (low: PendingRow[]): ReturnType<typeof createElement> => {
+    const key = 'bt-lowinfo'
+    const open = openIds.has(key)
+    return createElement('div', { key, className: 'bt-group' },
+      createElement('div', {
+        className: `bt-pending${open ? ' bt-pending-open' : ''}`,
+        role: 'button',
+        tabIndex: 0,
+        'aria-expanded': open,
+        'aria-label': t('groupAria', { title: t('lowInfoGroup', { n: low.length }), n: low.length }),
+        onClick: () => setOpenIds((prev) => { const nx = new Set(prev); if (nx.has(key)) nx.delete(key); else nx.add(key); return nx }),
+        onKeyDown: (e: { key: string; preventDefault(): void }) => {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpenIds((prev) => { const nx = new Set(prev); if (nx.has(key)) nx.delete(key); else nx.add(key); return nx }) }
+        },
+      },
+        createElement('span', { className: 'bt-tag bt-tag-lowinfo' }, t('lowInfoBadge')),
+        createElement('span', { className: 'bt-pending-title' }, t('lowInfoGroup', { n: low.length })),
+        createElement('span', { className: 'bt-pending-chev', 'aria-hidden': true }, '▸'),
+      ),
+      open ? low.map((r) => rowNode(r, true)) : null,
+    )
+  }
+
   const rowNode = (p: PendingRow, inGroup: boolean): ReturnType<typeof createElement> => {
     const open = openIds.has(p.id)
     const isNew = !seen.has(p.id)
@@ -865,6 +893,7 @@ function PendingList({ rows, query, home, t, lang, onExport }: {
         createElement('span', { className: 'bt-pend-line1' },
           createElement('span', { className: 'bt-pending-title' }, p.title !== '' ? p.title : p.id),
           isNew ? createElement('span', { className: 'bt-tag bt-tag-new' }, t('newBadge')) : null,
+          p.lowInfo === true ? createElement('span', { className: 'bt-tag bt-tag-lowinfo' }, t('lowInfoBadge')) : null,
           createElement('span', { className: 'bt-pend-time' }, p.pushedAt === '' ? t('noTime') : fmtTime(p.pushedAt, lang)),
         ),
         createElement('span', {
@@ -938,9 +967,12 @@ function PendingList({ rows, query, home, t, lang, onExport }: {
     chipBar,
     rows.length === 0
       ? createElement('div', { className: 'bt-banner bt-banner-info' }, t('emptyInbox'))
-      : groups.length === 0
-        ? createElement('div', { className: 'bt-banner bt-banner-info' }, t('filterEmpty'))
-        : groups.map((g) => (g.rows.length > 1 ? groupNode(g) : rowNode(g.rows[0] as PendingRow, false))),
+      : mainRows.length === 0 && lowRows.length > 0
+        ? lowInfoNode(lowRows)
+        : [
+            ...groups.map((g) => (g.rows.length > 1 ? groupNode(g) : rowNode(g.rows[0] as PendingRow, false))),
+            lowRows.length > 0 ? lowInfoNode(lowRows) : null,
+          ],
   )
 }
 

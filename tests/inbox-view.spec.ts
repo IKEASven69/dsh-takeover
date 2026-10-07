@@ -33,6 +33,7 @@ function makeRow(partial?: Partial<PendingRow>): PendingRow {
     project: 'dsh-takeover',
     pushedAt: '2026-10-03T10:00:00+08:00',
     preview: '把过滤框做完',
+    lowInfo: false,
     ...partial,
   }
 }

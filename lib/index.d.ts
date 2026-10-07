@@ -88,6 +88,10 @@ interface PushArgs {
   cwd?: string;
   /** 本卡接替的前置卡 id（接力寄存）：只进信封不进 SPEC frontmatter */
   supersedes?: string;
+  /** 空壳卡守门旁路：六段全是兜底占位时，确认要寄存空壳卡 */
+  confirmSkeleton?: boolean;
+  /** 密钥闸旁路：扫描命中疑似密钥时，确认带密寄存（留痕进返回值） */
+  allowSecrets?: boolean;
 }
 type PushResult = {
   ok: true;
@@ -104,6 +108,10 @@ type PushResult = {
   };
   /** 本卡接替的前置卡 id（透传进信封） */
   supersedes?: string;
+  /** 空壳卡（守门旁路后落盘）：调用方/下游可据此提示 */
+  skeleton?: boolean;
+  /** 密钥闸旁路留痕：命中规则名列表 */
+  secretsBypass?: string[];
 } | {
   ok: false;
   error: string;
@@ -372,6 +380,8 @@ interface PendingRow {
   preview: string;
   /** preview 实际取自 done 段（目标段为空的回退）——导出侧据此归段，避免段级错位 */
   previewFromDone?: boolean;
+  /** 空壳卡：六段全是兜底占位文本（噪音治理判据，客户端据此打标/折叠） */
+  lowInfo: boolean;
 }
 /** 支持矩阵行：本机是否支持 / 发现的会话数 / 启用开关 */
 interface ProviderRow {

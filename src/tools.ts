@@ -9,6 +9,8 @@
 
 import { existsSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { hostname } from 'node:os'
+import { isLowInfoCardMarkdown } from './lowinfo.ts'
+import { scanSecrets } from './secretscan.ts'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -361,7 +363,7 @@ export function renderInbox(_args: unknown, value: unknown): Array<{ type: 'text
   const patchPath = typeof v.patchPath === 'string' ? v.patchPath : undefined
   if (patchPath !== undefined) {
     const kb = typeof v.patchBytes === 'number' ? `${Math.max(1, Math.round(v.patchBytes / 1024))} KB` : '? KB'
-    lines.push(`🩹 补丁随卡归档（${kb} 未提交改动）：先 \"git apply --check ${patchPath}\" 验证可干净应用，再 \"git apply ${patchPath}\" 复原`)
+    lines.push(`🩹 补丁随卡归档（${kb} 未提交改动）：先 \"git apply --check ${patchPath}\" 验证可干净应用，再 \"git apply ${patchPath}\" 复原；--check 失败（目标仓已前进）时用 \"git apply -3 ${patchPath}\" 三方合并尝试自助解决冲突`)
   }
   if (typeof v.testCommand === 'string' && v.testCommand !== '') {
     lines.push(`🧪 基线测试提示（来自寄存方信封）：接手后先跑 \"${v.testCommand}\" 对比寄存时状态，漂移即 MISMATCH 处理`)
@@ -409,6 +411,10 @@ export interface PushArgs {
   cwd?: string
   /** 本卡接替的前置卡 id（接力寄存）：只进信封不进 SPEC frontmatter */
   supersedes?: string
+  /** 空壳卡守门旁路：六段全是兜底占位时，确认要寄存空壳卡 */
+  confirmSkeleton?: boolean
+  /** 密钥闸旁路：扫描命中疑似密钥时，确认带密寄存（留痕进返回值） */
+  allowSecrets?: boolean
 }
 
 export type PushResult =
@@ -423,6 +429,10 @@ export type PushResult =
       patch?: { bytes: number; truncated: boolean; sidecar: boolean }
       /** 本卡接替的前置卡 id（透传进信封） */
       supersedes?: string
+      /** 空壳卡（守门旁路后落盘）：调用方/下游可据此提示 */
+      skeleton?: boolean
+      /** 密钥闸旁路留痕：命中规则名列表 */
+      secretsBypass?: string[]
     }
   | { ok: false; error: string }
 
@@ -533,6 +543,33 @@ ${honest}`
     const suggested = pick(args.suggested, '')
     if (suggested !== '') sections.suggested = section(suggested, '')
 
+    // 密钥闸（先例：gitleaks/Push Protection——阻断为默认 + 留痕旁路）：卡随同步盘跨机传播
+    // 并进入下游会话上下文，比 git 更宽的泄漏面；命中即拒，理由回喂调用方
+    const secretHits = scanSecrets({ ...sections, suggested: sections.suggested })
+    if (secretHits.length > 0 && args.allowSecrets !== true) {
+      const detail = secretHits.map((h) => `${h.rule}@${h.section}（${h.masked}）`).join('；')
+      return {
+        ok: false,
+        error: `密钥闸：发现 ${secretHits.length} 处疑似密钥——${detail}。请 redact 后重试；确要带密寄存，传 allowSecrets: true（旁路会留痕）。`,
+      }
+    }
+    // 空壳卡守门（42% 噪音的根因在生产者侧）：六段全是兜底占位 = 无会话环境且无手写段。
+    // 拦截理由回喂——模型可亲手蒸馏重试，或确认空壳旁路；不破坏「诚实的空卡」场景
+    // 判据与文案对齐：「均未手写」按字面执行——任一段有手写内容就不算空壳
+    //（部分手写+部分兜底的卡由取件侧 lowInfo 徽标兜底，不在生产者侧拦截）
+    const userWrote = [args.goal, args.files, args.done, args.remaining, args.stopped, args.warnings, args.suggested]
+      .some((v) => typeof v === 'string' && v.trim() !== '')
+    const skeleton = !userWrote && isLowInfoCardMarkdown(
+      ['goal', 'files', 'done', 'remaining', 'stopped', 'warnings', 'suggested']
+        .map((k) => (sections as unknown as Record<string, string | undefined>)[k] ?? '')
+        .join('\n'),
+    )
+    if (skeleton && args.confirmSkeleton !== true) {
+      return {
+        ok: false,
+        error: '空壳卡守门：六段全是兜底占位文本（无会话环境且六段均未手写）。请按 /handoff 纪律亲手蒸馏六段后重试；确要寄存空壳卡（如「无在途工作」声明），传 confirmSkeleton: true。',
+      }
+    }
     // 四态覆盖率：只统计不强制（纪律见 coverageOfDone 注释），随卡进 extras 持久化，
     // 取件侧 parseCard 后可从 extras.coverage 读回
     const coverage = coverageOfDone(sections.done)
@@ -584,7 +621,10 @@ ${honest}`
     } catch (e) {
       envelopeNote = `机器信封落盘失败（卡片本体已寄存）：${readableError(e)}`
     }
-    const note = [probe.note, ...truncated, ...patchNotes, envelopeNote].filter(Boolean).join('；')
+    const bypassNote = secretHits.length > 0 && args.allowSecrets === true
+      ? `密钥闸旁路留痕：${secretHits.map((h) => `${h.rule}@${h.section}`).join('；')}`
+      : ''
+    const note = [probe.note, ...truncated, ...patchNotes, envelopeNote, bypassNote, skeleton ? '空壳卡（已确认寄存）' : ''].filter(Boolean).join('；')
     return {
       ok: true,
       id: card.id,
@@ -594,6 +634,8 @@ ${honest}`
       coverage,
       ...(patchInfo ? { patch: patchInfo } : {}),
       ...(typeof args.supersedes === 'string' && args.supersedes.trim() !== '' ? { supersedes: args.supersedes.trim() } : {}),
+      ...(skeleton ? { skeleton: true } : {}),
+      ...(secretHits.length > 0 && args.allowSecrets === true ? { secretsBypass: secretHits.map((h) => h.rule) } : {}),
     }
   } catch (e) {
     return { ok: false, error: readableError(e) }
@@ -780,7 +822,7 @@ function safeUserQuestions(ctx: Context): unknown {
 export function registerPushTool(ctx: Context): void {
   ctx.tools.register(defineTool({
     name: 'handoff_push',
-    description: '把当前 DSH 会话寄存为一张 handoff: 1 交接卡片到共享收件箱 ~/.handoff/pending/（任何 agent 可取件）。六段文本（goal/files/done/remaining/stopped/warnings）+ 可选 suggested（建议加载段，非协议段）可选传入；留空段从会话事件流确定性兜底，不调 LLM。若源目录是 git 仓库且有未提交改动，同步落补丁 <id>.patch（取件方 git apply 可复原；diff 超上限整体拒带不截断）。另落机器信封 <id>.envelope.json（含源机标识/未跟踪清单/基线测试提示，协议扩展提案）并对 done 段产出四态覆盖率统计 coverage（只统计不强制）。返回 { ok, id, path, coverage, patch? } 规范值。',
+    description: '把当前 DSH 会话寄存为一张 handoff: 1 交接卡片到共享收件箱 ~/.handoff/pending/（任何 agent 可取件）。六段文本（goal/files/done/remaining/stopped/warnings）+ 可选 suggested（建议加载段，非协议段）可选传入；留空段从会话事件流确定性兜底，不调 LLM。内置两道守门：密钥扫描（云厂商 key/私钥头/高熵赋值，命中拒绝并回喂理由，allowSecrets 留痕旁路）与空壳卡守门（六段全是兜底占位时拒绝，confirmSkeleton 旁路）。若源目录是 git 仓库且有未提交改动，同步落补丁 <id>.patch（取件方 git apply 可复原；diff 超上限整体拒带不截断）。另落机器信封 <id>.envelope.json（含源机标识/未跟踪清单/基线测试提示，协议扩展提案）并对 done 段产出四态覆盖率统计 coverage（只统计不强制）。返回 { ok, id, path, coverage, patch? } 规范值。',
     parameters: {
       goal: { type: 'string', description: '「目标」段：会话在做什么、最后一条用户请求' },
       files: { type: 'string', description: '「涉及文件」段：碰过的文件/命令；计划文档只写路径' },
@@ -794,6 +836,8 @@ export function registerPushTool(ctx: Context): void {
       project: { type: 'string', description: '项目名（可选，默认空）' },
       cwd: { type: 'string', description: '卡片归属的工作目录，缺省取当前会话工作区' },
       supersedes: { type: 'string', description: '本卡接替的前置卡 id（接力寄存时传）：记录进机器信封，取件侧提示接力链' },
+      confirmSkeleton: { type: 'boolean', description: '空壳卡守门旁路：六段全是兜底占位被拦截时，确认要寄存空壳卡传 true' },
+      allowSecrets: { type: 'boolean', description: '密钥闸旁路：扫描命中疑似密钥被拦截时，确认带密寄存传 true（旁路留痕）' },
     },
     output: {
       schema: {

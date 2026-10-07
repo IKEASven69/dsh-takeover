@@ -134,13 +134,20 @@ test('push：六段参数优先，落盘后可解析回协议卡片', () => {
   }
 })
 
-test('push：无会话环境降级兜底骨架，仍是规范 ok 值', () => {
+test('push：空壳卡守门——裸 push 被拦（理由回喂），confirmSkeleton 旁路后仍全链路成立', () => {
   const dir = tmpHome()
   try {
-    const r = pushHandoff(null, {}, { dir })
+    const gated = pushHandoff(null, {}, { dir })
+    assert.equal(gated.ok, false)
+    if (gated.ok) return
+    assert.match(gated.error, /空壳卡守门/)
+    assert.match(gated.error, /confirmSkeleton/)
+
+    const r = pushHandoff(null, { confirmSkeleton: true }, { dir })
     assert.equal(r.ok, true)
     if (!r.ok) return
     assert.equal(r.skipped, true)
+    assert.equal(r.skeleton, true, '旁路落盘应带 skeleton 留痕')
     assert.notEqual(r.note, '')
     const card = parseCard(readFileSync(r.path, 'utf-8'))
     assert.match(card.sections.warnings, /HISTORY_REPORTED/)
