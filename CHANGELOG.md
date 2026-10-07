@@ -4,6 +4,13 @@
 
 ## [0.4.1] — 未发布
 
+### 新增（物质层交接：卡不只是地图，也是货物清单）
+- **补丁随卡**：`handoff_push` 时若源目录是 git 仓库且有未提交改动，`git diff HEAD` 落第三文件 `<id>.patch` 进 pending/（与信封同款 sidecar 模式，SPEC 一字不动）；取件时补丁与卡同步搬 archived/，文案给出 `git apply --check` → `git apply` 指引。**截断的补丁不能 apply——diff 超 512KB 整份拒带**（不半截携带），文案提示自行 commit/push；未跟踪新文件只进信封清单（≤20 条）不带货，防 node_modules 级噪音
+- **非 git 仓诚实警告**：源目录未识别为 git 仓库时，卡片警告段如实标注「文件改动无法随卡携带、取件侧无法 git 核验」——不再让 `git.branch` 静默空串（昨日实卡 `ho-muw3beig-evr3` 暴露的盲区）
+- **信封物质层扩展**（全部可选，旧消费者天然忽略）：`host`（源机 hostname/platform——跨机接管判断路径体系）、`untracked`（未跟踪清单）、`test`（源目录 package.json 有 test 脚本时的基线命令提示）、`supersedes`（接力链，push 新增可选参数）
+- **取件物质层指引**：取件文案逐条给出——补丁 apply 指引（先 --check 再 apply，有冲突如实报告不硬塞）、基线测试提示（接手先跑对比，对不上按 MISMATCH 处理）、接力链回溯 id
+- **写卡纪律 7/8 条**（skill 层）：失败尝试与放弃原因写进警告段（接手方不重复踩坑）；环境状态（服务/端口/env/工具版本/源机 OS）写进警告段、仅源机路径标注「仅源机」
+
 ### 安全与加固
 - **连接级回环闸**：`/dsh-takeover/*` 全路由先校验 `socket.remoteAddress` 是本机回环（127.0.0.1/::1），非回环一律 403——此前只验 Host/Origin/Sec-Fetch-Site 请求头，而宿主 webServer 一等支持 0.0.0.0 绑定，头部对非浏览器客户端全可伪造（LAN 直连可未鉴权读卡/翻开关/清归档）
 - **读侧尺寸闸**（姊妹仓 core 同步修）：`listDirCards`/`loadCard` 读前 statSync，超 8 MiB 的外来巨卡列表跳过 / 取件拒载不消费——共享收件箱是多写方目录，巨文件同步读会放大进宿主事件循环；信封消费同步加同款闸

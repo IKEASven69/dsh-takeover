@@ -218,8 +218,10 @@ test('信封：files 段取前 10 条非空行，单条截 120', () => {
 
 test('push：envelope 文件存在、JSON 可解析、结构字段正确', () => {
   const dir = tmpHome()
+  // 非 git 仓 cwd：物质层可选字段（patch/test）不出现，唯一新增键是恒定的 host 源机标识
+  const plainCwd = mkdtempSync(join(tmpdir(), 'takeover-env-nogit-'))
   try {
-    const r = pushHandoff(null, { title: '信封测试', goal: 'g', done: 'd（HISTORY_REPORTED）' }, { dir })
+    const r = pushHandoff(null, { title: '信封测试', goal: 'g', done: 'd（HISTORY_REPORTED）', cwd: plainCwd }, { dir })
     assert.equal(r.ok, true)
     if (!r.ok) return
     const p = envelopePath(r.id, dir)
@@ -228,8 +230,11 @@ test('push：envelope 文件存在、JSON 可解析、结构字段正确', () =>
 
     const env = JSON.parse(readFileSync(p, 'utf-8')) as Record<string, unknown>
     assert.deepEqual(Object.keys(env).sort(), [
-      'done', 'files', 'from', 'goal', 'handoff', 'id', 'kind', 'remaining', 'stopped', 'warnings',
+      'done', 'files', 'from', 'goal', 'handoff', 'host', 'id', 'kind', 'remaining', 'stopped', 'warnings',
     ])
+    const host = env.host as { hostname?: string; platform?: string }
+    assert.equal(typeof host.hostname, 'string')
+    assert.equal(host.platform, process.platform)
     assert.equal(env.handoff, 1)
     assert.equal(env.kind, 'envelope')
     assert.equal(env.id, r.id)

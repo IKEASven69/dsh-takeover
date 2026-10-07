@@ -7,7 +7,8 @@
  * @module dsh-takeover/tools
  */
 
-import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { hostname } from 'node:os'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -19,11 +20,13 @@ import type {} from '@deepseek-ai/dsh-user-questions'
 import type { AskUserQuestionRequest } from '@deepseek-ai/dsh-user-questions'
 import {
   collectGitSnapshot,
+  collectPatch,
   generateId,
   listPendingReport,
   loadCard,
   pendingDir,
   renderCard,
+  archivedDir,
   verifyGit,
   writeCard,
   type Card,
@@ -153,6 +156,17 @@ export interface HandoffEnvelope {
   stopped: string
   warnings: string
   files: string[]
+  /** ── 0.4.1 物质层扩展（全部可选，旧消费者天然忽略）── */
+  /** 未提交改动补丁随卡情况 */
+  patch?: { bytes: number; truncated: boolean; sidecar: boolean }
+  /** 未跟踪且未被 ignore 的新文件清单（只列不带货） */
+  untracked?: Array<{ file: string; bytes: number }>
+  /** 源机标识 */
+  host?: { hostname: string; platform: string }
+  /** 基线测试命令提示 */
+  test?: { command: string }
+  /** 本卡接替的前置卡 id */
+  supersedes?: string
 }
 
 /**
@@ -177,15 +191,41 @@ export const ENVELOPE_FILES_MAX = 10
 /** files 单条行上限（防超长单行把数组撑爆） */
 export const ENVELOPE_FILE_LINE_MAX = 120
 
+
+/** 基线测试提示：源目录 package.json 有 test 脚本 → 信封记录命令（取件方先跑基线再对比，漂移即警告） */
+function testHint(cwd: string): { test?: { command: string } } {
+  try {
+    const raw = readFileSync(join(cwd, 'package.json'), 'utf-8')
+    const pkg = JSON.parse(raw) as { scripts?: { test?: unknown } }
+    if (typeof pkg.scripts?.test === 'string' && pkg.scripts.test.trim() !== '') {
+      return { test: { command: 'npm test' } }
+    }
+  } catch { /* 无 package.json / 坏 JSON：无提示 */ }
+  return {}
+}
+
 /** buildEnvelope 的结构化入参：Card 天然满足，单测可用最小字面量 */
+export interface EnvelopeExtra {
+  /** 未提交改动补丁随卡情况（bytes/truncated/sidecar） */
+  patch?: { bytes: number; truncated: boolean; sidecar: boolean }
+  /** 未跟踪且未被 ignore 的新文件清单（只列不带货） */
+  untracked?: Array<{ file: string; bytes: number }>
+  /** 源机标识（跨机接管时判断路径体系/OS） */
+  host?: { hostname: string; platform: string }
+  /** 基线测试命令提示（来自源目录 package.json scripts.test） */
+  test?: { command: string }
+  /** 本卡接替的前置卡 id（接力链） */
+  supersedes?: string
+}
+
 export interface EnvelopeSource {
   id?: string
   from?: { agent?: string; title?: string }
   sections: { goal?: string; done?: string; remaining?: string; stopped?: string; warnings?: string; files?: string }
 }
 
-/** 卡片 → 接手信封（确定性：同一张卡永远产出同一个 JSON） */
-export function buildEnvelope(card: EnvelopeSource): HandoffEnvelope {
+/** 卡片 → 接手信封（确定性：同一张卡永远产出同一个 JSON）；extra 为物质层扩展字段 */
+export function buildEnvelope(card: EnvelopeSource, extra?: EnvelopeExtra): HandoffEnvelope {
   const clip = (v: unknown, max: number): string => {
     const s = typeof v === 'string' ? v : ''
     return s.length > max ? s.slice(0, max) : s
@@ -210,6 +250,11 @@ export function buildEnvelope(card: EnvelopeSource): HandoffEnvelope {
     stopped: clip(sec.stopped, ENVELOPE_STOPPED_MAX),
     warnings: clip(sec.warnings, ENVELOPE_WARNINGS_MAX),
     files,
+    ...(extra?.patch ? { patch: extra.patch } : {}),
+    ...(extra?.untracked && extra.untracked.length > 0 ? { untracked: extra.untracked } : {}),
+    ...(extra?.host ? { host: extra.host } : {}),
+    ...(extra?.test ? { test: extra.test } : {}),
+    ...(extra?.supersedes ? { supersedes: extra.supersedes } : {}),
   }
 }
 
@@ -223,22 +268,49 @@ export function envelopePath(id: string, dir?: string): string {
  * 只在 loadCard 成功后调用（id 已过 SAFE_ID 闸，无路径穿越面）；信封是纯派生物，
  * 残留无害（core 列表只认 .md），读/删任一步失败都吞掉，绝不影响取件主流程成败。
  */
-function consumeEnvelope(id: string, dir?: string): number | undefined {
+function consumeEnvelope(id: string, dir?: string): { chars: number; data?: Record<string, unknown> } | undefined {
   const p = envelopePath(id, dir)
   try {
     if (!existsSync(p)) return undefined
     let chars: number | undefined
+    let data: Record<string, unknown> | undefined
     try {
       // 读侧尺寸闸：外来巨信封不整体读进内存——信封是 ≤1200 字目标的派生物，超限直接按异常丢弃
-      if (statSync(p).size <= 8 * 1024 * 1024) chars = readFileSync(p, 'utf-8').length
+      if (statSync(p).size <= 8 * 1024 * 1024) {
+        const raw = readFileSync(p, 'utf-8')
+        chars = raw.length
+        try {
+          const parsed = JSON.parse(raw) as unknown
+          if (parsed !== null && typeof parsed === 'object') data = parsed as Record<string, unknown>
+        } catch { /* 坏 JSON：只有 chars，无字段 */ }
+      }
     } catch { /* 读失败不挡删除 */ }
     try {
       rmSync(p, { force: true })
     } catch { /* 删失败也不挡取件：残留信封会被列表忽略 */ }
-    return chars
+    return chars === undefined ? undefined : { chars, data }
   } catch {
     return undefined
   }
+}
+
+/** 补丁 sidecar 路径（与卡片同屋 pending/，取件时随卡搬去 archived/） */
+function patchPath(id: string, dir?: string): string {
+  return join(pendingDir(dir), `${id}.patch`)
+}
+
+/** 取件时同步消费补丁：pending → archived（与 .md 同步搬），返回归档后路径供 apply 指引 */
+function consumePatch(id: string, dir?: string): string | undefined {
+  try {
+    const src = patchPath(id, dir)
+    if (!existsSync(src)) return undefined
+    const dest = join(archivedDir(dir), `${id}.patch`)
+    try {
+      renameSync(src, dest)
+      return dest
+    } catch { /* 搬失败不挡取件：残留补丁会被列表忽略（列表只认 .md） */ }
+  } catch { /* 整体失败只降级 */ }
+  return undefined
 }
 
 /** 渲染：execute 返回规范值对象，render 包成中文 text block（导出仅为单测） */
@@ -266,6 +338,10 @@ export function renderInbox(_args: unknown, value: unknown): Array<{ type: 'text
     unavailable?: string
     coverage?: unknown
     envelopeChars?: number
+    patchPath?: string
+    patchBytes?: number
+    testCommand?: string
+    supersedes?: string
     error?: unknown
   }
   if (v?.ok !== true) {
@@ -282,6 +358,17 @@ export function renderInbox(_args: unknown, value: unknown): Array<{ type: 'text
   }
   // load
   const lines = ['📥 已取件（消费即弃，卡片已归档）：', '', v.text ?? '']
+  const patchPath = typeof v.patchPath === 'string' ? v.patchPath : undefined
+  if (patchPath !== undefined) {
+    const kb = typeof v.patchBytes === 'number' ? `${Math.max(1, Math.round(v.patchBytes / 1024))} KB` : '? KB'
+    lines.push(`🩹 补丁随卡归档（${kb} 未提交改动）：先 \"git apply --check ${patchPath}\" 验证可干净应用，再 \"git apply ${patchPath}\" 复原`)
+  }
+  if (typeof v.testCommand === 'string' && v.testCommand !== '') {
+    lines.push(`🧪 基线测试提示（来自寄存方信封）：接手后先跑 \"${v.testCommand}\" 对比寄存时状态，漂移即 MISMATCH 处理`)
+  }
+  if (typeof v.supersedes === 'string' && v.supersedes !== '') {
+    lines.push(`🔗 本卡接替前置卡 ${v.supersedes}（接力链）`)
+  }
   const coverageLine = renderCoverageLine(v.coverage)
   if (coverageLine !== null) lines.push('', coverageLine)
   if (typeof v.envelopeChars === 'number' && v.envelopeChars >= 0) {
@@ -320,10 +407,23 @@ export interface PushArgs {
   to?: string
   project?: string
   cwd?: string
+  /** 本卡接替的前置卡 id（接力寄存）：只进信封不进 SPEC frontmatter */
+  supersedes?: string
 }
 
 export type PushResult =
-  | { ok: true; id: string; path: string; skipped: boolean; note: string; coverage: CoverageStats }
+  | {
+      ok: true
+      id: string
+      path: string
+      skipped: boolean
+      note: string
+      coverage: CoverageStats
+      /** 未提交改动补丁随卡情况；undefined = 源目录非 git 仓库 */
+      patch?: { bytes: number; truncated: boolean; sidecar: boolean }
+      /** 本卡接替的前置卡 id（透传进信封） */
+      supersedes?: string
+    }
   | { ok: false; error: string }
 
 /** 确定性兜底：事件流事实 → 六段正文草稿（中文，证据一律 HISTORY_REPORTED） */
@@ -414,6 +514,9 @@ export function pushHandoff(session: unknown, args: PushArgs, opts?: { dir?: str
       const clean = stripControlChars(pick(v, dflt))
       return clean.length > MAX_SCALAR_CHARS ? clean.slice(0, MAX_SCALAR_CHARS) : clean
     }
+    // 物质层采集：未提交改动补丁（非 git 目录 null）——先于 sections 组装，
+    // 便于把「非 git 仓」如实写进警告段而不是让 git 字段静默为空
+    const patchBundle = collectPatch(cwd)
     const sections: CardSections = {
       goal: section(args.goal, fallback.goal),
       files: section(args.files, fallback.files),
@@ -421,6 +524,11 @@ export function pushHandoff(session: unknown, args: PushArgs, opts?: { dir?: str
       remaining: section(args.remaining, fallback.remaining),
       stopped: section(args.stopped, fallback.stopped),
       warnings: section(args.warnings, fallback.warnings),
+    }
+    if (patchBundle === null && cwd !== '') {
+      const honest = `源目录未识别为 git 仓库（cwd=${cwd}），文件改动无法随卡携带、取件侧也无法做 git 核验。`
+      sections.warnings = sections.warnings === '' ? honest : `${sections.warnings}
+${honest}`
     }
     const suggested = pick(args.suggested, '')
     if (suggested !== '') sections.suggested = section(suggested, '')
@@ -442,16 +550,51 @@ export function pushHandoff(session: unknown, args: PushArgs, opts?: { dir?: str
       extras: { coverage },
     }
     const path = writeCard(card, opts?.dir)
+    // 物质层第二文件：未提交改动补丁（截断的补丁不能 apply，宁可不带——collectPatch 已拒）
+    const patchNotes: string[] = []
+    let patchInfo: { bytes: number; truncated: boolean; sidecar: boolean } | undefined
+    if (patchBundle !== null && patchBundle.patch !== '') {
+      try {
+        writeFileSync(join(pendingDir(opts?.dir), `${card.id}.patch`), patchBundle.patch, 'utf-8')
+        patchInfo = { bytes: patchBundle.bytes, truncated: false, sidecar: true }
+        patchNotes.push(`补丁随卡（${Math.max(1, Math.round(patchBundle.bytes / 1024))} KB 未提交改动）：取件时会给出 git apply 指引`)
+      } catch (e) {
+        patchNotes.push(`补丁随卡失败（卡片本体已寄存）：${readableError(e)}`)
+      }
+    } else if (patchBundle !== null && patchBundle.truncated) {
+      patchInfo = { bytes: patchBundle.bytes, truncated: true, sidecar: false }
+      patchNotes.push(`未提交 diff 过大（${Math.round(patchBundle.bytes / 1024)} KB 超上限）未随卡——请自行 git commit/push 携带`)
+    }
+    if (patchBundle !== null && patchBundle.untracked.length > 0) {
+      const names = patchBundle.untracked.slice(0, 5).map((u: { file: string }) => u.file).join('、')
+      patchNotes.push(`未跟踪新文件 ${patchBundle.untracked.length} 个不随卡${patchBundle.untracked.length > 5 ? `（前 5：${names}…）` : `（${names}）`}——请自行提交或携带`)
+    }
     // 机器信封（协议扩展提案，handoff: 1 SPEC 不动）：卡片落盘成功后落第二文件。
     // 信封是纯派生物——写失败只降级进 note，不回滚已寄存的卡片
     let envelopeNote = ''
     try {
-      writeFileSync(envelopePath(card.id, opts?.dir), JSON.stringify(buildEnvelope(card)), 'utf-8')
+      const extra = {
+        ...(patchInfo ? { patch: patchInfo } : {}),
+        ...(patchBundle !== null && patchBundle.untracked.length > 0 ? { untracked: patchBundle.untracked } : {}),
+        host: { hostname: hostname(), platform: process.platform },
+        ...testHint(cwd),
+        ...(typeof args.supersedes === 'string' && args.supersedes.trim() !== '' ? { supersedes: args.supersedes.trim() } : {}),
+      }
+      writeFileSync(envelopePath(card.id, opts?.dir), JSON.stringify(buildEnvelope(card, extra)), 'utf-8')
     } catch (e) {
       envelopeNote = `机器信封落盘失败（卡片本体已寄存）：${readableError(e)}`
     }
-    const note = [probe.note, ...truncated, envelopeNote].filter(Boolean).join('；')
-    return { ok: true, id: card.id, path, skipped: probe.skipped, note, coverage }
+    const note = [probe.note, ...truncated, ...patchNotes, envelopeNote].filter(Boolean).join('；')
+    return {
+      ok: true,
+      id: card.id,
+      path,
+      skipped: probe.skipped,
+      note,
+      coverage,
+      ...(patchInfo ? { patch: patchInfo } : {}),
+      ...(typeof args.supersedes === 'string' && args.supersedes.trim() !== '' ? { supersedes: args.supersedes.trim() } : {}),
+    }
   } catch (e) {
     return { ok: false, error: readableError(e) }
   }
@@ -504,6 +647,13 @@ export type InboxLoadResult =
       coverage?: CoverageStats
       /** 随卡消费的机器信封 JSON 字符数；卡无信封（旧卡/外写卡）缺省 */
       envelopeChars?: number
+      /** 随卡归档的未提交改动补丁路径（git apply 可复原）；卡无补丁缺省 */
+      patchPath?: string
+      patchBytes?: number
+      /** 信封提示的基线测试命令 */
+      testCommand?: string
+      /** 本卡接替的前置卡 id */
+      supersedes?: string
     }
   | { ok: false; error: string }
 
@@ -519,7 +669,11 @@ export function inboxLoad(id: string, opts?: { dir?: string }): InboxLoadResult 
     const card = loadCard(trimmed, opts?.dir)
     const check = verifyGit(card)
     // 机器信封随卡消费：core 的 loadCard 只搬 .md，信封生命周期归本插件管
-    const envelopeChars = consumeEnvelope(trimmed, opts?.dir)
+    const envelope = consumeEnvelope(trimmed, opts?.dir)
+    const envelopeChars = envelope?.chars
+    const env = envelope?.data ?? {}
+    // 物质层随卡：补丁 sidecar 与 .md 同步搬去 archived/
+    const patchArchived = consumePatch(trimmed, opts?.dir)
     const coverage = coverageFromExtras(card.extras)
     const out: InboxLoadResult = {
       ok: true,
@@ -531,6 +685,17 @@ export function inboxLoad(id: string, opts?: { dir?: string }): InboxLoadResult 
     if (check.unavailable !== undefined) out.unavailable = check.unavailable
     if (coverage !== undefined) out.coverage = coverage
     if (envelopeChars !== undefined) out.envelopeChars = envelopeChars
+    if (patchArchived !== undefined) {
+      out.patchPath = patchArchived
+      try {
+        out.patchBytes = statSync(patchArchived).size
+      } catch { /* stat 失败不挡取件 */ }
+    }
+    if (typeof env['test'] === 'object' && env['test'] !== null) {
+      const cmd = (env['test'] as { command?: unknown })['command']
+      if (typeof cmd === 'string' && cmd !== '') out.testCommand = cmd
+    }
+    if (typeof env['supersedes'] === 'string' && env['supersedes'] !== '') out.supersedes = env['supersedes']
     return out
   } catch (e) {
     // core 层中文错误（收件箱无此待取件等）原样透传；系统错误包中文口径
@@ -615,7 +780,7 @@ function safeUserQuestions(ctx: Context): unknown {
 export function registerPushTool(ctx: Context): void {
   ctx.tools.register(defineTool({
     name: 'handoff_push',
-    description: '把当前 DSH 会话寄存为一张 handoff: 1 交接卡片到共享收件箱 ~/.handoff/pending/（任何 agent 可取件）。六段文本（goal/files/done/remaining/stopped/warnings）+ 可选 suggested（建议加载段，非协议段）可选传入；留空段从会话事件流确定性兜底，不调 LLM。另落机器信封 <id>.envelope.json（协议扩展提案）并对 done 段产出四态覆盖率统计 coverage（只统计不强制）。返回 { ok, id, path, coverage } 规范值。',
+    description: '把当前 DSH 会话寄存为一张 handoff: 1 交接卡片到共享收件箱 ~/.handoff/pending/（任何 agent 可取件）。六段文本（goal/files/done/remaining/stopped/warnings）+ 可选 suggested（建议加载段，非协议段）可选传入；留空段从会话事件流确定性兜底，不调 LLM。若源目录是 git 仓库且有未提交改动，同步落补丁 <id>.patch（取件方 git apply 可复原；diff 超上限整体拒带不截断）。另落机器信封 <id>.envelope.json（含源机标识/未跟踪清单/基线测试提示，协议扩展提案）并对 done 段产出四态覆盖率统计 coverage（只统计不强制）。返回 { ok, id, path, coverage, patch? } 规范值。',
     parameters: {
       goal: { type: 'string', description: '「目标」段：会话在做什么、最后一条用户请求' },
       files: { type: 'string', description: '「涉及文件」段：碰过的文件/命令；计划文档只写路径' },
@@ -628,6 +793,7 @@ export function registerPushTool(ctx: Context): void {
       to: { type: 'string', description: '目标 agent/项目，默认 any' },
       project: { type: 'string', description: '项目名（可选，默认空）' },
       cwd: { type: 'string', description: '卡片归属的工作目录，缺省取当前会话工作区' },
+      supersedes: { type: 'string', description: '本卡接替的前置卡 id（接力寄存时传）：记录进机器信封，取件侧提示接力链' },
     },
     output: {
       schema: {

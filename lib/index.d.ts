@@ -86,6 +86,8 @@ interface PushArgs {
   to?: string;
   project?: string;
   cwd?: string;
+  /** 本卡接替的前置卡 id（接力寄存）：只进信封不进 SPEC frontmatter */
+  supersedes?: string;
 }
 type PushResult = {
   ok: true;
@@ -94,6 +96,14 @@ type PushResult = {
   skipped: boolean;
   note: string;
   coverage: CoverageStats;
+  /** 未提交改动补丁随卡情况；undefined = 源目录非 git 仓库 */
+  patch?: {
+    bytes: number;
+    truncated: boolean;
+    sidecar: boolean;
+  };
+  /** 本卡接替的前置卡 id（透传进信封） */
+  supersedes?: string;
 } | {
   ok: false;
   error: string;
@@ -144,6 +154,13 @@ type InboxLoadResult = {
   coverage?: CoverageStats;
   /** 随卡消费的机器信封 JSON 字符数；卡无信封（旧卡/外写卡）缺省 */
   envelopeChars?: number;
+  /** 随卡归档的未提交改动补丁路径（git apply 可复原）；卡无补丁缺省 */
+  patchPath?: string;
+  patchBytes?: number;
+  /** 信封提示的基线测试命令 */
+  testCommand?: string;
+  /** 本卡接替的前置卡 id */
+  supersedes?: string;
 } | {
   ok: false;
   error: string;
