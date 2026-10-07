@@ -186,9 +186,11 @@ console.log('── 用户：「resume-opencode 1234」（随手敲个不存在�
 const miss = await call('foreign_session_read', { provider: 'opencode', action: 'show', reference: 'sess_00000000-不存在' })
 check('找不到 → ok:false 规范错误值不抛错', miss.isError !== true && /ok:\s*false|找不到|未发现/.test(textOf(miss)))
 
-console.log('── 用户：什么都没说直接 push（无会话环境）→ 确定性骨架兜底 ──')
-const bare = await call('handoff_push', {})
-check('全空段 push 仍是 ok 值且有 id/path', bare.isError !== true && /ho-[A-Za-z0-9_-]+/.test(textOf(bare)))
+console.log('── 用户：什么都没说直接 push（无会话环境）→ 空壳卡守门拦截，确认后才落盘 ──')
+const gatedBare = await call('handoff_push', {})
+check('裸 push 被守门拦截（理由回喂带 confirmSkeleton）', textOf(gatedBare).includes('空壳卡守门') && textOf(gatedBare).includes('confirmSkeleton'))
+const bare = await call('handoff_push', { confirmSkeleton: true })
+check('确认后空壳 push 是 ok 值且有 id/path', bare.isError !== true && /ho-[A-Za-z0-9_-]+/.test(textOf(bare)))
 const bareId = /ho-[A-Za-z0-9_-]+/.exec(textOf(bare))?.[0]
 if (bareId) {
   // 兜底卡也要能被正常取走，不留僵尸卡
