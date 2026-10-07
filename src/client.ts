@@ -851,6 +851,11 @@ function PendingList({ rows, query, home, t, lang, onExport }: {
   const lowInfoNode = (low: PendingRow[]): ReturnType<typeof createElement> => {
     const key = 'bt-lowinfo'
     const open = openIds.has(key)
+    const hasNew = low.some((r) => !seen.has(r.id))
+    const toggle = () => {
+      setOpenIds((prev) => { const nx = new Set(prev); if (nx.has(key)) nx.delete(key); else nx.add(key); return nx })
+      if (!open) markSeen(low.map((r) => r.id)) // 展开即整组记已见（与 toggleGroup 对齐——审查 #11）
+    }
     return createElement('div', { key, className: 'bt-group' },
       createElement('div', {
         className: `bt-pending${open ? ' bt-pending-open' : ''}`,
@@ -858,13 +863,14 @@ function PendingList({ rows, query, home, t, lang, onExport }: {
         tabIndex: 0,
         'aria-expanded': open,
         'aria-label': t('groupAria', { title: t('lowInfoGroup', { n: low.length }), n: low.length }),
-        onClick: () => setOpenIds((prev) => { const nx = new Set(prev); if (nx.has(key)) nx.delete(key); else nx.add(key); return nx }),
+        onClick: toggle,
         onKeyDown: (e: { key: string; preventDefault(): void }) => {
-          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpenIds((prev) => { const nx = new Set(prev); if (nx.has(key)) nx.delete(key); else nx.add(key); return nx }) }
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle() }
         },
       },
         createElement('span', { className: 'bt-tag bt-tag-lowinfo' }, t('lowInfoBadge')),
         createElement('span', { className: 'bt-pending-title' }, t('lowInfoGroup', { n: low.length })),
+        hasNew ? createElement('span', { className: 'bt-tag bt-tag-new' }, t('newBadge')) : null,
         createElement('span', { className: 'bt-pending-chev', 'aria-hidden': true }, '▸'),
       ),
       open ? low.map((r) => rowNode(r, true)) : null,
@@ -967,12 +973,14 @@ function PendingList({ rows, query, home, t, lang, onExport }: {
     chipBar,
     rows.length === 0
       ? createElement('div', { className: 'bt-banner bt-banner-info' }, t('emptyInbox'))
-      : mainRows.length === 0 && lowRows.length > 0
-        ? lowInfoNode(lowRows)
-        : [
-            ...groups.map((g) => (g.rows.length > 1 ? groupNode(g) : rowNode(g.rows[0] as PendingRow, false))),
-            lowRows.length > 0 ? lowInfoNode(lowRows) : null,
-          ],
+      : visible.length === 0
+        ? createElement('div', { className: 'bt-banner bt-banner-info' }, t('filterEmpty'))
+        : mainRows.length === 0 && lowRows.length > 0
+          ? lowInfoNode(lowRows)
+          : [
+              ...groups.map((g) => (g.rows.length > 1 ? groupNode(g) : rowNode(g.rows[0] as PendingRow, false))),
+              lowRows.length > 0 ? lowInfoNode(lowRows) : null,
+            ],
   )
 }
 

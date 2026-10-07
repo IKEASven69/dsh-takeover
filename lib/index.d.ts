@@ -169,6 +169,11 @@ type InboxLoadResult = {
   testCommand?: string;
   /** 本卡接替的前置卡 id */
   supersedes?: string;
+  /** 跨 OS 接手：源卡 OS 与本机不同（路径体系需人工映射） */
+  crossOS?: {
+    source: string;
+    local: string;
+  };
 } | {
   ok: false;
   error: string;

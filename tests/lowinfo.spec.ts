@@ -77,3 +77,16 @@ test('buildState：空壳卡 lowInfo=true，实卡 false（集成）', () => {
   assert.equal(byId.get(junk.id)?.lowInfo, true, '空壳卡应标 lowInfo')
   assert.equal(byId.get(real.id)?.lowInfo === false, true, '实卡不应标 lowInfo')
 })
+
+test('审查 #5：实质内容 + 手写三行（无）的健康卡不误折叠（占比判据）', () => {
+  const healthy = [
+    '## 目标', '', '把 relay 链测试做完（CURRENT_OBSERVED）：三跳 supersedes 链全对。', '',
+    '## 涉及文件', '', 'tests/relay.spec.ts、src/tools.ts（各处改动详见 diff）。', '',
+    '## 做到哪', '', '- 三跳全绿（CURRENT_OBSERVED）', '- 口令探针零丢失（CURRENT_OBSERVED）', '',
+    '## 还差什么', '', '（无）', '',
+    '## 停在哪', '', '停在等审查员回报。最安全第一步：看审查 findings。', '',
+    '## 读者警告', '', '（无）', '', '（无未完成 todo 快照）',
+  ].join(String.fromCharCode(10))
+  assert.equal(isLowInfoCardMarkdown(healthy), false, '实质占多数的健康卡不得折叠')
+  assert.equal(isLowInfoCardMarkdown(['## 目标', '（无）', '（事件流中无文件/命令记录）', '（事件流中无可蒸馏的完成项）', '（无未完成 todo 快照）'].join(String.fromCharCode(10))), true, '全占位仍判低信息')
+})

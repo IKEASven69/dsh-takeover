@@ -37,54 +37,69 @@ function isHighEntropyToken(s: string): boolean {
 /** 高置信模式：命中即报（每条一个正则 + 规则名） */
 const PATTERNS: Array<{ rule: string; re: RegExp }> = [
   { rule: 'AWS Access Key（AKIA…）', re: /\bAKIA[0-9A-Z]{16}\b/g },
-  { rule: 'GitHub token（ghp_/gho_/ghu_/ghs_/ghr_）', re: /\bgh[pousr]_[A-Za-z0-9]{20,}\b/g },
+  { rule: 'AWS 临时凭证（ASIA…）', re: /\bASIA[0-9A-Z]{16}\b/g },
+  { rule: 'GitHub App token（ghp_/gho_/ghu_/ghs_/ghr_）', re: /\bgh[pousr]_[A-Za-z0-9]{20,}\b/g },
+  { rule: 'GitHub fine-grained PAT（github_pat_…）', re: /\bgithub_pat_[A-Za-z0-9_]{20,}/g },
+  { rule: 'DeepSeek API key', re: /\bsk-[a-f0-9]{32}\b/g },
   { rule: 'OpenAI 风格 key（sk-…）', re: /\bsk-[A-Za-z0-9_-]{20,}\b/g },
+  { rule: 'Anthropic API key（sk-ant-…）', re: /\bsk-ant-[A-Za-z0-9_-]{20,}/g },
   { rule: 'Slack token（xox…）', re: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g },
   { rule: '私钥文件头', re: /-----BEGIN [A-Z ]*PRIVATE KEY-----/g },
   { rule: 'Google API key', re: /\bAIza[0-9A-Za-z_-]{30,}\b/g },
-  { rule: 'DeepSeek API key', re: /\bsk-[a-f0-9]{32}\b/g },
+  { rule: 'GitLab token（glpat-…）', re: /\bglpat-[A-Za-z0-9_-]{16,}/g },
+  { rule: 'npm token（npm_…）', re: /\bnpm_[A-Za-z0-9]{30,}/g },
+  { rule: 'PyPI token（pypi-…）', re: /\bpypi-[A-Za-z0-9_-]{30,}/g },
+  { rule: 'JWT（eyJ 头部.载荷.签名）', re: /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g },
+  { rule: '连接串口令（db://user:pass@）', re: /\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp|mssql):\/\/[^\s:@/]+:([^\s:@/]{6,})@/g },
 ]
 
 /** 关键词上下文里的赋值/声明：password = "…"、token: '…' 等，值高熵即报 */
 const ASSIGNMENT =
-  /\b(password|passwd|secret|token|api[_-]?key|apikey|access[_-]?key|private[_-]?key)\b\s*[:=]\s*["']?([A-Za-z0-9_+/.=-]{16,})["']?/gi
+  /(?:[\w.-]{0,40}(?:password|passwd|secret|token|api[_-]?key|apikey|access[_-]?key|private[_-]?key)[\w.-]{0,40})\s*[:=]\s*["']?([A-Za-z0-9_+/=.:-]{14,})["']?/gi
 
 const SECTION_KEYS = ['goal', 'files', 'done', 'remaining', 'stopped', 'warnings', 'suggested'] as const
 
 function mask(s: string): string {
-  if (s.length <= 8) return '*'.repeat(s.length)
-  return `${s.slice(0, 4)}${'*'.repeat(Math.max(4, s.length - 6))}${s.slice(-2)}`
+  if (s.length <= 10) return '*'.repeat(s.length)
+  const keep = Math.max(2, Math.floor(s.length * 0.08))
+  return `${s.slice(0, keep)}${'*'.repeat(s.length - keep - 2)}${s.slice(-2)}`
 }
 
 /** 扫描六段文本；返回全部命中（空数组 = 干净）。确定性：同一输入永远同一输出。 */
 export function scanSecrets(sections: Record<string, string | undefined>): SecretHit[] {
   const hits: SecretHit[] = []
   const seen = new Set<string>()
-  for (const key of SECTION_KEYS) {
+  // 审查 #3：遍历调用方给的全部键（含 title/to/project 标量），不再固定六段——
+  // 密钥从任何标量侧门出盘等于没闸
+  for (const key of Object.keys(sections)) {
     const text = sections[key]
     if (typeof text !== 'string' || text === '') continue
     for (const { rule, re } of PATTERNS) {
       re.lastIndex = 0
       let m: RegExpExecArray | null
       while ((m = re.exec(text)) !== null) {
-        const sig = `${rule}:${m[0]}`
+        // 口令在捕获组的规则（连接串）报组内容，其余报全匹配
+        const matched = m[1] !== undefined && rule.includes('连接串') ? m[1] : m[0]
+        // 去重按命中文本（不同规则罩同一串只报一次，具体规则在前优先标签）——修审查 #7
+        const sig = `${key}:${matched}`
         if (!seen.has(sig)) {
           seen.add(sig)
-          hits.push({ rule, section: key, masked: mask(m[0]) })
+          hits.push({ rule, section: key, masked: mask(matched) })
         }
       }
     }
     let am: RegExpExecArray | null
     ASSIGNMENT.lastIndex = 0
     while ((am = ASSIGNMENT.exec(text)) !== null) {
-      const keyword = am[1]
-      const value = am[2]
-      if (keyword === undefined || value === undefined) continue
+      const value = am[1]
+      if (value === undefined) continue
       if (!isHighEntropyToken(value)) continue
+      // 键名从整段匹配里回提（键名自身是非捕获组，允许任意前后缀——审查 #1）
+      const kw = /password|passwd|secret|token|api[_-]?key|apikey|access[_-]?key|private[_-]?key/i.exec(am[0])?.[0] ?? 'key'
       const sig = `assignment:${key}:${value}`
       if (!seen.has(sig)) {
         seen.add(sig)
-        hits.push({ rule: `敏感词赋值（${keyword}）`, section: key, masked: mask(value) })
+        hits.push({ rule: `敏感词赋值（${kw}）`, section: key, masked: mask(value) })
       }
     }
   }

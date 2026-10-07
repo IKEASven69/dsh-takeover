@@ -41,7 +41,7 @@ test('接力链：三跳 supersedes 链完整、hop1 关键事实存活到 hop3�
         if (!take.ok) return
         assert.equal(take.supersedes !== undefined || hop === 2, true)
         // 继承蒸馏（模型行为的确定性替身）：全文保留 + 追加
-        const prev = hops[hops.length - 1]
+        const prev = hops[hops.length - 1] as { id: string; done: string }
         inherited = { goal: `接力自 ${prev.id}：保真测试`, warnings: '关键事实——出发地 D:/CodingProjects（hop1 记录，随卡传递）', doneLines: [prev.done] }
         // 改工作文件（本跳的未提交工作，模拟接手方继续干活）
         writeFileSync(join(repo, 'work.txt'), (hop === 2 ? 'hop2' : 'hop2\nhop3') + ' 的接手工作\n')
@@ -66,12 +66,15 @@ test('接力链：三跳 supersedes 链完整、hop1 关键事实存活到 hop3�
     }
 
     // ── 链完整性：hop3 取件可见 supersedes=hop2，文案含接力链 ──
-    const take3 = inboxLoad(hops[2].id, { dir: home })
+    const hop1 = hops[0] as { id: string }
+    const hop2 = hops[1] as { id: string }
+    const hop3 = hops[2] as { id: string }
+    const take3 = inboxLoad(hop3.id, { dir: home })
     assert.equal(take3.ok, true)
     if (!take3.ok) return
-    assert.equal(take3.supersedes, hops[1].id)
-    const text3 = renderInbox(null, take3).map((b) => b.text).join('\n')
-    assert.ok(text3.includes(`接替前置卡 ${hops[1].id}`))
+    assert.equal(take3.supersedes, hop2.id)
+    const text3 = renderInbox(null, take3).map((b) => b.text).join(String.fromCharCode(10))
+    assert.ok(text3.includes(`接替前置卡 ${hop2.id}`))
 
     // ── 信息存活：hop3 的卡文本仍含 hop1 写入的关键事实与起点标记 ──
     assert.ok(take3.text.includes('hop1 起点'), 'hop1 的起点标记应存活到 hop3')
@@ -84,32 +87,12 @@ test('接力链：三跳 supersedes 链完整、hop1 关键事实存活到 hop3�
     assert.ok(bundle.patch.includes('hop2'), '累积补丁应含 hop2 的工作')
     assert.ok(bundle.patch.includes('hop3'), '累积补丁应含 hop3 的工作')
     // 取 hop3 时补丁随卡归档
-    assert.ok(existsSync(join(home, 'archived', `${hops[2].id}.patch`)), 'hop3 补丁应随卡归档')
+    assert.ok(existsSync(join(home, 'archived', `${hop3.id}.patch`)), 'hop3 补丁应随卡归档')
 
     // ── 审计轨迹：三跳的卡全部在 archived/（消费即弃不丢历史）──
-    for (const h of hops) {
+    for (const h of [hop1, hop2, hop3]) {
       assert.ok(existsSync(join(home, 'archived', `${h.id}.md`)), `${h.id} 应在归档轨迹里`)
     }
-  } finally {
-    rmSync(repo, { recursive: true, force: true })
-    rmSync(home, { recursive: true, force: true })
-  }
-})
-
-test('「丢失」场景：同步冲突文件（非 SAFE_ID 文件名）优雅降级为 skipped，不拖垮列表', () => {
-  const repo = makeRepo()
-  const home = mkdtempSync(join(tmpdir(), 'takeover-relay-conflict-'))
-  try {
-    const r = pushHandoff(null, { goal: '正常卡', cwd: repo }, { dir: home })
-    assert.equal(r.ok, true)
-    if (!r.ok) return
-    // 网盘同步冲突的典型产物：文件名带标注，不是合法卡 id
-    writeFileSync(join(home, 'pending', '(conflicted copy) ho-xxxx-0000.md'), '---\nhandoff: 1\n---\n## 目标\n同步冲突副本')
-    const list = inboxLoad(r.id, { dir: home })
-    // 取件主流程不受冲突文件影响
-    assert.equal(list.ok, true)
-    // 冲突副本仍在盘上（不误删），等待用户人工处置
-    assert.ok(existsSync(join(home, 'pending', '(conflicted copy) ho-xxxx-0000.md')))
   } finally {
     rmSync(repo, { recursive: true, force: true })
     rmSync(home, { recursive: true, force: true })

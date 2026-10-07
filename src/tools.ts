@@ -344,6 +344,7 @@ export function renderInbox(_args: unknown, value: unknown): Array<{ type: 'text
     patchBytes?: number
     testCommand?: string
     supersedes?: string
+    crossOS?: { source: string; local: string }
     error?: unknown
   }
   if (v?.ok !== true) {
@@ -370,6 +371,9 @@ export function renderInbox(_args: unknown, value: unknown): Array<{ type: 'text
   }
   if (typeof v.supersedes === 'string' && v.supersedes !== '') {
     lines.push(`🔗 本卡接替前置卡 ${v.supersedes}（接力链）`)
+  }
+  if (v.crossOS !== undefined) {
+    lines.push(`🖥️ 跨 OS 接手：源卡来自 ${v.crossOS.source}，本机是 ${v.crossOS.local}——卡内路径需人工映射后才能执行`)
   }
   const coverageLine = renderCoverageLine(v.coverage)
   if (coverageLine !== null) lines.push('', coverageLine)
@@ -545,7 +549,14 @@ ${honest}`
 
     // 密钥闸（先例：gitleaks/Push Protection——阻断为默认 + 留痕旁路）：卡随同步盘跨机传播
     // 并进入下游会话上下文，比 git 更宽的泄漏面；命中即拒，理由回喂调用方
-    const secretHits = scanSecrets({ ...sections, suggested: sections.suggested })
+    // 审查 #3：title/to/project 标量也进扫描——密钥从 title 侧门出盘等于没闸
+    const secretHits = scanSecrets({
+      ...sections,
+      suggested: sections.suggested,
+      title: args.title,
+      to: args.to,
+      project: args.project,
+    })
     if (secretHits.length > 0 && args.allowSecrets !== true) {
       const detail = secretHits.map((h) => `${h.rule}@${h.section}（${h.masked}）`).join('；')
       return {
@@ -584,7 +595,10 @@ ${honest}`
       git: collectGitSnapshot(cwd),
       tasks: todoToTasks(facts).filter((t): t is TaskSnapshot => true),
       sections,
-      extras: { coverage },
+      extras: {
+        coverage,
+        ...(secretHits.length > 0 && args.allowSecrets === true ? { secretsBypass: secretHits.map((h) => `${h.rule}@${h.section}`) } : {}),
+      },
     }
     const path = writeCard(card, opts?.dir)
     // 物质层第二文件：未提交改动补丁（截断的补丁不能 apply，宁可不带——collectPatch 已拒）
@@ -696,6 +710,8 @@ export type InboxLoadResult =
       testCommand?: string
       /** 本卡接替的前置卡 id */
       supersedes?: string
+      /** 跨 OS 接手：源卡 OS 与本机不同（路径体系需人工映射） */
+      crossOS?: { source: string; local: string }
     }
   | { ok: false; error: string }
 
@@ -738,6 +754,13 @@ export function inboxLoad(id: string, opts?: { dir?: string }): InboxLoadResult 
       if (typeof cmd === 'string' && cmd !== '') out.testCommand = cmd
     }
     if (typeof env['supersedes'] === 'string' && env['supersedes'] !== '') out.supersedes = env['supersedes']
+    // 跨 OS 接手：源卡 OS 与本机不同 → 路径体系不同（D:\… vs /mnt/…），提示人工映射
+    if (typeof env['host'] === 'object' && env['host'] !== null) {
+      const srcPlatform = (env['host'] as { platform?: unknown })['platform']
+      if (typeof srcPlatform === 'string' && srcPlatform !== '' && srcPlatform !== process.platform) {
+        out.crossOS = { source: srcPlatform, local: process.platform }
+      }
+    }
     return out
   } catch (e) {
     // core 层中文错误（收件箱无此待取件等）原样透传；系统错误包中文口径

@@ -178,6 +178,9 @@ export function buildState(readers: ForeignReaders, dir?: string): TakeoverState
       for (const f of readdirSync(pd)) {
         if (!f.endsWith('.md')) continue
         try {
+          // 读侧尺寸闸（审查 #4）：与 core MAX_CARD_BYTES 同口径——巨文件（含 core 跳过的坏卡）
+          // 不全量读进内存，30s 轮询的 state 不被单文件放大
+          if (statSync(join(pd, f)).size > 8 * 1024 * 1024) continue
           cardTexts.set(f.slice(0, -3), readFileSync(join(pd, f), 'utf-8'))
         } catch { /* 单项读失败按未知，不强判低信息 */ }
       }
