@@ -147,6 +147,45 @@ function candidateOf(ref: SessionRef, turns: number): ForeignCandidate {
   }
 }
 
+/** 面板浏览的轻量候选行（不含轮数——数轮数要全量解析每个会话，列表页付不起 O(总字节)） */
+export type ForeignListRow = {
+  id: string
+  title: string
+  cwd: string
+  updatedAt: string
+  kind: string
+}
+
+function rowOfRef(ref: SessionRef): ForeignListRow {
+  return {
+    id: ref.id,
+    title: truncate(ref.title || ref.id, 80),
+    cwd: ref.cwd,
+    updatedAt: toIso(ref.updatedAt),
+    kind: ref.kind,
+  }
+}
+
+/** provider 门控共用段：名校验 → 设置卡停用闸 → 读取器探测。失败回规范错误值，绝不抛出。 */
+type GatePass = { ok: true; adapter: string; readers: ForeignReaders }
+type GateFail = { ok: false; error: string }
+
+async function providerGate(raw: string | undefined, deps?: ForeignReaders, env?: ForeignEnv): Promise<GatePass | GateFail> {
+  const provider = (raw ?? '').trim().toLowerCase() as ForeignProvider
+  if (!FOREIGN_PROVIDERS.includes(provider)) {
+    return { ok: false, error: `未知 provider：${String(raw)}（支持：${FOREIGN_PROVIDERS.join(' / ')}）` }
+  }
+  if (env?.isEnabled !== undefined && !env.isEnabled(provider)) {
+    return { ok: false, error: disabledError(provider) }
+  }
+  const readers = deps ?? (await defaultForeignReaders())
+  const note = readers.adapterNote(PROVIDER_TO_ADAPTER[provider])
+  if (!note.supported) {
+    return { ok: false, error: `${provider} 读取器不可用${note.note !== '' ? `：${note.note}` : ''}` }
+  }
+  return { ok: true, adapter: PROVIDER_TO_ADAPTER[provider], readers }
+}
+
 /** 文件类工具名（大小写不敏感）：这些工具轮的摘要文本是 "name: 路径" */
 const FILE_TOOL_NAMES = new Set([
   'write', 'edit', 'read', 'str_replace_editor', 'notebookedit', 'multiedit',
@@ -268,21 +307,11 @@ export const disabledError = (provider: string): string =>
  */
 export async function foreignSessionRead(args: ForeignReadArgs, deps?: ForeignReaders, env?: ForeignEnv): Promise<ForeignReadResult> {
   try {
+    const gate = await providerGate(args.provider, deps, env)
+    if (!gate.ok) return gate
     const provider = (args.provider ?? '').trim().toLowerCase() as ForeignProvider
-    if (!FOREIGN_PROVIDERS.includes(provider)) {
-      return { ok: false, error: `未知 provider：${String(args.provider)}（支持：${FOREIGN_PROVIDERS.join(' / ')}）` }
-    }
-    // 设置卡停用闸：先于适配器探测，关掉的家连 list 都返回规范错误值
-    if (env?.isEnabled !== undefined && !env.isEnabled(provider)) {
-      return { ok: false, error: disabledError(provider) }
-    }
-    const adapter = PROVIDER_TO_ADAPTER[provider]
-    const readers = deps ?? (await defaultForeignReaders())
-
-    const note = readers.adapterNote(adapter)
-    if (!note.supported) {
-      return { ok: false, error: `${provider} 读取器不可用${note.note !== '' ? `：${note.note}` : ''}` }
-    }
+    const adapter = gate.adapter
+    const readers = gate.readers
 
     const action = (args.action ?? '').trim().toLowerCase()
     if (action === 'list') {
@@ -350,6 +379,104 @@ export async function foreignSessionRead(args: ForeignReadArgs, deps?: ForeignRe
     }
 
     return { ok: false, error: `未知 action：${String(args.action)}（支持 list / show）` }
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+export type ForeignListResult =
+  | { ok: true; provider: string; total: number; sessions: ForeignListRow[]; note?: string }
+  | { ok: false; error: string }
+
+const BROWSE_DEFAULT_LIMIT = 40
+const BROWSE_MAX_LIMIT = 200
+
+/**
+ * 面板浏览的会话列表（轻量）：只走发现层（SessionRef 元数据），不数轮数、不读内容。
+ * 与工具侧 action=list 的分工：工具的候选带用户轮数帮模型挑，面板的行只要标题/时间/目录。
+ * 假 0 哨兵（存储布局迁移提示）随 note 下发，面板浮出与支持矩阵同口径。
+ */
+export async function foreignSessionsList(
+  args: { provider?: string; limit?: number },
+  deps?: ForeignReaders,
+  env?: ForeignEnv,
+): Promise<ForeignListResult> {
+  try {
+    const gate = await providerGate(args.provider, deps, env)
+    if (!gate.ok) return gate
+    const raw = args.limit
+    const limit = Number.isFinite(raw) && (raw as number) > 0
+      ? Math.min(Math.floor(raw as number), BROWSE_MAX_LIMIT)
+      : BROWSE_DEFAULT_LIMIT
+    let refs: SessionRef[]
+    try {
+      refs = gate.readers.listSessions(gate.adapter)
+    } catch (e) {
+      return { ok: false, error: `发现 ${String(args.provider)} 会话失败：${e instanceof Error ? e.message : String(e)}` }
+    }
+    const adapterNote = gate.readers.adapterNote(gate.adapter)
+    return {
+      ok: true,
+      provider: (args.provider ?? '').trim().toLowerCase(),
+      total: refs.length,
+      sessions: refs.slice(0, limit).map(rowOfRef),
+      note: adapterNote.note !== '' ? adapterNote.note : undefined,
+    }
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+export type ForeignPreviewResult =
+  | {
+      ok: true
+      provider: string
+      summary: ForeignSummary
+      skeleton: ForeignSkeleton
+      /** 空会话等降级说明（诚实浮出，不粉饰成正常） */
+      note?: string
+    }
+  | { ok: false; error: string; candidates?: ForeignListRow[] }
+
+/**
+ * 面板浏览的单会话预览：结构化摘要 + 骨架六段素材（与工具 action=show 同源同料），
+ * 但永不返回 turns 原文——原文分页是模型的深读通道，面板只做「挑得出对的那条」。
+ */
+export async function foreignSessionPreview(
+  args: { provider?: string; reference?: string },
+  deps?: ForeignReaders,
+  env?: ForeignEnv,
+): Promise<ForeignPreviewResult> {
+  try {
+    const gate = await providerGate(args.provider, deps, env)
+    if (!gate.ok) return gate
+    const provider = (args.provider ?? '').trim().toLowerCase()
+    const reference = (args.reference ?? '').trim()
+    let resolved: ForeignResolve
+    try {
+      resolved = gate.readers.resolve(gate.adapter, reference)
+    } catch (e) {
+      return { ok: false, error: `解析 ${provider} 会话引用失败：${e instanceof Error ? e.message : String(e)}` }
+    }
+    if (resolved.kind === 'not-found') {
+      return { ok: false, error: reference === '' ? `${provider} 没有发现任何会话` : `${provider} 找不到会话：${reference}` }
+    }
+    if (resolved.kind === 'ambiguous') {
+      return {
+        ok: false,
+        error: `引用「${reference}」歧义：命中 ${resolved.candidates.length} 个会话（面板按完整 id 取预览，不该走到这）`,
+        candidates: resolved.candidates.slice(0, 5).map(rowOfRef),
+      }
+    }
+    const turns = gate.readers.readSession(gate.adapter, resolved.ref)
+    const { summary, skeleton } = summarizeTurns(resolved.ref, turns)
+    return {
+      ok: true,
+      provider,
+      summary,
+      skeleton,
+      note: turns.length === 0 ? '会话解析为空：记录损坏、加密或格式不可恢复（按 UNAVAILABLE 处理）' : undefined,
+    }
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) }
   }

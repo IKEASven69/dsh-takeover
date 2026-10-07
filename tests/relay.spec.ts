@@ -105,7 +105,7 @@ test('长链：10 跳工具层零退化（supersedes 链/信息存活/审计轨�
   const home = mkdtempSync(join(tmpdir(), 'takeover-relay-10-'))
   try {
     const ids: string[] = []
-    const chainChecks: Array<{ hop: number; supersedes: string; ok: boolean }> = []
+    const chainChecks: Array<{ hop: number; supersedes: string; ok: boolean; expected: string }> = []
     let prevId: string | undefined
     for (let hop = 1; hop <= 10; hop++) {
       let done = ''
@@ -115,7 +115,7 @@ test('长链：10 跳工具层零退化（supersedes 链/信息存活/审计轨�
         assert.equal(take.ok, true, `hop${hop} 取前卡失败`)
         if (!take.ok) return
         // 取 hop(N-1) 的卡，卡上 supersedes 指向 hop(N-2)——hop-1 卡无前置
-        const expected = hop >= 3 ? ids[hop - 3] : ''
+        const expected = (hop >= 3 ? ids[hop - 3] : '') ?? ''
         const actual = take.supersedes ?? ''
         chainChecks.push({ hop, supersedes: actual, ok: actual === expected, expected })
         done = `hop${hop - 1} 的 done 全文留存标记
@@ -144,7 +144,7 @@ hop${hop} 追加`
     }
     // 信息存活：warnings 逐跳原样保留，末跳仍含 hop1 的关键事实标记
     //（done 的全文累积由三跳测试覆盖；本测试验证长链下 warnings 传递不退化）
-    const last = inboxLoad(ids[9], { dir: home })
+    const last = inboxLoad(ids[9]!, { dir: home })
     assert.equal(last.ok, true)
     if (last.ok) assert.ok(last.text.includes('hop1 记录'), 'hop1 的关键事实应存活到 hop10')
     // 审计轨迹：10 张全归档

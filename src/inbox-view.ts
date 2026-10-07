@@ -229,8 +229,10 @@ export function cardMarkdown(p: PendingRow, notes: ExportNotes): string {
   return lines.join('\n')
 }
 
-/** 全部待取件拼一个 .md：卡与卡之间空行 + `---` 分隔线，末尾恰一个换行 */
+/** 全部待取件拼一个 .md：卡与卡之间空行 + `---` 分隔线，末尾恰一个换行。
+ * 尾巴用普通串拼接而非模板内 \n 转义——客户端包 esbuild 未压缩构建会把
+ * 模板内的转义煮成「真换行 + wrapper 缩进」（实测导出文件尾部混入 tab）。 */
 export function pendingListMarkdown(rows: PendingRow[], notes: ExportNotes): string {
   if (rows.length === 0) return ''
-  return `${rows.map((p) => cardMarkdown(p, notes).trimEnd()).join('\n\n---\n\n')}\n`
+  return rows.map((p) => cardMarkdown(p, notes).trimEnd()).join('\n\n---\n\n') + '\n'
 }

@@ -1,6 +1,8 @@
 /**
  * host 侧 /dsh-takeover/ JSON API（dsh-hippo 同款 webServer 路由桥先例）：
  *   GET  /dsh-takeover/state           设置卡状态（收件箱概览 + 支持矩阵）
+ *   GET  /dsh-takeover/sessions        外部会话浏览列表 ?provider=&limit=（轻量发现层，不读内容）
+ *   GET  /dsh-takeover/session-preview 单会话结构化预览 ?provider=&reference=（摘要+骨架素材，不吐原文轮次）
  *   POST /dsh-takeover/provider        切 provider 开关 {provider, enabled}
  *   POST /dsh-takeover/clear-archived  清空 archived/
  * POST 一律过同源守卫；响应 { ok, ... } 规范值，失败不抛异常。
@@ -11,8 +13,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: pulls the Context.webServer merge（宿主由 web bundle 提供，不打进产物）。
 import type {} from '@deepseek-ai/dsh-host-webserver'
-import { defaultForeignReaders, type ForeignProvider } from './foreign.ts'
-import { buildState, clearArchived, setProviderEnabled } from './settings.ts'
+import { defaultForeignReaders, foreignSessionPreview, foreignSessionsList, type ForeignProvider } from './foreign.ts'
+import { buildState, clearArchived, isProviderEnabled, setProviderEnabled } from './settings.ts'
 
 function sendJson(response: ServerResponse, code: number, body: unknown): void {
   response.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
@@ -132,6 +134,41 @@ export function registerTakeoverRoutes(ctx: Context): void {
           return
         }
 
+        if (sub === 'sessions' || sub === 'session-preview') {
+          if (request.method !== 'GET') {
+            response.writeHead(405, { allow: 'GET' })
+            response.end()
+            return
+          }
+          // 与 state 同一读守卫：会话元数据/摘要与卡片预览同级敏感
+          if (!readGuard(request)) {
+            sendJson(response, 403, { error: '仅接受本机同源读取' })
+            return
+          }
+          const q = new URL(request.url ?? '/', 'http://localhost').searchParams
+          const env = { isEnabled: (p: ForeignProvider) => isProviderEnabled(p) }
+          // 规范值（含 ok:false）一律 200——停用/未知名是业务结果不是 HTTP 事故；意外异常才 500
+          const body: Promise<unknown> = sub === 'sessions'
+            ? (() => {
+                const limitRaw = Number(q.get('limit') ?? '')
+                return foreignSessionsList(
+                  { provider: q.get('provider') ?? '', limit: Number.isFinite(limitRaw) && limitRaw > 0 ? Math.floor(limitRaw) : undefined },
+                  undefined,
+                  env,
+                )
+              })()
+            : foreignSessionPreview(
+                { provider: q.get('provider') ?? '', reference: q.get('reference') ?? '' },
+                undefined,
+                env,
+              )
+          void body.then(
+            (r) => { sendJson(response, 200, r) },
+            (error: unknown) => { sendJson(response, 500, { ok: false, error: error instanceof Error ? error.message : String(error) }) },
+          )
+          return
+        }
+
         if (sub === 'provider') {
           if (request.method !== 'POST') {
             response.writeHead(405, { allow: 'POST' })
@@ -180,7 +217,7 @@ export function registerTakeoverRoutes(ctx: Context): void {
           return
         }
 
-        sendJson(response, 404, { error: `未知路由：/dsh-takeover/${sub}（支持 state / provider / clear-archived）` })
+        sendJson(response, 404, { error: `未知路由：/dsh-takeover/${sub}（支持 state / sessions / session-preview / provider / clear-archived）` })
       },
     }))
   })

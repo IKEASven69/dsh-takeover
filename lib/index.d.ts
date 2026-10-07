@@ -328,6 +328,14 @@ type ForeignReadResult = {
   error: string;
   candidates?: ForeignCandidate[];
 };
+/** 面板浏览的轻量候选行（不含轮数——数轮数要全量解析每个会话，列表页付不起 O(总字节)） */
+type ForeignListRow = {
+  id: string;
+  title: string;
+  cwd: string;
+  updatedAt: string;
+  kind: string;
+};
 /** 轮次流 → 结构化摘要 + 骨架素材（纯函数，可单测） */
 export declare function summarizeTurns(ref: SessionRef, turns: Turn[]): {
   summary: ForeignSummary;
@@ -344,6 +352,45 @@ export declare const disabledError: (provider: string) => string;
  * 任何一步失败都回规范错误值，绝不抛出。
  */
 export declare function foreignSessionRead(args: ForeignReadArgs, deps?: ForeignReaders, env?: ForeignEnv): Promise<ForeignReadResult>;
+type ForeignListResult = {
+  ok: true;
+  provider: string;
+  total: number;
+  sessions: ForeignListRow[];
+  note?: string;
+} | {
+  ok: false;
+  error: string;
+};
+/**
+ * 面板浏览的会话列表（轻量）：只走发现层（SessionRef 元数据），不数轮数、不读内容。
+ * 与工具侧 action=list 的分工：工具的候选带用户轮数帮模型挑，面板的行只要标题/时间/目录。
+ * 假 0 哨兵（存储布局迁移提示）随 note 下发，面板浮出与支持矩阵同口径。
+ */
+export declare function foreignSessionsList(args: {
+  provider?: string;
+  limit?: number;
+}, deps?: ForeignReaders, env?: ForeignEnv): Promise<ForeignListResult>;
+type ForeignPreviewResult = {
+  ok: true;
+  provider: string;
+  summary: ForeignSummary;
+  skeleton: ForeignSkeleton;
+  /** 空会话等降级说明（诚实浮出，不粉饰成正常） */
+  note?: string;
+} | {
+  ok: false;
+  error: string;
+  candidates?: ForeignListRow[];
+};
+/**
+ * 面板浏览的单会话预览：结构化摘要 + 骨架六段素材（与工具 action=show 同源同料），
+ * 但永不返回 turns 原文——原文分页是模型的深读通道，面板只做「挑得出对的那条」。
+ */
+export declare function foreignSessionPreview(args: {
+  provider?: string;
+  reference?: string;
+}, deps?: ForeignReaders, env?: ForeignEnv): Promise<ForeignPreviewResult>;
 /**
  * 渲染：execute 返回规范值对象，render 包成中文 text block。
  * dsh-tools 契约：模型只见到 output.render 返回的 content blocks；
@@ -518,5 +565,5 @@ export declare const name = "dsh-takeover";
 export declare const inject: string[];
 export declare function apply(ctx: Context): void;
 //#endregion
-export type { ForeignCandidate, ForeignEnv, ForeignProvider, ForeignReadArgs, ForeignReadResult, ForeignReaders, ForeignResolve, ForeignSkeleton, ForeignSummary, ForeignTurn, InboxItem, InboxListResult, InboxLoadResult, PendingRow, ProbeResult, ProviderRow, PushArgs, PushResult, ResumeSkillSpec, SessionFacts, TakeoverState, TakeoverSwitches };
+export type { ForeignCandidate, ForeignEnv, ForeignListResult, ForeignListRow, ForeignPreviewResult, ForeignProvider, ForeignReadArgs, ForeignReadResult, ForeignReaders, ForeignResolve, ForeignSkeleton, ForeignSummary, ForeignTurn, InboxItem, InboxListResult, InboxLoadResult, PendingRow, ProbeResult, ProviderRow, PushArgs, PushResult, ResumeSkillSpec, SessionFacts, TakeoverState, TakeoverSwitches };
 //# sourceMappingURL=index.d.ts.map

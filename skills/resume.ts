@@ -88,7 +88,10 @@ export function resumeSkillContent(spec: ResumeSkillSpec): string {
 ## 解析引用
 
 1. 读包含独立 token \`${slash}\` 的那条直接用户消息。
-2. 引用 = 该 token 之后的 trimmed 文本；若后面紧跟另一个独立 slash token 则在其前截断。
+2. 引用 = 该 token 之后、**首个换行之前**的 trimmed 文本；若同行后面紧跟另一个独立
+   slash token 则在其前截断。首个换行之后的内容是用户对本轮接管的其他指示
+   （如「接管完成后寄存进收件箱」），不属于引用，照常执行——设置卡浏览器复制的
+   寄存指令正是这个两行形态。
    空引用或 \`latest\` = 该家最新会话。
 3. 用户明确要求列出 / 挑选会话时：调 \`foreign_session_read\`（\`provider: "${spec.provider}"\`, \`action: "list"\`），
    把候选（标题 / 时间 / 轮数）摆给用户挑，然后停。
@@ -154,6 +157,7 @@ slash 调用永不复活旧审批与外部运行时权限。
 ## 寄存（可选交接）
 
 卡片注入当轮后，问用户一句：**「要不要把这张卡寄存进共享收件箱？」**
+用户在本轮指示里已明确要求寄存（如引用行下一行写了「接管完成后寄存」）时不再重复问，直接寄存。
 用户说是，则调 \`handoff_push\`，把六段作为参数传入（goal / files / done / remaining / stopped / warnings，
 可选 suggested / title / to / project）——这样另一个 agent（或另一台机器上的你）可用 \`handoff_inbox\` / \`/inbox\` 取件接着干。
 用户说否就到此为止，不要擅自寄存。

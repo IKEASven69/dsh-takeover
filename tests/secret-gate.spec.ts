@@ -117,8 +117,8 @@ test('审查 #3：title 侧门封死（密钥进 title 同样被闸）', () => {
 })
 
 test('审查 #7：同一把 sk- key 只报一次（具体规则优先，不双计）', () => {
-  const hits = scanSecrets({ warnings: 'deepseek 的 sk-' + 'a' * 32 + ' 在这' })
-  const skHits = hits.filter((h) => h.rule.includes('key') || h.rule.includes('key'))
+  const hits = scanSecrets({ warnings: 'deepseek 的 sk-' + 'a'.repeat(32) + ' 在这' })
+  const skHits = hits.filter((h) => h.rule.includes('key'))
   assert.ok(skHits.length <= 1, `同串应去重：${JSON.stringify(skHits)}`)
 })
 

@@ -32,7 +32,7 @@ export { pushHandoff, inboxList, inboxLoad, factsToSections, handoffHostNotice }
 export type { PushArgs, PushResult, InboxItem, InboxListResult, InboxLoadResult } from './tools.ts'
 export { probeSessionEvents, collectFacts, todoToTasks } from './collect.ts'
 export type { ProbeResult, SessionFacts } from './collect.ts'
-export { FOREIGN_PROVIDERS, PROVIDER_TO_ADAPTER, disabledError, foreignSessionRead, summarizeTurns, registerForeignTool, renderForeign } from './foreign.ts'
+export { FOREIGN_PROVIDERS, PROVIDER_TO_ADAPTER, disabledError, foreignSessionRead, foreignSessionsList, foreignSessionPreview, summarizeTurns, registerForeignTool, renderForeign } from './foreign.ts'
 export type {
   ForeignProvider,
   ForeignReadArgs,
@@ -41,6 +41,9 @@ export type {
   ForeignEnv,
   ForeignResolve,
   ForeignCandidate,
+  ForeignListRow,
+  ForeignListResult,
+  ForeignPreviewResult,
   ForeignSummary,
   ForeignSkeleton,
   ForeignTurn,

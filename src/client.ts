@@ -41,6 +41,14 @@ import {
 } from './inbox-view.ts'
 import type { PendingGroup, SeenStore } from './inbox-view.ts'
 import type { TakeoverState, PendingRow, ProviderRow } from './settings.ts'
+import {
+  depositCommand,
+  filterSessions,
+  relTime,
+  shortId,
+  takeoverCommand,
+} from './browser-view.ts'
+import type { SessionListBody, SessionPreviewBody, SessionRow } from './browser-view.ts'
 
 /** 卡片渲染语言（跟随宿主 active locale；未登记语言回退 zh）。
  * 导出——报告纯函数按 lang 出 <html lang> 与文案注入，单测两套词典都要能过。 */
@@ -353,6 +361,38 @@ const CSS = `
 .bt-chip-on { color: var(--bt-a); background: rgba(99,102,241,.12);
   border-color: rgba(99,102,241,.45); font-weight: 600; }
 .bt-chip-count { font-size: 10px; opacity: .75; }
+/* 外部会话浏览器：行 + 预览展开体。动作全是「复制指令」——面板不产卡，
+ * 接管/寄存的蒸馏都在会话里由模型完成（卡片质量跟模型能力走）。 */
+.bt-chip-off { opacity: .4; }
+.bt-chip-off:hover { border-color: var(--bt-line); color: var(--bt-mut); }
+.bt-btn-xs { font-size: 11px; padding: 2px 8px; border-radius: 8px; }
+.bt-fsess { border: 1px solid var(--bt-line); border-radius: 10px; padding: 7px 10px; margin-bottom: 6px; background: var(--bt-card); }
+.bt-fsess-line1 { display: flex; gap: 8px; align-items: baseline; }
+.bt-fsess-title { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 600; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; cursor: pointer; border-radius: 4px; }
+.bt-fsess-title:hover { color: var(--bt-a); }
+.bt-fsess-title:focus-visible { outline: 2px solid var(--bt-a); outline-offset: 2px; }
+.bt-fsess-time { flex: none; font-size: 11px; color: var(--bt-mut); font-variant-numeric: tabular-nums; }
+.bt-fsess-line2 { display: flex; gap: 8px; align-items: center; margin-top: 4px; }
+.bt-fsess-src { flex: none; max-width: 30%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 11px; color: var(--bt-mut); }
+.bt-fsess-id { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 11px; color: var(--bt-mut); cursor: pointer; font-variant-numeric: tabular-nums; }
+.bt-fsess-id:hover { color: var(--bt-a); }
+.bt-fsess-id:focus-visible { outline: 2px solid var(--bt-a); outline-offset: 2px; }
+.bt-fsess-act { flex: none; display: flex; gap: 4px; }
+.bt-fsprev { margin-top: 7px; padding-top: 7px; border-top: 1px dashed var(--bt-line); display: grid;
+  gap: 3px; font-size: 11.5px; }
+.bt-fsprev-line { display: flex; gap: 6px; min-width: 0; }
+.bt-fsprev-label { flex: none; color: var(--bt-mut); }
+.bt-fsprev-text { min-width: 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical; word-break: break-word; }
+.bt-fsprev-warn { color: var(--bt-warn); }
+.bt-fs-empty { padding: 8px 2px; }
+.bt-fs-count { margin: 8px 0 6px; }
+@container (max-width: 430px) {
+  .bt-fsess-act { flex-wrap: wrap; }
+}
 @container (max-width: 430px) {
   .bt-cmds { grid-template-columns: 1fr; }
   .bt-mrow { grid-template-columns: minmax(0, auto) auto auto; }
@@ -380,6 +420,41 @@ async function post<T extends object>(path: string, body: unknown): Promise<T> {
   const data = await res.json() as T | { error: string }
   if (!res.ok || 'error' in data) throw new Error('error' in data ? data.error : `HTTP ${res.status}`)
   return data
+}
+
+/** GET JSON：HTTP 层错误抛出（错误文案优先取响应体 error 字段）；业务面 ok:false 由调用方窄化 */
+async function getJson<T>(url: string): Promise<T> {
+  const res = await fetch(url, { cache: 'no-store' })
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`
+    try {
+      const b = await res.json() as { error?: string }
+      if (typeof b.error === 'string' && b.error !== '') msg = b.error
+    } catch { /* 无响应体则保留 HTTP 状态文案 */ }
+    throw new Error(msg)
+  }
+  return await res.json() as T
+}
+
+/** 复制到剪贴板：Clipboard API 优先（需安全上下文——面板在 localhost 恒满足），
+ * 不可得退 textarea+execCommand。异常上抛，由调用方进错误横幅。 */
+function copyText(text: string): Promise<void> {
+  const nav: { clipboard?: { writeText?: (t: string) => Promise<void> } } | undefined = globalThis.navigator
+  if (nav?.clipboard?.writeText !== undefined) return nav.clipboard.writeText(text)
+  return new Promise((resolve, reject) => {
+    try {
+      const ta = document.createElement('textarea')
+      ta.value = text
+      ta.style.position = 'fixed'
+      ta.style.opacity = '0'
+      document.body.appendChild(ta)
+      ta.select()
+      const ok = document.execCommand('copy')
+      ta.remove()
+      if (ok) resolve()
+      else reject(new Error('execCommand copy failed'))
+    } catch (e) { reject(e) }
+  })
 }
 
 function fmtTime(iso: string, lang: Lang): string {
@@ -1033,6 +1108,226 @@ function ProviderMatrix({ rows, busy, onToggle, t }: {
 }
 
 // ---------------------------------------------------------------------------
+// 外部会话浏览器：浏览只读——面板不产卡，接管与寄存都在会话里由模型完成
+// （卡片质量跟着模型能力走，这正是「跟着模型升级」的接法）。
+// 列表走轻量发现层（默认不自动扫八家，点哪家读哪家）；预览按需单会话拉结构化摘要。
+// ---------------------------------------------------------------------------
+
+interface PreviewEntry {
+  loading: boolean
+  data: SessionPreviewBody | null
+  error: string | null
+}
+
+function ForeignBrowser({ state, t, lang, onError }: {
+  state: TakeoverState | null
+  t: Translate
+  lang: Lang
+  onError: (msg: string) => void
+}): ReturnType<typeof createElement> {
+  const providers = state?.providers ?? []
+  // 选中家：默认不选（面板打开不扫盘），点哪家读哪家；列表按家缓存
+  const [sel, setSel] = useState<string | null>(null)
+  const [lists, setLists] = useState<Record<string, SessionListBody>>({})
+  const [loading, setLoading] = useState<string | null>(null)
+  const [query, setQuery] = useState('')
+  // 预览：单行展开（openId），按会话 id 缓存
+  const [openId, setOpenId] = useState<string | null>(null)
+  const [previews, setPreviews] = useState<Record<string, PreviewEntry>>({})
+  // 复制回执：按钮文案短暂切换（不引入 toast 组件）
+  const [copied, setCopied] = useState<string | null>(null)
+  const copyTimer = useRef<number | undefined>(undefined)
+
+  const load = (provider: string): void => {
+    setLoading(provider)
+    void getJson<SessionListBody | { ok: false; error: string }>(`/dsh-takeover/sessions?provider=${encodeURIComponent(provider)}`)
+      .then((b) => {
+        if (b.ok !== true) throw new Error(b.error)
+        setLists((prev) => ({ ...prev, [provider]: b }))
+      })
+      .catch((e: unknown) => onError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setLoading((cur) => (cur === provider ? null : cur)))
+  }
+
+  const loadPreview = (provider: string, id: string): void => {
+    setPreviews((prev) => ({ ...prev, [id]: { loading: true, data: prev[id]?.data ?? null, error: null } }))
+    void getJson<SessionPreviewBody | { ok: false; error: string }>(
+      `/dsh-takeover/session-preview?provider=${encodeURIComponent(provider)}&reference=${encodeURIComponent(id)}`,
+    )
+      .then((b) => {
+        if (b.ok !== true) throw new Error(b.error)
+        setPreviews((prev) => ({ ...prev, [id]: { loading: false, data: b, error: null } }))
+      })
+      .catch((e: unknown) => {
+        setPreviews((prev) => ({ ...prev, [id]: { loading: false, data: null, error: e instanceof Error ? e.message : String(e) } }))
+      })
+  }
+
+  const copy = (key: string, text: string): void => {
+    void copyText(text)
+      .then(() => {
+        setCopied(key)
+        window.clearTimeout(copyTimer.current)
+        copyTimer.current = window.setTimeout(() => setCopied(null), 1600)
+      })
+      .catch((e: unknown) => onError(e instanceof Error ? e.message : String(e)))
+  }
+
+  const now = Date.now()
+  const list = sel !== null ? lists[sel] : undefined
+  const provider = sel ?? ''
+  const clip = (s: string, n = 260): string => (s.length > n ? `${s.slice(0, n)}…` : s)
+
+  const line = (label: string, text: string, key?: string): ReturnType<typeof createElement> =>
+    createElement('div', { className: 'bt-fsprev-line', key },
+      label !== '' ? createElement('span', { className: 'bt-fsprev-label' }, label) : null,
+      createElement('span', { className: 'bt-fsprev-text' }, text),
+    )
+
+  const previewNode = (id: string): ReturnType<typeof createElement> | null => {
+    const pv = previews[id]
+    if (pv === undefined || pv.loading) return createElement('div', { className: 'bt-fsprev' }, t('loading'))
+    if (pv.error !== null) {
+      return createElement('div', { className: 'bt-fsprev bt-fsprev-warn' }, `${t('previewLoadFail')}：${pv.error}`)
+    }
+    const d = pv.data
+    if (d === null) return null
+    const warns = d.skeleton.warnings.split('\n').map((s) => s.trim()).filter((s) => s !== '').slice(0, 3)
+    return createElement('div', { className: 'bt-fsprev' },
+      createElement('div', { className: 'bt-fsprev-line' },
+        createElement('span', { className: 'bt-fsprev-label' },
+          t('previewTurns', { n: d.summary.turnCount, u: d.summary.userTurns })),
+        d.note !== undefined ? createElement('span', { className: 'bt-fsprev-warn' }, d.note) : null,
+      ),
+      d.summary.firstUserMessage !== '' ? line(t('previewFirst'), clip(d.summary.firstUserMessage), 'pv-first') : null,
+      ...d.summary.tailProgress.slice(0, 2).map((s, i) => line(i === 0 ? t('previewTail') : '', clip(s, 200), `pv-tail-${i}`)),
+      line(t('previewStop'), clip(d.skeleton.stopped), 'pv-stop'),
+      ...warns.map((w, i) => createElement('div', { className: 'bt-fsprev-line bt-fsprev-warn', key: `pv-warn-${i}` }, `⚠ ${clip(w, 200)}`)),
+    )
+  }
+
+  const toggleRow = (r: SessionRow, open: boolean): void => {
+    setOpenId(open ? null : r.id)
+    if (!open && previews[r.id] === undefined && sel !== null) loadPreview(sel, r.id)
+  }
+
+  const rowNode = (r: SessionRow): ReturnType<typeof createElement> => {
+    const open = openId === r.id
+    const idShown = shortId(r)
+    const idKey = `id:${r.id}`
+    return createElement('div', { key: r.id, className: 'bt-fsess' },
+      createElement('div', { className: 'bt-fsess-line1' },
+        createElement('span', {
+          className: 'bt-fsess-title',
+          role: 'button',
+          tabIndex: 0,
+          'aria-expanded': open,
+          title: r.title !== '' ? r.title : r.id,
+          onClick: () => toggleRow(r, open),
+          onKeyDown: (e: { key: string; preventDefault(): void }) => {
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleRow(r, open) }
+          },
+        }, r.title !== '' ? r.title : idShown),
+        createElement('span', { className: 'bt-fsess-time' }, relTime(r.updatedAt, now, lang)),
+      ),
+      createElement('div', { className: 'bt-fsess-line2' },
+        createElement('span', {
+          className: 'bt-fsess-src',
+          title: r.cwd !== '' ? r.cwd : undefined,
+        }, r.cwd === '' ? '—' : (r.cwd.split(/[\\/]/).filter(Boolean).pop() ?? r.cwd)),
+        createElement('span', {
+          className: 'bt-fsess-id',
+          role: 'button',
+          tabIndex: 0,
+          title: t('copyIdTitle'),
+          onClick: () => copy(idKey, r.id),
+          onKeyDown: (e: { key: string; preventDefault(): void }) => {
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); copy(idKey, r.id) }
+          },
+        }, copied === idKey ? t('copiedBtn') : idShown),
+        createElement('span', { className: 'bt-fsess-act' },
+          createElement('button', {
+            className: 'bt-btn bt-btn-xs',
+            type: 'button',
+            title: t('takeoverTitle'),
+            onClick: () => copy(`take:${r.id}`, takeoverCommand(provider, r.id)),
+          }, copied === `take:${r.id}` ? t('copiedBtn') : t('takeoverBtn')),
+          createElement('button', {
+            className: 'bt-btn bt-btn-xs',
+            type: 'button',
+            title: t('depositTitle'),
+            onClick: () => copy(`dep:${r.id}`, depositCommand(provider, r.id, lang)),
+          }, copied === `dep:${r.id}` ? t('copiedBtn') : t('depositBtn')),
+        ),
+      ),
+      open ? previewNode(r.id) : null,
+    )
+  }
+
+  const visible = list !== undefined ? filterSessions(list.sessions, query) : []
+
+  return createElement('div', { className: 'bt-card' },
+    createElement('div', { className: 'bt-head' },
+      createElement('span', { className: 'bt-title', style: { fontSize: 13 } }, t('browserTitle')),
+    ),
+    createElement('div', { className: 'bt-sub' }, t('browserHint')),
+    createElement('div', { className: 'bt-chips', role: 'group', 'aria-label': t('browserChipAria'), style: { marginTop: 8 } },
+      ...providers.map((p) => {
+        const usable = p.supported && p.enabled
+        return createElement('button', {
+          key: p.name,
+          className: `bt-chip${sel === p.name ? ' bt-chip-on' : ''}${usable ? '' : ' bt-chip-off'}`,
+          disabled: !usable,
+          'aria-pressed': sel === p.name,
+          type: 'button',
+          title: !usable
+            ? t('browserDisabledTitle', { label: PROVIDER_LABEL[p.name] ?? p.name })
+            : (p.supported && p.note !== '' ? p.note : undefined),
+          onClick: () => {
+            setSel(p.name)
+            setOpenId(null)
+            if (lists[p.name] === undefined && loading === null) load(p.name)
+          },
+        },
+          createElement('span', { className: 'bt-chip-label' }, PROVIDER_LABEL[p.name] ?? p.name),
+          createElement('span', { className: 'bt-chip-count' }, p.sessions >= 0 ? String(p.sessions) : '…'),
+        )
+      }),
+    ),
+    sel === null || list === undefined
+      ? createElement('div', { className: 'bt-sub bt-fs-empty' }, sel === null ? t('browserPick') : t('loading'))
+      : [
+          createElement('div', { className: 'bt-inbox-toolbar', key: 'fs-bar' },
+            createElement('input', {
+              className: 'bt-filter',
+              type: 'search',
+              value: query,
+              placeholder: t('filterSessionsPlaceholder'),
+              'aria-label': t('filterSessionsAria'),
+              title: t('filterSessionsAria'),
+              onChange: (e: { target: { value: string } }) => { setQuery(e.target.value) },
+            }),
+            createElement('button', {
+              className: 'bt-btn',
+              type: 'button',
+              disabled: loading !== null,
+              onClick: () => { setOpenId(null); load(provider) },
+            }, loading === provider ? t('loading') : t('refresh')),
+          ),
+          createElement('div', { className: 'bt-sub bt-fs-count', key: 'fs-count' },
+            list.total === 0
+              ? t('browserEmpty')
+              : t('browserTotal', { m: list.total, n: list.sessions.length }),
+            list.note !== undefined ? ` · ${t('browserNote', { note: list.note })}` : '',
+          ),
+          list.total > 0 && visible.length === 0
+            ? createElement('div', { className: 'bt-banner bt-banner-info', key: 'fs-nomatch' }, t('browserFilterEmpty'))
+            : createElement('div', { key: 'fs-rows' }, visible.map(rowNode)),
+        ],
+  )
+}
+
+// ---------------------------------------------------------------------------
 // 命令速览：直接可见（不折叠）。provider 与 foreign.ts 的 FOREIGN_PROVIDERS
 // 保持一致——不直接 import（值引入会把 host 半的 cordis/dsh-tools 拖进客户端包）。
 // ---------------------------------------------------------------------------
@@ -1319,6 +1614,9 @@ function Panel({ t, locale }: { t: Translate; locale: LocaleRuntime | undefined 
           })
         : createElement('div', { className: 'bt-sub' }, t('loading')),
     ),
+
+    // 外部会话浏览器（浏览只读，动作 = 复制指令；接管与寄存在会话里发生）
+    createElement(ForeignBrowser, { state, t, lang, onError: (msg) => setError(msg) }),
 
     // 支持矩阵
     createElement('div', { className: 'bt-card' },
