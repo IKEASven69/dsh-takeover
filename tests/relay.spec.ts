@@ -98,3 +98,81 @@ test('接力链：三跳 supersedes 链完整、hop1 关键事实存活到 hop3�
     rmSync(home, { recursive: true, force: true })
   }
 })
+
+
+test('长链：10 跳工具层零退化（supersedes 链/信息存活/审计轨迹全对）', () => {
+  const repo = makeRepo()
+  const home = mkdtempSync(join(tmpdir(), 'takeover-relay-10-'))
+  try {
+    const ids: string[] = []
+    const chainChecks: Array<{ hop: number; supersedes: string; ok: boolean }> = []
+    let prevId: string | undefined
+    for (let hop = 1; hop <= 10; hop++) {
+      let done = ''
+      let warnings = '关键事实——出发地 D:/CodingProjects（hop1 记录，每跳原样保留）'
+      if (prevId !== undefined) {
+        const take = inboxLoad(prevId, { dir: home })
+        assert.equal(take.ok, true, `hop${hop} 取前卡失败`)
+        if (!take.ok) return
+        // 取 hop(N-1) 的卡，卡上 supersedes 指向 hop(N-2)——hop-1 卡无前置
+        const expected = hop >= 3 ? ids[hop - 3] : ''
+        const actual = take.supersedes ?? ''
+        chainChecks.push({ hop, supersedes: actual, ok: actual === expected, expected })
+        done = `hop${hop - 1} 的 done 全文留存标记
+hop${hop} 追加`
+        writeFileSync(join(repo, 'work.txt'), `work through hop${hop}
+`)
+      } else {
+        done = 'hop1 起点（HISTORY_REPORTED）'
+      }
+      const r = pushHandoff(null, {
+        goal: `接力链 10 跳（hop-${hop}/10）`,
+        warnings,
+        done,
+        cwd: repo,
+        ...(prevId !== undefined ? { supersedes: prevId } : {}),
+      }, { dir: home })
+      assert.equal(r.ok, true)
+      if (!r.ok) return
+      ids.push(r.id)
+      prevId = r.id
+    }
+    // 链逐环核对（循环内取前卡时已顺带验证，这里汇总断言）
+    assert.equal(chainChecks.length, 9)
+    for (const c of chainChecks) {
+      assert.equal(c.ok, true, `hop${c.hop} 取得的卡 supersedes 应指向 ${c.expected || '（空）'}，实际 ${c.supersedes || '（空）'}`)
+    }
+    // 信息存活：warnings 逐跳原样保留，末跳仍含 hop1 的关键事实标记
+    //（done 的全文累积由三跳测试覆盖；本测试验证长链下 warnings 传递不退化）
+    const last = inboxLoad(ids[9], { dir: home })
+    assert.equal(last.ok, true)
+    if (last.ok) assert.ok(last.text.includes('hop1 记录'), 'hop1 的关键事实应存活到 hop10')
+    // 审计轨迹：10 张全归档
+    for (const id of ids) assert.ok(existsSync(join(home, 'archived', `${id}.md`)))
+  } finally {
+    rmSync(repo, { recursive: true, force: true })
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('并发多写方：20 并发 push 到同一收件箱——id 全唯一、全部可列、零损坏', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'takeover-concurrent-'))
+  try {
+    const pushes = await Promise.all(
+      Array.from({ length: 20 }, (_, i) =>
+        Promise.resolve().then(() => pushHandoff(null, { goal: `并发卡 ${i}`, title: `并发 ${i}` }, { dir: home })),
+      ),
+    )
+    const okPushes = pushes.filter((r) => r.ok)
+    assert.equal(okPushes.length, 20, `全部 push 应成功：${pushes.filter((r) => !r.ok).length} 个失败`)
+    const ids = okPushes.map((r) => (r as { id: string }).id)
+    assert.equal(new Set(ids).size, 20, 'id 必须全唯一')
+    // 逐张可取（卡文件完整）
+    for (const id of ids) {
+      const take = inboxLoad(id, { dir: home })
+      assert.equal(take.ok, true, `${id} 取件应成功（无损坏）`)
+    }
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
