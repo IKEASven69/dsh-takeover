@@ -118,12 +118,13 @@ export function shortId(row: SessionRow): string {
  * 子代理/工作流会话判定（确定性，零猜测）：id 与标题的既见模式。
  * 证据：agent-sessions #49 与 cc-sessions #3 两家用户各自请求隐藏此类会话；
  * 本机真实样本：`sess_subagent_*`、`sess_dwf-*`、标题 `workflow subagent actor#N@M`。
+ * 标题只认 `workflow subagent` 前缀（审查 C9：加 actor 备选会误收「Workflow actor
+ * refactor」这类正经会话——宁可漏收不可错收）。
  */
 export function isSubagentSession(row: SessionRow): boolean {
   if (row.id.startsWith('sess_subagent_')) return true
   if (/^sess_dwf-/.test(row.id)) return true
-  if (/^workflow (subagent|actor)/i.test(row.title)) return true
-  return false
+  return /^workflow subagent/i.test(row.title)
 }
 
 /** cwd（项目）facet：basename 展示 + 完整 cwd 过滤键，按多→少排序（空 cwd 归「—」桶） */

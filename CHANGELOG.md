@@ -4,6 +4,16 @@
 
 ## [0.4.1] — 未发布
 
+### 安全与加固（0.5.0 功能对抗审查——两路子代理 22 条发现全处理）
+- **S1（P1）**：takeover 请求体为 null/数组/标量时宿主崩溃（unhandled rejection 直杀进程）——readJsonBody 非对象一律归 {}，路由处理器 try/catch + promise 兜底
+- **S2（P1）**：孤儿信封清扫误删「解析失败但在册」卡的信封（supersedes 链等机器层元数据不可恢复丢失）——活性判据从「解析成功集」改为「对应 .md 在盘」
+- **S3（P2）**：takeover 路由漏停用闸（读路由拦、投递放行的闸门倒挂）——env 贯通 admitTakeover；registerTakeoverRoutes 增 opts 可注入闸（测试不碰真实 HOME）
+- **S4（P2）**：provider 未归一化进指令（传 "ZCode" 产出 /resume-ZCode 死指令僵尸会话）——与解析层同口径 trim+lowercase；**S5（P2）**：create 后失败的孤儿会话 id 随错误带出；**S6（P2）**：信封 64KB 尺寸闸（30s 轮询不被巨信封阻塞）；**S8（P3）**：同 (mode|provider|reference) 5 秒短窗去重防重复会话
+- **C1-C3（P1）**：facet 隐形过滤器卡死（换家必清 + 失联自动失效）/加载竞态永久「加载中…」（按家记态）/「只看此链」滤不掉链上后继卡（filterPending 增 supersedes 匹配 + 行内筛选联动清空）
+- **C4-C9**：一键取件定向化（带卡 id，点哪张取哪张）/降级不吞错（失败原因随信息横幅浮出）/browserHint 与注释新口径/投递态按行显示/子代理判定收紧（标题只认 workflow subagent 前缀，宁漏收不错收）
+- **样式（Y1-Y3）**：主操作「接管」主按钮视觉权重、动作按钮定宽防状态文案跳动、chips/按钮补键盘焦点环
+- 测试 167→178：新增路由级用例（同源 403 / null 体 / 缺控制器降级 / mode 白名单 / 停用 env）+ 信封 S2/S6 用例 + 链过滤用例；真机回归 null 体不崩、停用闸开合循环、链数据全过；覆盖率 79.9%→80.6%（server 层 77.7→90.4）
+
 ### 新增（0.5.0 一键接管主题——面板从「看」到「点」；调研推导见 docs/迭代计划-0.5.0.md）
 - **一键接管/取件（FR-1）**：外部会话浏览器行级「接管 / 接管并寄存」按钮经宿主会话控制器新建会话 → 改可找标题（「接管：…」）→ queue 模式投递指令；收件箱卡展开态「一键取件」同款投递 `/inbox`。**载荷与手动复制的指令同源**（takeoverCommand/depositCommand），任何失败自动退回复制路径（「已复制（降级）」回执）——点按钮与手动粘贴永不语义分叉。实现要点：`ctx.sessionController` 挂在根 ctx（cordis inject 纪律，插件层沿 `ctx.root` 防御访问）；`prompt` 是 `(request, signal)` 双参签名。真机：34 秒后台完成真实 OpenCode 会话接管（账本降级如实标注）
 - **子代理会话降噪（FR-2）**：浏览器列表把子代理/工作流会话收进「子代理会话（N）」折叠组（确定性判定：`sess_subagent_*` / `sess_dwf-*` / 标题 `workflow subagent|actor` 前缀，零猜测）——agent-sessions #49 与 cc-sessions #3 两家用户各自请求的能力；本机实测 161 条收编后主列表只剩真实工作行

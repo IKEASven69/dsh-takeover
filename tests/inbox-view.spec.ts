@@ -257,3 +257,14 @@ test('filterPending：newOnly 只留新卡（回归：曾写反成只显旧卡�
   assert.deepEqual(out.map((r) => r.id), ['ho-test-0001'])
   assert.deepEqual(filterPending(rows, '', labelOf, null, null).map((r) => r.id), ['ho-test-0001', 'ho-test-0002'])
 })
+
+// FR-4/审查 C3：「只看此链」把查询词设为前置卡 id——查询必须也匹配 supersedes，
+// 否则链上的后继卡自己反而被滤掉
+test('filterPending：查询命中 supersedes（链上后继卡按链可查）', () => {
+  const child = makeRow({ id: 'ho-child-1', supersedes: 'ho-parent-9' })
+  const other = makeRow()
+  const hit = filterPending([child, other], 'ho-parent-9', (a) => a, null, null)
+  assert.deepEqual(hit.map((r) => r.id), ['ho-child-1'])
+  // 清空查询恢复全部（与既有行为一致）
+  assert.equal(filterPending([child, other], '', labelOf, null, null).length, 2)
+})

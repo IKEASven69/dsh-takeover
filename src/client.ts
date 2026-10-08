@@ -364,8 +364,14 @@ const CSS = `
 .bt-chip-on { color: var(--bt-a); background: rgba(99,102,241,.12);
   border-color: rgba(99,102,241,.45); font-weight: 600; }
 .bt-chip-count { font-size: 10px; opacity: .75; }
-/* 外部会话浏览器：行 + 预览展开体。动作全是「复制指令」——面板不产卡，
- * 接管/寄存的蒸馏都在会话里由模型完成（卡片质量跟模型能力走）。 */
+/* 外部会话浏览器：行 + 预览展开体。接管/寄存一键投递（FR-1）——面板不产卡，
+ * 蒸馏都在会话里由模型完成（卡片质量跟模型能力走）。
+ * 样式（审查 Y1-Y3）：主操作「接管」有主按钮权重；动作按钮定宽防状态文案切换跳动；
+ * chips 与按钮补键盘焦点环。 */
+.bt-btn-primary { color: var(--bt-a); border-color: rgba(99,102,241,.45); background: rgba(99,102,241,.12); font-weight: 600; }
+.bt-btn-primary:not(:disabled):hover { background: var(--bt-a); border-color: var(--bt-a); color: #fff; transform: translateY(-1px); }
+.bt-fsess-act .bt-btn-xs { min-width: 5.5em; }
+.bt-chip:focus-visible, .bt-btn:focus-visible { outline: 2px solid var(--bt-a); outline-offset: 2px; }
 .bt-chip-off { opacity: .4; }
 .bt-chip-off:hover { border-color: var(--bt-line); color: var(--bt-mut); }
 .bt-btn-xs { font-size: 11px; padding: 2px 8px; border-radius: 8px; }
@@ -830,7 +836,7 @@ ${matrixRows}
 // 展示件
 // ---------------------------------------------------------------------------
 
-function PendingList({ rows, query, home, t, lang, onExport, onChainFilter, onTakeInbox, takeBusy }: {
+function PendingList({ rows, query, home, t, lang, onExport, onChainFilter, onTakeInbox, takeBusyId }: {
   rows: PendingRow[]
   query: string
   /** 解析后的 HANDOFF_HOME（state.home）：已见集合 localStorage 键的散列源 */
@@ -841,9 +847,10 @@ function PendingList({ rows, query, home, t, lang, onExport, onChainFilter, onTa
   onExport: (p: PendingRow) => void
   /** FR-4：按接力链过滤（把查询词设为前置卡 id） */
   onChainFilter: (id: string) => void
-  /** FR-1：一键取件（新建会话投递 /inbox），投递态在 Panel */
+  /** FR-1：一键取件（新建会话投递 /inbox，带卡 id 定向取件），投递态在 Panel */
   onTakeInbox: (p: PendingRow) => void
-  takeBusy: boolean
+  /** 正在投递的卡 id（审查 C7：按行显示投递中，其余行仅 disabled） */
+  takeBusyId: string | null
 }): ReturnType<typeof createElement> {
   // 已见集合：localStorage 按 HANDOFF_HOME 散列分键；打开过（展开过）即记为已见。
   // 存储不可写时退化为仅本会话记住（loadSeenSet/saveSeenSet 全程不抛）。
@@ -1012,16 +1019,21 @@ function PendingList({ rows, query, home, t, lang, onExport, onChainFilter, onTa
           p.supersedes !== undefined
             ? createElement('button', {
                 className: 'bt-btn',
-                onClick: () => { onChainFilter(p.supersedes as string) },
+                onClick: () => {
+                  // 审查 C3：链过滤要同时清掉行内来源/新卡筛选，否则组合过滤出空列表
+                  setSourceSel(null)
+                  setNewOnly(false)
+                  onChainFilter(p.supersedes as string)
+                },
                 title: t('chainFilterTitle', { id: p.supersedes }),
               }, t('chainFilterBtn'))
             : null,
           createElement('button', {
             className: 'bt-btn',
-            disabled: takeBusy,
+            disabled: takeBusyId !== null,
             onClick: () => { onTakeInbox(p) },
             title: t('inboxTakeTitle'),
-          }, takeBusy ? t('deliveringBtn') : t('inboxTakeBtn')),
+          }, takeBusyId === p.id ? t('deliveringBtn') : t('inboxTakeBtn')),
           createElement('button', {
             className: 'bt-btn',
             onClick: () => { onExport(p) },
@@ -1136,8 +1148,9 @@ function ProviderMatrix({ rows, busy, onToggle, t }: {
 }
 
 // ---------------------------------------------------------------------------
-// 外部会话浏览器：浏览只读——面板不产卡，接管与寄存都在会话里由模型完成
-// （卡片质量跟着模型能力走，这正是「跟着模型升级」的接法）。
+// 外部会话浏览器：浏览 + 一键投递（FR-1）。面板不产卡——蒸馏都在会话里由
+// 模型完成（卡片质量跟着模型能力走，这正是「跟着模型升级」的接法）；
+// 一键投递只是把与手动复制同源的指令送进新会话，失败退回复制。
 // 列表走轻量发现层（默认不自动扫八家，点哪家读哪家）；预览按需单会话拉结构化摘要。
 // ---------------------------------------------------------------------------
 
@@ -1147,17 +1160,20 @@ interface PreviewEntry {
   error: string | null
 }
 
-function ForeignBrowser({ state, t, lang, onError }: {
+function ForeignBrowser({ state, t, lang, onError, onNotice }: {
   state: TakeoverState | null
   t: Translate
   lang: Lang
   onError: (msg: string) => void
+  /** 软回执横幅（FR-1 降级原因等，8s 自清）——审查 C5：降级不吞错 */
+  onNotice: (msg: string) => void
 }): ReturnType<typeof createElement> {
   const providers = state?.providers ?? []
   // 选中家：默认不选（面板打开不扫盘），点哪家读哪家；列表按家缓存
   const [sel, setSel] = useState<string | null>(null)
   const [lists, setLists] = useState<Record<string, SessionListBody>>({})
-  const [loading, setLoading] = useState<string | null>(null)
+  // 审查 C2：按家记加载态（单字符串设计会在 A 加载中点 B 时把 B 永久卡在「加载中…」）
+  const [loading, setLoading] = useState<Record<string, boolean>>({})
   const [query, setQuery] = useState('')
   // FR-3：项目（cwd）facet 选中键；FR-2：子代理组展开态
   const [cwdSel, setCwdSel] = useState<string | null>(null)
@@ -1173,14 +1189,19 @@ function ForeignBrowser({ state, t, lang, onError }: {
   const copyTimer = useRef<number | undefined>(undefined)
 
   const load = (provider: string): void => {
-    setLoading(provider)
+    setLoading((prev) => ({ ...prev, [provider]: true }))
     void getJson<SessionListBody | { ok: false; error: string }>(`/dsh-takeover/sessions?provider=${encodeURIComponent(provider)}`)
       .then((b) => {
         if (b.ok !== true) throw new Error(b.error)
         setLists((prev) => ({ ...prev, [provider]: b }))
       })
       .catch((e: unknown) => onError(e instanceof Error ? e.message : String(e)))
-      .finally(() => setLoading((cur) => (cur === provider ? null : cur)))
+      .finally(() => setLoading((cur) => {
+        if (cur[provider] !== true) return cur
+        const next = { ...cur }
+        delete next[provider]
+        return next
+      }))
   }
 
   const loadPreview = (provider: string, id: string): void => {
@@ -1214,28 +1235,30 @@ function ForeignBrowser({ state, t, lang, onError }: {
 
   /** FR-1 一键接管：POST 宿主投递（建新会话+queue 指令）；失败（含宿主缺控制器）
    * 自动退回复制路径——按钮与手动粘贴的载荷同源（takeoverCommand/depositCommand），
-   * 降级永不改变语义，只多一步粘贴。 */
+   * 降级永不改变语义，只多一步粘贴；失败原因随信息横幅浮出（审查 C5，不吞错）。 */
   const runTakeover = (key: string, mode: 'take' | 'take_deposit', id: string): void => {
     if (busyKey !== null) return
     const fallback = mode === 'take_deposit' ? depositCommand(provider, id, lang) : takeoverCommand(provider, id)
     setBusyKey(key)
     void post<{ ok: true; sessionId: string; title: string } | { ok: false; error: string }>(
       '/dsh-takeover/takeover',
-      { mode, provider, reference: id },
+      { mode, provider, reference: id, lang },
     )
       .then((r) => {
         if (!r.ok) throw new Error(r.error)
         setDeliveredKey(key)
         return undefined
       })
-      .catch(() => {
+      .catch((e: unknown) => {
+        const reason = e instanceof Error ? e.message : String(e)
         copyText(fallback)
           .then(() => {
             setCopied(key)
             window.clearTimeout(copyTimer.current)
             copyTimer.current = window.setTimeout(() => setCopied(null), 2400)
+            onNotice(t('fallbackNotice', { reason }))
           })
-          .catch((e: unknown) => onError(e instanceof Error ? e.message : String(e)))
+          .catch((ce: unknown) => onError(ce instanceof Error ? ce.message : String(ce)))
       })
       .finally(() => setBusyKey(null))
   }
@@ -1309,7 +1332,7 @@ function ForeignBrowser({ state, t, lang, onError }: {
         }, copied === idKey ? t('copiedBtn') : idShown),
         createElement('span', { className: 'bt-fsess-act' },
           createElement('button', {
-            className: 'bt-btn bt-btn-xs',
+            className: 'bt-btn bt-btn-xs bt-btn-primary',
             type: 'button',
             disabled: busyKey !== null,
             title: t('takeoverTitle'),
@@ -1336,12 +1359,14 @@ function ForeignBrowser({ state, t, lang, onError }: {
     )
   }
 
-  const matched = list !== undefined ? filterByCwd(filterSessions(list.sessions, query), cwdSel) : []
-  // FR-2：子代理/工作流会话收进次级折叠组（agent-sessions #49、cc-sessions #3 两家用户各自请求）
-  const subRows = matched.filter(isSubagentSession)
-  const visible = matched.filter((r) => !isSubagentSession(r))
+  const matched = list !== undefined ? filterSessions(list.sessions, query) : []
   // FR-3：facet 计数随查询走（不含自身 cwd 选择，保持各 facet 计数可点）
-  const facets = list !== undefined ? cwdFacets(filterSessions(list.sessions, query)) : []
+  const facets = list !== undefined ? cwdFacets(matched) : []
+  // 审查 C1：选中的 facet 因查询变化/换家消失时自动失效——不留下隐形过滤器
+  const cwdEffective = facets.some((f) => f.cwd === cwdSel) ? cwdSel : null
+  const visible = filterByCwd(matched, cwdEffective).filter((r) => !isSubagentSession(r))
+  // FR-2：子代理/工作流会话收进次级折叠组（agent-sessions #49、cc-sessions #3 两家用户各自请求）
+  const subRows = filterByCwd(matched, cwdEffective).filter(isSubagentSession)
 
   // FR-2 次级折叠组（与收件箱低信息组同款交互：组头开合，默认收起）
   const subGroupNode = subRows.length > 0
@@ -1385,7 +1410,8 @@ function ForeignBrowser({ state, t, lang, onError }: {
           onClick: () => {
             setSel(p.name)
             setOpenId(null)
-            if (lists[p.name] === undefined && loading === null) load(p.name)
+            setCwdSel(null) // 审查 C1：换家必清项目 facet——旧家的 cwd 对新家是隐形过滤器
+            if (lists[p.name] === undefined && loading[p.name] !== true) load(p.name)
           },
         },
           createElement('span', { className: 'bt-chip-label' }, PROVIDER_LABEL[p.name] ?? p.name),
@@ -1409,9 +1435,9 @@ function ForeignBrowser({ state, t, lang, onError }: {
             createElement('button', {
               className: 'bt-btn',
               type: 'button',
-              disabled: loading !== null,
+              disabled: loading[provider] === true,
               onClick: () => { setOpenId(null); load(provider) },
-            }, loading === provider ? t('loading') : t('refresh')),
+            }, loading[provider] === true ? t('loading') : t('refresh')),
           ),
           createElement('div', { className: 'bt-sub bt-fs-count', key: 'fs-count' },
             list.total === 0
@@ -1423,11 +1449,11 @@ function ForeignBrowser({ state, t, lang, onError }: {
             ? createElement('div', { className: 'bt-chips', key: 'fs-cwd', role: 'group', 'aria-label': t('facetCwdAria'), style: { marginTop: 6 } },
                 ...facets.map((f) => createElement('button', {
                   key: f.cwd === '' ? '(empty)' : f.cwd,
-                  className: `bt-chip${cwdSel === f.cwd ? ' bt-chip-on' : ''}`,
-                  'aria-pressed': cwdSel === f.cwd,
+                  className: `bt-chip${cwdEffective === f.cwd ? ' bt-chip-on' : ''}`,
+                  'aria-pressed': cwdEffective === f.cwd,
                   type: 'button',
                   title: f.cwd === '' ? undefined : f.cwd,
-                  onClick: () => setCwdSel(cwdSel === f.cwd ? null : f.cwd),
+                  onClick: () => setCwdSel(cwdEffective === f.cwd ? null : f.cwd),
                 },
                   createElement('span', { className: 'bt-chip-label' }, f.label),
                   createElement('span', { className: 'bt-chip-count' }, String(f.count)),
@@ -1512,8 +1538,8 @@ function Panel({ t, locale }: { t: Translate; locale: LocaleRuntime | undefined 
   const [confirmClear, setConfirmClear] = useState(false)
   // 收件箱即时过滤词：空串 = 不过滤（纯前端，输入即滤，清空恢复）
   const [query, setQuery] = useState('')
-  // FR-1：取件投递态 + 操作回执横幅（成功走 notice 8s 自清；失败走 error 横幅）
-  const [takeBusy, setTakeBusy] = useState(false)
+  // FR-1：取件投递态（审查 C7：记正在投的卡 id，按行显示投递中）+ 操作回执横幅
+  const [takeBusyId, setTakeBusyId] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const noticeTimer = useRef<number | undefined>(undefined)
   const showNotice = (msg: string): void => {
@@ -1521,17 +1547,19 @@ function Panel({ t, locale }: { t: Translate; locale: LocaleRuntime | undefined 
     window.clearTimeout(noticeTimer.current)
     noticeTimer.current = window.setTimeout(() => setNotice(null), 8000)
   }
-  const takeInbox = (_p: PendingRow): void => {
-    if (takeBusy) return
-    setTakeBusy(true)
-    void post<{ ok: true; sessionId: string; title: string } | { ok: false; error: string }>('/dsh-takeover/takeover', { mode: 'inbox' })
+  const takeInbox = (p: PendingRow): void => {
+    if (takeBusyId !== null) return
+    setTakeBusyId(p.id)
+    // 审查 C4：行级按钮带卡 id 定向取件——服务端指令升级为「取编号 xxx 这张」，
+    // 多卡待取时模型取的就是用户点的那张，不再是「自行挑一张」
+    void post<{ ok: true; sessionId: string; title: string } | { ok: false; error: string }>('/dsh-takeover/takeover', { mode: 'inbox', reference: p.id })
       .then((r) => {
         if (!r.ok) throw new Error(r.error)
         showNotice(t('deliveredNotice', { title: r.title }))
         return undefined
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
-      .finally(() => setTakeBusy(false))
+      .finally(() => setTakeBusyId(null))
   }
   // 语言切换实时重渲染：宿主 locale revision 变化即重画（bound t 在渲染时取词）
   useSyncExternalStore(
@@ -1749,13 +1777,13 @@ function Panel({ t, locale }: { t: Translate; locale: LocaleRuntime | undefined 
             onExport: exportOne,
             onChainFilter: (id: string) => { setQuery(id) },
             onTakeInbox: takeInbox,
-            takeBusy,
+            takeBusyId,
           })
         : createElement('div', { className: 'bt-sub' }, t('loading')),
     ),
 
-    // 外部会话浏览器（浏览只读，动作 = 复制指令；接管与寄存在会话里发生）
-    createElement(ForeignBrowser, { state, t, lang, onError: (msg) => setError(msg) }),
+    // 外部会话浏览器（浏览 + 一键投递；卡片蒸馏仍在会话里由模型完成）
+    createElement(ForeignBrowser, { state, t, lang, onError: (msg) => setError(msg), onNotice: showNotice }),
 
     // 支持矩阵
     createElement('div', { className: 'bt-card' },

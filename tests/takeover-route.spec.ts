@@ -5,9 +5,12 @@
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import type { IncomingMessage, ServerResponse } from 'node:http'
+import type { Context } from '@deepseek-ai/cordis'
 import {
   admitTakeover,
   foreignResolveOne,
+  registerTakeoverRoutes,
   sessionControllerOf,
   type SessionControllerLike,
 } from '../src/index.ts'
@@ -91,6 +94,146 @@ test('降级三连：解析失败原样透传 / create 缺 sessionId / prompt �
   const r3 = await admitTakeover(boomPrompt.controller, { mode: 'inbox' })
   assert.equal(r3.ok, false)
   if (!r3.ok) assert.match(r3.error, /gateway down/)
+})
+
+// ---------- 审查修复回归（S3/S4/S5/C4/C8 + mode 白名单） ----------
+
+test('S4：provider 归一化——"ZCode" 进指令前转小写，与解析层同一口径', async () => {
+  const { controller, calls } = fakeController()
+  let seenProvider = ''
+  const r = await admitTakeover(
+    controller,
+    { mode: 'take', provider: 'ZCode', reference: 'sess-abc' },
+    {
+      resolve: (async (args: { provider?: string }) => {
+        seenProvider = args?.provider ?? ''
+        return { ok: true as const, ref: { id: 'sess-abc', agent: 'zcode', title: 'T', cwd: '', updatedAt: 0, fingerprint: '', kind: 'sqlite' } }
+      }) as never,
+    },
+  )
+  assert.equal(r.ok, true)
+  assert.equal(seenProvider, 'zcode')
+  assert.match(calls.find((c) => c.startsWith('prompt:')) ?? '', /\/resume-zcode sess-abc/)
+})
+
+test('S3：env 贯通 resolve——停用闸在 takeover 与读路由同口径', async () => {
+  const seen: unknown[] = []
+  const r = await admitTakeover(
+    fakeController().controller,
+    { mode: 'take', provider: 'claude', reference: 'x' },
+    {
+      resolve: (async (_args: unknown, _deps: unknown, env: unknown) => {
+        seen.push(env)
+        return { ok: false as const, error: '该 provider 已在设置中停用' }
+      }) as never,
+      env: { isEnabled: () => false },
+    },
+  )
+  assert.equal(r.ok, false)
+  assert.equal(seen.length, 1, 'env 必须随 resolve 传出')
+})
+
+test('S5：create 成功后 rename/prompt 失败——错误带孤儿会话 id（不隐瞒）', async () => {
+  const boom = fakeController({ prompt: async () => { throw new Error('gateway down') } })
+  const r = await admitTakeover(boom.controller, { mode: 'inbox' })
+  assert.equal(r.ok, false)
+  if (!r.ok) {
+    assert.match(r.error, /gateway down/)
+    assert.match(r.error, /已建会话 sess-new-1/)
+    assert.equal(r.sessionId, 'sess-new-1')
+  }
+})
+
+test('mode 白名单在核心层也拦（路由之外无绕过）', async () => {
+  const r = await admitTakeover(fakeController().controller, { mode: 'garbage' as never })
+  assert.equal(r.ok, false)
+  if (!r.ok) assert.match(r.error, /未知 mode/)
+})
+
+test('C8：take_deposit lang=en——第二行英文（载荷与 EN 用户的手动复制等价）', async () => {
+  const { controller, calls } = fakeController()
+  await admitTakeover(
+    controller,
+    { mode: 'take_deposit', provider: 'zcode', reference: 's1', lang: 'en' },
+    { resolve: (async () => ({ ok: true as const, ref: { id: 's1', agent: 'zcode', title: 'T', cwd: '', updatedAt: 0, fingerprint: '', kind: 'sqlite' } })) as never },
+  )
+  assert.match(calls.find((c) => c.startsWith('prompt:')) ?? '', /deposit the six-section handoff card/i)
+})
+
+test('C4：取件带 reference——定向取件指令（点哪张取哪张）', async () => {
+  const { controller, calls } = fakeController()
+  await admitTakeover(controller, { mode: 'inbox', reference: 'ho-card-9' })
+  assert.match(calls.find((c) => c.startsWith('prompt:')) ?? '', /取编号 ho-card-9 这张卡/)
+})
+
+// ---------- 路由级（S7）：守卫/降级/极端体，不崩宿主 ----------
+
+function routeHandler(ctxExtra?: Record<string, unknown>, opts?: Parameters<typeof registerTakeoverRoutes>[1]): (req: IncomingMessage, res: ServerResponse) => void {
+  let handler: ((req: IncomingMessage, res: ServerResponse) => void) | undefined
+  const host = {
+    effect: (fn: () => void): void => fn(),
+    webServer: { register: (reg: { handler: typeof handler }): void => { handler = reg.handler } },
+  }
+  const ctx = { inject: (_deps: string[], cb: (h: typeof host) => void): void => cb(host), ...ctxExtra }
+  registerTakeoverRoutes(ctx as unknown as Context, opts)
+  if (handler === undefined) throw new Error('路由未注册')
+  return handler
+}
+
+async function callRoute(
+  handler: ReturnType<typeof routeHandler>,
+  o: { method?: string; url?: string; headers?: Record<string, string>; body?: string },
+): Promise<{ status: number; body: string }> {
+  const { EventEmitter } = await import('node:events')
+  return await new Promise((resolve, reject) => {
+    const req = Object.assign(new EventEmitter(), {
+      method: o.method ?? 'POST',
+      url: o.url ?? '/dsh-takeover/takeover',
+      headers: o.headers ?? {},
+      socket: { remoteAddress: '127.0.0.1' },
+    })
+    let settle: ((r: { status: number; body: string }) => void) | undefined
+    const res = {
+      statusCode: 0,
+      writeHead(code: number): unknown { this.statusCode = code; return this },
+      end(b?: string): void { if (settle !== undefined) settle({ status: this.statusCode, body: b ?? '' }) },
+    }
+    settle = (r) => resolve(r)
+    handler(req as unknown as IncomingMessage, res as unknown as ServerResponse)
+    if (o.body !== undefined) req.emit('data', Buffer.from(o.body))
+    req.emit('end')
+  })
+}
+
+const ORIGIN = { host: 'localhost:3080', origin: 'http://localhost:3080' }
+
+test('路由 S1：null 字面量体不崩宿主，回规范值（测试 ctx 无控制器 → 规范降级）', async () => {
+  const handler = routeHandler()
+  const r = await callRoute(handler, { headers: { ...ORIGIN }, body: 'null' })
+  assert.equal(r.status, 200)
+  assert.equal((JSON.parse(r.body) as { ok: boolean }).ok, false)
+})
+
+test('路由 S7：无 Origin 403；缺控制器规范降级；未知 mode 规范错误', async () => {
+  const handler = routeHandler()
+  const forbidden = await callRoute(handler, { headers: { host: 'localhost:3080' }, body: '{"mode":"inbox"}' })
+  assert.equal(forbidden.status, 403)
+
+  const degraded = await callRoute(routeHandler(), { headers: { ...ORIGIN }, body: '{"mode":"inbox"}' })
+  assert.equal(degraded.status, 200)
+  assert.match((JSON.parse(degraded.body) as { error: string }).error, /宿主缺会话控制器/)
+
+  const withCtrl = routeHandler({ root: { sessionController: fakeController().controller } })
+  const badMode = await callRoute(withCtrl, { headers: { ...ORIGIN }, body: '{"mode":"delete-all"}' })
+  assert.equal(badMode.status, 200)
+  assert.match((JSON.parse(badMode.body) as { error: string }).error, /未知 mode/)
+})
+
+test('路由 S3：停用 provider 一键接管被拒（env 贯通路由）', async () => {
+  const handler = routeHandler({ root: { sessionController: fakeController().controller } }, { takeoverEnv: { isEnabled: () => false } })
+  const r = await callRoute(handler, { headers: { ...ORIGIN }, body: '{"mode":"take","provider":"claude","reference":"x"}' })
+  assert.equal(r.status, 200)
+  assert.match((JSON.parse(r.body) as { error: string }).error, /停用/)
 })
 
 // ---------- sessionControllerOf：防御访问 ----------

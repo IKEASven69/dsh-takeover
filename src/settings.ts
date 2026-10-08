@@ -190,7 +190,6 @@ export function buildState(readers: ForeignReaders, dir?: string): TakeoverState
     pending = uniqueCards.map((c) => {
       const pv = previewOf(c)
       const raw = cardTexts.get(c.id)
-      const extras = c.extras as { supersedes?: unknown } | undefined
       return {
         id: c.id,
         agent: c.from.agent, // 空串交给客户端词典渲染兜底文案（host 侧中文字面量会漏进 EN 界面与导出）
@@ -200,7 +199,6 @@ export function buildState(readers: ForeignReaders, dir?: string): TakeoverState
         preview: pv.text,
         previewFromDone: pv.fromDone,
         lowInfo: raw !== undefined ? isLowInfoCardMarkdown(raw) : false,
-        ...(typeof extras?.supersedes === 'string' && extras.supersedes !== '' ? { supersedes: extras.supersedes } : {}),
       }
     })
 
@@ -214,22 +212,26 @@ export function buildState(readers: ForeignReaders, dir?: string): TakeoverState
       }
     }
     if (pdExists) {
-      const liveIds = new Set(uniqueCards.map((c) => c.id))
+      // S2（审查）：活性判据 = 对应 .md 是否真在盘上。此前用「解析成功卡集合」，
+      // 会把超尺寸/解析失败但仍在册的卡的信封误当孤儿销毁（supersedes 链等机器层
+      // 元数据不可恢复）——core 对这类卡明确「保留在收件箱」
       const supersedesByOwner = new Map<string, string>()
       for (const f of readdirSync(pd)) {
         if (!f.endsWith('.envelope.json')) continue
         try {
-          // 孤儿信封清扫：信封是纯派生物，对应 .md 已被任何实现取走（含不认识信封的旧版）
-          // 即成孤儿——顺手删除，envelopeChars 不随时间无界失真；正在推送的卡 .md 先落盘，不会误删
+          // 孤儿信封清扫：信封是纯派生物，仅当对应 .md 确实不在盘上（已被任何实现
+          // 取走，含不认识信封的旧版）才删；正在推送的卡 .md 先落盘，不会误删
           const ownerId = f.slice(0, -'.envelope.json'.length)
-          if (!liveIds.has(ownerId)) {
+          if (!existsSync(join(pd, `${ownerId}.md`))) {
             rmSync(join(pd, f))
             continue
           }
-          envelopeChars = (envelopeChars ?? 0) + statSync(join(pd, f)).size
-          // FR-4 链数据源：supersedes 按协议设计只随信封走（机器层元数据不进卡片本体）；
-          // 坏信封不拦统计，条数上限防巨量信封放大
-          if (supersedesByOwner.size < 200) {
+          const st = statSync(join(pd, f))
+          envelopeChars = (envelopeChars ?? 0) + st.size
+          // FR-4 链数据源 + S6 尺寸闸：supersedes 按协议设计只随信封走（卡片本体
+          // 不含，卡片侧注入不算数）；信封超 64KB 只计字符不读入（30s 轮询不被
+          // 外来巨信封阻塞），坏 JSON 不拦统计
+          if (supersedesByOwner.size < 200 && st.isFile() && st.size <= 65536) {
             try {
               const env = JSON.parse(readFileSync(join(pd, f), 'utf-8')) as { supersedes?: unknown }
               if (typeof env.supersedes === 'string' && env.supersedes !== '') supersedesByOwner.set(ownerId, env.supersedes)

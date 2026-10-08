@@ -246,6 +246,27 @@ test('buildState：supersedes 从信封进 PendingRow（坏信封/缺信封不�
   assert.equal(st.inboxError, undefined)
 })
 
+// 审查 S2/S6：清扫只认盘上 .md（解析失败在册卡的信封不删）；巨信封只计字符不读链
+test('buildState：S2 在册坏卡信封不被误清 + S6 巨信封只计字符', () => {
+  const home = freshHome()
+  const pd = join(home, 'pending')
+  mkdirSync(pd, { recursive: true })
+  // 解析失败但在册的卡（core 按 skipped 处理、卡片保留在收件箱）：
+  // 旧判据（解析成功集）会把它当孤儿误删信封，新判据（.md 在盘）保留
+  writeFileSync(join(pd, 'ho-skipped-0001.md'), 'garbage-not-a-card', 'utf-8')
+  writeFileSync(join(pd, 'ho-skipped-0001.envelope.json'), JSON.stringify({ supersedes: 'ho-keep' }), 'utf-8')
+  // 巨信封（>64KB）：计入 envelopeChars，但不读入内存、不产出链字段
+  const big = makeCard({ id: 'ho-big-0001' })
+  writeCard(big, home)
+  writeFileSync(join(pd, 'ho-big-0001.envelope.json'), JSON.stringify({ supersedes: 'ho-x', pad: 'x'.repeat(70000) }), 'utf-8')
+  const st = buildState(fakeReaders(), home)
+  assert.ok(existsSync(join(pd, 'ho-skipped-0001.envelope.json')), '在册卡的信封不得被当孤儿清扫')
+  const bigRow = st.pending.find((p) => p.id === big.id)
+  assert.equal(bigRow?.supersedes, undefined, '超尺寸信封不读链')
+  assert.ok((st.envelopeChars ?? 0) > 70000, '尺寸仍计入信封总量')
+  assert.equal(st.inboxError, undefined)
+})
+
 // 回归（0.4.1）：全新安装首次 push 前 pending/ 不存在，buildState 曾误报「收件箱概览不可用：ENOENT」
 test('buildState：全新安装（pending/ 不存在）不进降级态，矩阵照常', () => {
   const home = mkdtempSync(join(tmpdir(), 'takeover-fresh-'))

@@ -46,9 +46,13 @@ export function filterPending(
     const title = typeof p.title === 'string' ? p.title : ''
     const id = typeof p.id === 'string' ? p.id : ''
     const agent = typeof p.agent === 'string' ? p.agent : ''
+    // FR-4（审查 C3）：「只看此链」把查询词设为前置卡 id——查询必须也匹配
+    // supersedes 字段，否则链上的后继卡自己反而被滤掉
+    const supersedes = typeof p.supersedes === 'string' ? p.supersedes.toLowerCase() : ''
     return title.toLowerCase().includes(q)
       || id.toLowerCase().includes(q)
       || agent.toLowerCase().includes(q)
+      || supersedes.includes(q)
       || labelOf(p.agent ?? '').toLowerCase().includes(q)
   })
 }

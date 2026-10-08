@@ -86,7 +86,14 @@ function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>
     request.on('end', () => {
       try {
         const raw = Buffer.concat(chunks).toString('utf8').trim()
-        resolve(raw === '' ? {} : JSON.parse(raw) as Record<string, unknown>)
+        const parsed: unknown = raw === '' ? {} : JSON.parse(raw)
+        // 极端形态防御（审查 S1）：null/数组/标量一律归 {}——下游按字段取值，
+        // 不让 `body['mode']` 这类访问把 unhandled rejection 打进宿主事件循环
+        resolve(
+          parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+            ? (parsed as Record<string, unknown>)
+            : {},
+        )
       } catch {
         reject(new Error('invalid JSON body'))
       }
@@ -144,40 +151,55 @@ export type TakeoverMode = 'take' | 'take_deposit' | 'inbox'
 
 export type TakeoverOutcome =
   | { ok: true; sessionId: string; title: string }
-  | { ok: false; error: string }
+  | { ok: false; error: string; /** create 成功但后续失败的孤儿会话 id（不隐瞒，可循此清理） */ sessionId?: string }
 
 const TAKEOVER_TITLE_MAX = 48
+const TAKEOVER_MODES: readonly TakeoverMode[] = ['take', 'take_deposit', 'inbox']
 
 /**
  * 投递核心（可脱离 cordis 单测）：建新会话 → 改可找标题 → queue 模式投递指令。
  * 指令与浏览器复制的载荷同一出处（browser-view 的 takeoverCommand/depositCommand），
- * 「点按钮」和「手动粘贴」永远等价；mode=inbox 投递裸 /inbox（最小输入纪律）。
+ * 「点按钮」和「手动粘贴」永远等价；mode=inbox 投递裸 /inbox（最小输入纪律），
+ * 带reference 时升级为定向取件（/inbox + 指明编号——行级按钮必须取那一张）。
  * 任何一步失败回规范错误值；已建会话的 id 随错误带出（不隐瞒孤儿会话）。
  */
 export async function admitTakeover(
   controller: SessionControllerLike,
-  args: { mode: TakeoverMode; provider?: string; reference?: string },
-  deps?: { resolve?: typeof foreignResolveOne; random?: () => string },
+  args: { mode: TakeoverMode; provider?: string; reference?: string; lang?: 'zh' | 'en' },
+  deps?: {
+    resolve?: typeof foreignResolveOne
+    random?: () => string
+    /** 停用闸环境（与读路由同口径）：停用家一键接管同样拒绝 */
+    env?: Parameters<typeof foreignResolveOne>[2]
+  },
 ): Promise<TakeoverOutcome> {
+  if (!TAKEOVER_MODES.includes(args.mode)) {
+    return { ok: false, error: `未知 mode：${String(args.mode)}（支持 ${TAKEOVER_MODES.join(' / ')}）` }
+  }
+  const lang: 'zh' | 'en' = args.lang === 'en' ? 'en' : 'zh'
   let instruction: string
   let title: string
   if (args.mode === 'inbox') {
-    instruction = '/inbox'
-    title = '收件箱取件'
+    const ref = String(args.reference ?? '').trim()
+    instruction = ref === '' ? '/inbox' : `/inbox\n取编号 ${ref} 这张卡，消费即取。`
+    title = lang === 'en' ? 'Inbox pickup' : '收件箱取件'
   } else {
+    // provider 与解析层同一归一化（审查 S4）：传 "ZCode" 解析得过、指令里却会是
+    // 无法识别的 /resume-ZCode——先归一化再进指令
+    const provider = String(args.provider ?? '').trim().toLowerCase()
     const resolve = deps?.resolve ?? foreignResolveOne
-    const resolved = await resolve({ provider: args.provider, reference: args.reference })
+    const resolved = await resolve({ provider, reference: args.reference }, undefined, deps?.env)
     if (!resolved.ok) return resolved
-    const provider = String(args.provider)
     instruction = args.mode === 'take_deposit'
-      ? depositCommand(provider, resolved.ref.id, 'zh')
+      ? depositCommand(provider, resolved.ref.id, lang)
       : takeoverCommand(provider, resolved.ref.id)
     title = `接管：${resolved.ref.title || resolved.ref.id}`.slice(0, TAKEOVER_TITLE_MAX)
   }
+  let sessionId = ''
   try {
     const created = await controller.create({})
-    const sessionId = (created as { sessionId?: unknown } | undefined)?.sessionId
-    if (typeof sessionId !== 'string' || sessionId === '') {
+    sessionId = (created as { sessionId?: unknown } | undefined)?.sessionId as string | undefined ?? ''
+    if (sessionId === '') {
       return { ok: false, error: '会话创建结果缺少 sessionId（宿主会话控制器形态变化）' }
     }
     const random = deps?.random ?? randomUUID
@@ -191,15 +213,28 @@ export async function admitTakeover(
     }, new AbortController().signal)
     return { ok: true, sessionId, title }
   } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) }
+    const msg = e instanceof Error ? e.message : String(e)
+    // create 已成功的失败（rename/prompt 阶段）：孤儿会话 id 随错误带出，不隐瞒
+    return sessionId === ''
+      ? { ok: false, error: msg }
+      : { ok: false, error: `${msg}（已建会话 ${sessionId}「${title}」，可在会话树删除）`, sessionId }
   }
 }
 
 /**
  * 注册 /dsh-takeover/ 前缀路由。webServer 是宿主可选服务（CLI 形态没有），
  * 走 ctx.inject 缺席即跳过，不影响工具与 skill 注册面。
+ * opts.takeoverEnv：provider 停用闸（全部路由共用，缺省读真实设置开关；
+ * 测试注入假闸——isProviderEnabled 直读真实 HOME，测试不碰）。
  */
-export function registerTakeoverRoutes(ctx: Context): void {
+export function registerTakeoverRoutes(
+  ctx: Context,
+  opts?: { takeoverEnv?: { isEnabled: (p: ForeignProvider) => boolean } },
+): void {
+  const env = opts?.takeoverEnv ?? { isEnabled: (p: ForeignProvider) => isProviderEnabled(p) }
+  // S8 短窗去重：同 (mode|provider|reference) 5 秒内的重复点击复用同一次投递——
+  // 双标签页/快速重试不再产生 N 个重复会话；admitTakeover 永不 reject，缓存安全
+  const takeoverMemo = new Map<string, { at: number; run: Promise<TakeoverOutcome> }>()
   ctx.inject(['webServer'], (host) => {
     host.effect(() => host.webServer.register({
       kind: 'prefix',
@@ -245,7 +280,6 @@ export function registerTakeoverRoutes(ctx: Context): void {
             return
           }
           const q = new URL(request.url ?? '/', 'http://localhost').searchParams
-          const env = { isEnabled: (p: ForeignProvider) => isProviderEnabled(p) }
           // 规范值（含 ok:false）一律 200——停用/未知名是业务结果不是 HTTP 事故；意外异常才 500
           const body: Promise<unknown> = sub === 'sessions'
             ? (() => {
@@ -280,24 +314,37 @@ export function registerTakeoverRoutes(ctx: Context): void {
           }
           void readJsonBody(request).then(
             (body) => {
-              const controller = sessionControllerOf(ctx)
-              if (controller === undefined) {
-                // 规范降级：面板收到后自动退回复制指令路径
-                sendJson(response, 200, { ok: false, error: '宿主缺会话控制器，一键接管不可用——请改用复制指令' })
-                return
+              try {
+                const controller = sessionControllerOf(ctx)
+                if (controller === undefined) {
+                  // 规范降级：面板收到后自动退回复制指令路径
+                  sendJson(response, 200, { ok: false, error: '宿主缺会话控制器，一键接管不可用——请改用复制指令' })
+                  return
+                }
+                const mode = String(body['mode'] ?? '')
+                if (!(TAKEOVER_MODES as readonly string[]).includes(mode)) {
+                  sendJson(response, 200, { ok: false, error: `未知 mode：${mode}（支持 ${TAKEOVER_MODES.join(' / ')}）` })
+                  return
+                }
+                const provider = String(body['provider'] ?? '')
+                const reference = String(body['reference'] ?? '')
+                const lang = body['lang'] === 'en' ? 'en' : 'zh'
+                const key = `${mode}|${provider}|${reference}`
+                const cached = takeoverMemo.get(key)
+                if (cached !== undefined && Date.now() - cached.at < 5000) {
+                  void cached.run.then((r) => { sendJson(response, 200, r) })
+                  return
+                }
+                const run = admitTakeover(controller, { mode: mode as TakeoverMode, provider, reference, lang }, { env })
+                takeoverMemo.set(key, { at: Date.now(), run })
+                void run.then(
+                  (r) => { sendJson(response, 200, r) },
+                  // admitTakeover 承诺不 reject——此 catch 只兜绝对意外，不让 unhandled rejection 出门
+                  (e: unknown) => { sendJson(response, 500, { ok: false, error: e instanceof Error ? e.message : String(e) }) },
+                )
+              } catch (e) {
+                sendJson(response, 500, { ok: false, error: e instanceof Error ? e.message : String(e) })
               }
-              const mode = String(body['mode'] ?? '')
-              if (mode !== 'take' && mode !== 'take_deposit' && mode !== 'inbox') {
-                sendJson(response, 200, { ok: false, error: `未知 mode：${mode}（支持 take / take_deposit / inbox）` })
-                return
-              }
-              void admitTakeover(controller, {
-                mode,
-                provider: String(body['provider'] ?? ''),
-                reference: String(body['reference'] ?? ''),
-              }).then(
-                (r) => { sendJson(response, 200, r) },
-              )
             },
             (error: unknown) => { sendJson(response, 400, { ok: false, error: error instanceof Error ? error.message : String(error) }) },
           )

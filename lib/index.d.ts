@@ -532,27 +532,38 @@ type TakeoverOutcome = {
   title: string;
 } | {
   ok: false;
-  error: string;
+  error: string; /** create 成功但后续失败的孤儿会话 id（不隐瞒，可循此清理） */
+  sessionId?: string;
 };
 /**
  * 投递核心（可脱离 cordis 单测）：建新会话 → 改可找标题 → queue 模式投递指令。
  * 指令与浏览器复制的载荷同一出处（browser-view 的 takeoverCommand/depositCommand），
- * 「点按钮」和「手动粘贴」永远等价；mode=inbox 投递裸 /inbox（最小输入纪律）。
+ * 「点按钮」和「手动粘贴」永远等价；mode=inbox 投递裸 /inbox（最小输入纪律），
+ * 带reference 时升级为定向取件（/inbox + 指明编号——行级按钮必须取那一张）。
  * 任何一步失败回规范错误值；已建会话的 id 随错误带出（不隐瞒孤儿会话）。
  */
 export declare function admitTakeover(controller: SessionControllerLike, args: {
   mode: TakeoverMode;
   provider?: string;
   reference?: string;
+  lang?: 'zh' | 'en';
 }, deps?: {
   resolve?: typeof foreignResolveOne;
   random?: () => string;
+  /** 停用闸环境（与读路由同口径）：停用家一键接管同样拒绝 */
+  env?: Parameters<typeof foreignResolveOne>[2];
 }): Promise<TakeoverOutcome>;
 /**
  * 注册 /dsh-takeover/ 前缀路由。webServer 是宿主可选服务（CLI 形态没有），
  * 走 ctx.inject 缺席即跳过，不影响工具与 skill 注册面。
+ * opts.takeoverEnv：provider 停用闸（全部路由共用，缺省读真实设置开关；
+ * 测试注入假闸——isProviderEnabled 直读真实 HOME，测试不碰）。
  */
-export declare function registerTakeoverRoutes(ctx: Context): void;
+export declare function registerTakeoverRoutes(ctx: Context, opts?: {
+  takeoverEnv?: {
+    isEnabled: (p: ForeignProvider) => boolean;
+  };
+}): void;
 //#endregion
 //#region skills/handoff.d.ts
 /** /handoff 注册项 */
