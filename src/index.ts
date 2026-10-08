@@ -32,7 +32,7 @@ export { pushHandoff, inboxList, inboxLoad, factsToSections, handoffHostNotice }
 export type { PushArgs, PushResult, InboxItem, InboxListResult, InboxLoadResult } from './tools.ts'
 export { probeSessionEvents, collectFacts, todoToTasks } from './collect.ts'
 export type { ProbeResult, SessionFacts } from './collect.ts'
-export { FOREIGN_PROVIDERS, PROVIDER_TO_ADAPTER, disabledError, foreignSessionRead, foreignSessionsList, foreignSessionPreview, summarizeTurns, registerForeignTool, renderForeign } from './foreign.ts'
+export { FOREIGN_PROVIDERS, PROVIDER_TO_ADAPTER, disabledError, foreignSessionRead, foreignSessionsList, foreignSessionPreview, foreignResolveOne, summarizeTurns, registerForeignTool, renderForeign } from './foreign.ts'
 export type {
   ForeignProvider,
   ForeignReadArgs,
@@ -58,7 +58,8 @@ export {
   switchesPath,
 } from './settings.ts'
 export type { TakeoverState, TakeoverSwitches, PendingRow, ProviderRow } from './settings.ts'
-export { registerTakeoverRoutes } from './server.ts'
+export { registerTakeoverRoutes, admitTakeover, sessionControllerOf } from './server.ts'
+export type { SessionControllerLike, TakeoverMode, TakeoverOutcome } from './server.ts'
 export {
   skillRegistrations,
   handoffSkillRegistration,

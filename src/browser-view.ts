@@ -113,3 +113,35 @@ export function shortId(row: SessionRow): string {
   }
   return row.id
 }
+
+/**
+ * 子代理/工作流会话判定（确定性，零猜测）：id 与标题的既见模式。
+ * 证据：agent-sessions #49 与 cc-sessions #3 两家用户各自请求隐藏此类会话；
+ * 本机真实样本：`sess_subagent_*`、`sess_dwf-*`、标题 `workflow subagent actor#N@M`。
+ */
+export function isSubagentSession(row: SessionRow): boolean {
+  if (row.id.startsWith('sess_subagent_')) return true
+  if (/^sess_dwf-/.test(row.id)) return true
+  if (/^workflow (subagent|actor)/i.test(row.title)) return true
+  return false
+}
+
+/** cwd（项目）facet：basename 展示 + 完整 cwd 过滤键，按多→少排序（空 cwd 归「—」桶） */
+export function cwdFacets(rows: SessionRow[]): Array<{ cwd: string; label: string; count: number }> {
+  const freq = new Map<string, { label: string; count: number }>()
+  for (const r of rows) {
+    const label = r.cwd === '' ? '—' : (r.cwd.split(/[\\/]/).filter(Boolean).pop() ?? r.cwd)
+    const hit = freq.get(r.cwd)
+    if (hit !== undefined) hit.count += 1
+    else freq.set(r.cwd, { label, count: 1 })
+  }
+  return [...freq.entries()]
+    .map(([cwd, v]) => ({ cwd, label: v.label, count: v.count }))
+    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label))
+}
+
+/** cwd facet 过滤：null = 不过滤（原数组返回，不复制） */
+export function filterByCwd(rows: SessionRow[], cwd: string | null): SessionRow[] {
+  if (cwd === null) return rows
+  return rows.filter((r) => r.cwd === cwd)
+}

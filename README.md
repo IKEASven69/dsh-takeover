@@ -32,6 +32,8 @@ dsh-takeover 是**完整的接管环**：拉取外部会话、寄存当前会话
 2026-09 以来同类项目集中出现（调研底稿见 [docs/竞品动态-1003.md](./docs/竞品动态-1003.md)）。机制上的一句话区分：**他们做「转换后换一家 CLI 原生续跑」「跨设备同步」或「导航搜索」，我们做 harness 内接管**——
 
 - vs [casr](https://github.com/Dicklesworthstone/cross_agent_session_resumer)：casr 把会话转成规范模型后交给别家 CLI 原生 `resume`，转换层一旦跟不上上游存储布局变化就会整体失效（其 #26 即 opencode 迁 SQLite 中招）；我们把外来会话**只读拉进当前会话**蒸馏成卡，不写对方会话、不依赖对方 CLI 的 resume 能力，天然免疫转换产物损坏一类事故（其 #10）。
+- vs [harness-remote](https://github.com/giuliastro/harness-remote)：语义上最接近的对手——它的 cross-agent continuation 同样携带「有界可检上下文」并记录 lineage，但在目标家**创建原生会话**（写对方存储），lineage 记在它自家控制面、第三方工具读不到，无审计语义与安全闸；我们的六段卡 + `handoff: 1` 版本化协议 + `~/.handoff` 开放文件总线，任何工具可实现、可审计。
+- vs [agent-sessions](https://github.com/jazzyalex/agent-sessions)：跨家浏览器的头部（893★，连 DeepSeek Harness 都只读收录）——但它明确只读不交接，resume 是复制原生命令开自家 CLI。我们同样提供浏览（设置卡第五区），但浏览只是入口：**看到即可一键接管**。这条需求也被竞品用户逐字验证过（cc-sessions #43：用户请求「交接按钮 + 生成提示词发给另一家」）。
 - vs [agentctxsync](https://github.com/westsource/agentctxsync)：它做跨设备上下文同步；跨机器接力我们一句配置即得（见下节），核心差异仍在接管的审计语义。
 - vs [aisle](https://github.com/mashkovd/aisle)：它做跨 agent 会话的发现、规范化与全文搜索（导航定位）；我们不做搜索，做接管后的工作连续性。
 

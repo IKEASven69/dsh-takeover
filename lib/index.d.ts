@@ -371,6 +371,22 @@ export declare function foreignSessionsList(args: {
   provider?: string;
   limit?: number;
 }, deps?: ForeignReaders, env?: ForeignEnv): Promise<ForeignListResult>;
+type ForeignResolveResult = {
+  ok: true;
+  ref: SessionRef;
+} | {
+  ok: false;
+  error: string;
+  candidates?: ForeignListRow[];
+};
+/**
+ * 精确解析一条会话引用（FR-1 一键接管的后端步骤）：门控与工具同口径，
+ * 解析失败（not-found/ambiguous）回规范错误值；ambiguous 附候选。
+ */
+export declare function foreignResolveOne(args: {
+  provider?: string;
+  reference?: string;
+}, deps?: ForeignReaders, env?: ForeignEnv): Promise<ForeignResolveResult>;
 type ForeignPreviewResult = {
   ok: true;
   provider: string;
@@ -434,6 +450,8 @@ interface PendingRow {
   previewFromDone?: boolean;
   /** 空壳卡：六段全是兜底占位文本（噪音治理判据，客户端据此打标/折叠） */
   lowInfo: boolean;
+  /** 接力链：本卡接替的前置卡 id（信封 extras.supersedes——协议设计只随信封走，卡片本体不含；FR-4 链可视化）。非接力卡缺省 */
+  supersedes?: string;
 }
 /** 支持矩阵行：本机是否支持 / 发现的会话数 / 启用开关 */
 interface ProviderRow {
@@ -478,6 +496,58 @@ export declare function buildState(readers: ForeignReaders, dir?: string): Takeo
 export declare function clearArchived(dir?: string): number;
 //#endregion
 //#region src/server.d.ts
+/** 会话控制器最小面（对齐 dsh-api-session-controller 0.2.0-rc.2 的 Remote 形状；多退少补） */
+interface SessionControllerLike {
+  create(request?: {
+    cwd?: string;
+    workspaceId?: string;
+  }): Promise<{
+    sessionId: string;
+  }>;
+  rename(request: {
+    sessionId: string;
+    title: string;
+  }): Promise<unknown>;
+  prompt(request: {
+    requestId: string;
+    sessionId: string;
+    mode: 'queue' | 'steer';
+    content: Array<{
+      type: 'text';
+      text: string;
+    }>;
+    clientTimeZone?: string;
+  }, signal?: AbortSignal): Promise<{
+    accepted: true;
+  }>;
+}
+/** 防御式取宿主会话控制器：服务挂在根 ctx（本插件 ctx 未 inject 该服务名，
+ * 直接取会 throw「cannot get property without inject」——root 层即可达）。
+ * 缺席/形态不符回 undefined（FR-1 规范降级），绝不抛出。 */
+export declare function sessionControllerOf(ctx: unknown): SessionControllerLike | undefined;
+type TakeoverMode = 'take' | 'take_deposit' | 'inbox';
+type TakeoverOutcome = {
+  ok: true;
+  sessionId: string;
+  title: string;
+} | {
+  ok: false;
+  error: string;
+};
+/**
+ * 投递核心（可脱离 cordis 单测）：建新会话 → 改可找标题 → queue 模式投递指令。
+ * 指令与浏览器复制的载荷同一出处（browser-view 的 takeoverCommand/depositCommand），
+ * 「点按钮」和「手动粘贴」永远等价；mode=inbox 投递裸 /inbox（最小输入纪律）。
+ * 任何一步失败回规范错误值；已建会话的 id 随错误带出（不隐瞒孤儿会话）。
+ */
+export declare function admitTakeover(controller: SessionControllerLike, args: {
+  mode: TakeoverMode;
+  provider?: string;
+  reference?: string;
+}, deps?: {
+  resolve?: typeof foreignResolveOne;
+  random?: () => string;
+}): Promise<TakeoverOutcome>;
 /**
  * 注册 /dsh-takeover/ 前缀路由。webServer 是宿主可选服务（CLI 形态没有），
  * 走 ctx.inject 缺席即跳过，不影响工具与 skill 注册面。
@@ -565,5 +635,5 @@ export declare const name = "dsh-takeover";
 export declare const inject: string[];
 export declare function apply(ctx: Context): void;
 //#endregion
-export type { ForeignCandidate, ForeignEnv, ForeignListResult, ForeignListRow, ForeignPreviewResult, ForeignProvider, ForeignReadArgs, ForeignReadResult, ForeignReaders, ForeignResolve, ForeignSkeleton, ForeignSummary, ForeignTurn, InboxItem, InboxListResult, InboxLoadResult, PendingRow, ProbeResult, ProviderRow, PushArgs, PushResult, ResumeSkillSpec, SessionFacts, TakeoverState, TakeoverSwitches };
+export type { ForeignCandidate, ForeignEnv, ForeignListResult, ForeignListRow, ForeignPreviewResult, ForeignProvider, ForeignReadArgs, ForeignReadResult, ForeignReaders, ForeignResolve, ForeignSkeleton, ForeignSummary, ForeignTurn, InboxItem, InboxListResult, InboxLoadResult, PendingRow, ProbeResult, ProviderRow, PushArgs, PushResult, ResumeSkillSpec, SessionControllerLike, SessionFacts, TakeoverMode, TakeoverOutcome, TakeoverState, TakeoverSwitches };
 //# sourceMappingURL=index.d.ts.map

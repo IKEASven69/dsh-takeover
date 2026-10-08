@@ -229,6 +229,23 @@ test('buildState：无 coverage 卡时不产出 coverage 字段', () => {
   assert.equal(st.coverage, undefined)
 })
 
+// FR-4：接力链可视化数据面——supersedes 只随信封走（协议设计），buildState 从信封读进 PendingRow
+test('buildState：supersedes 从信封进 PendingRow（坏信封/缺信封不产出）', () => {
+  const home = freshHome()
+  const relay = makeCard()
+  const plain = makeCard()
+  writeCard(relay, home)
+  writeCard(plain, home)
+  const pd = join(home, 'pending')
+  writeFileSync(join(pd, `${relay.id}.envelope.json`), JSON.stringify({ handoff: 1, kind: 'envelope', id: relay.id, supersedes: 'ho-prev-0001' }), 'utf-8')
+  writeFileSync(join(pd, `${plain.id}.envelope.json`), 'not json{', 'utf-8') // 坏信封：不产出链字段，也不拖垮 state
+  const st = buildState(fakeReaders(), home)
+  const withChain = st.pending.filter((p) => p.supersedes !== undefined)
+  assert.equal(withChain.length, 1)
+  assert.equal(withChain[0]?.supersedes, 'ho-prev-0001')
+  assert.equal(st.inboxError, undefined)
+})
+
 // 回归（0.4.1）：全新安装首次 push 前 pending/ 不存在，buildState 曾误报「收件箱概览不可用：ENOENT」
 test('buildState：全新安装（pending/ 不存在）不进降级态，矩阵照常', () => {
   const home = mkdtempSync(join(tmpdir(), 'takeover-fresh-'))

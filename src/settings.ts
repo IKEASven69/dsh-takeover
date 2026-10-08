@@ -97,6 +97,8 @@ export interface PendingRow {
   previewFromDone?: boolean
   /** 空壳卡：六段全是兜底占位文本（噪音治理判据，客户端据此打标/折叠） */
   lowInfo: boolean
+  /** 接力链：本卡接替的前置卡 id（信封 extras.supersedes——协议设计只随信封走，卡片本体不含；FR-4 链可视化）。非接力卡缺省 */
+  supersedes?: string
 }
 
 /** 预览截断长度（服务端截，避免长卡片把 state 撑大） */
@@ -188,6 +190,7 @@ export function buildState(readers: ForeignReaders, dir?: string): TakeoverState
     pending = uniqueCards.map((c) => {
       const pv = previewOf(c)
       const raw = cardTexts.get(c.id)
+      const extras = c.extras as { supersedes?: unknown } | undefined
       return {
         id: c.id,
         agent: c.from.agent, // 空串交给客户端词典渲染兜底文案（host 侧中文字面量会漏进 EN 界面与导出）
@@ -197,6 +200,7 @@ export function buildState(readers: ForeignReaders, dir?: string): TakeoverState
         preview: pv.text,
         previewFromDone: pv.fromDone,
         lowInfo: raw !== undefined ? isLowInfoCardMarkdown(raw) : false,
+        ...(typeof extras?.supersedes === 'string' && extras.supersedes !== '' ? { supersedes: extras.supersedes } : {}),
       }
     })
 
@@ -211,6 +215,7 @@ export function buildState(readers: ForeignReaders, dir?: string): TakeoverState
     }
     if (pdExists) {
       const liveIds = new Set(uniqueCards.map((c) => c.id))
+      const supersedesByOwner = new Map<string, string>()
       for (const f of readdirSync(pd)) {
         if (!f.endsWith('.envelope.json')) continue
         try {
@@ -222,9 +227,21 @@ export function buildState(readers: ForeignReaders, dir?: string): TakeoverState
             continue
           }
           envelopeChars = (envelopeChars ?? 0) + statSync(join(pd, f)).size
+          // FR-4 链数据源：supersedes 按协议设计只随信封走（机器层元数据不进卡片本体）；
+          // 坏信封不拦统计，条数上限防巨量信封放大
+          if (supersedesByOwner.size < 200) {
+            try {
+              const env = JSON.parse(readFileSync(join(pd, f), 'utf-8')) as { supersedes?: unknown }
+              if (typeof env.supersedes === 'string' && env.supersedes !== '') supersedesByOwner.set(ownerId, env.supersedes)
+            } catch { /* 单信封解析失败不影响统计 */ }
+          }
         } catch {
           /* 单项 stat/删除失败不计入 */
         }
+      }
+      for (const p of pending) {
+        const sup = supersedesByOwner.get(p.id)
+        if (sup !== undefined) p.supersedes = sup
       }
     }
   } catch (e) {

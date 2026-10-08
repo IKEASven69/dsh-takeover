@@ -42,8 +42,11 @@ import {
 import type { PendingGroup, SeenStore } from './inbox-view.ts'
 import type { TakeoverState, PendingRow, ProviderRow } from './settings.ts'
 import {
+  cwdFacets,
   depositCommand,
+  filterByCwd,
   filterSessions,
+  isSubagentSession,
   relTime,
   shortId,
   takeoverCommand,
@@ -827,7 +830,7 @@ ${matrixRows}
 // 展示件
 // ---------------------------------------------------------------------------
 
-function PendingList({ rows, query, home, t, lang, onExport }: {
+function PendingList({ rows, query, home, t, lang, onExport, onChainFilter, onTakeInbox, takeBusy }: {
   rows: PendingRow[]
   query: string
   /** 解析后的 HANDOFF_HOME（state.home）：已见集合 localStorage 键的散列源 */
@@ -836,6 +839,11 @@ function PendingList({ rows, query, home, t, lang, onExport }: {
   lang: Lang
   /** 单卡导出（展开态「导出 .md」按钮），下载逻辑在 Panel */
   onExport: (p: PendingRow) => void
+  /** FR-4：按接力链过滤（把查询词设为前置卡 id） */
+  onChainFilter: (id: string) => void
+  /** FR-1：一键取件（新建会话投递 /inbox），投递态在 Panel */
+  onTakeInbox: (p: PendingRow) => void
+  takeBusy: boolean
 }): ReturnType<typeof createElement> {
   // 已见集合：localStorage 按 HANDOFF_HOME 散列分键；打开过（展开过）即记为已见。
   // 存储不可写时退化为仅本会话记住（loadSeenSet/saveSeenSet 全程不抛）。
@@ -975,6 +983,13 @@ function PendingList({ rows, query, home, t, lang, onExport }: {
           createElement('span', { className: 'bt-pending-title' }, p.title !== '' ? p.title : p.id),
           isNew ? createElement('span', { className: 'bt-tag bt-tag-new' }, t('newBadge')) : null,
           p.lowInfo === true ? createElement('span', { className: 'bt-tag bt-tag-lowinfo' }, t('lowInfoBadge')) : null,
+          // FR-4：接力链徽标（展示位；过滤入口在展开态「只看此链」——行内不嵌交互，ARIA 禁则同前）
+          p.supersedes !== undefined
+            ? createElement('span', {
+                className: 'bt-tag bt-tag-group',
+                title: t('chainBadgeTitle', { id: p.supersedes }),
+              }, t('chainBadge', { id: p.supersedes.length > 16 ? `${p.supersedes.slice(0, 16)}…` : p.supersedes }))
+            : null,
           createElement('span', { className: 'bt-pend-time' }, p.pushedAt === '' ? t('noTime') : fmtTime(p.pushedAt, lang)),
         ),
         createElement('span', {
@@ -994,6 +1009,19 @@ function PendingList({ rows, query, home, t, lang, onExport }: {
         createElement('span', null, p.preview !== '' ? p.preview : t('previewEmpty')),
         createElement('span', { className: 'bt-preview-actions' },
           createElement('span', { className: 'bt-preview-hint' }, t('previewHint')),
+          p.supersedes !== undefined
+            ? createElement('button', {
+                className: 'bt-btn',
+                onClick: () => { onChainFilter(p.supersedes as string) },
+                title: t('chainFilterTitle', { id: p.supersedes }),
+              }, t('chainFilterBtn'))
+            : null,
+          createElement('button', {
+            className: 'bt-btn',
+            disabled: takeBusy,
+            onClick: () => { onTakeInbox(p) },
+            title: t('inboxTakeTitle'),
+          }, takeBusy ? t('deliveringBtn') : t('inboxTakeBtn')),
           createElement('button', {
             className: 'bt-btn',
             onClick: () => { onExport(p) },
@@ -1131,6 +1159,12 @@ function ForeignBrowser({ state, t, lang, onError }: {
   const [lists, setLists] = useState<Record<string, SessionListBody>>({})
   const [loading, setLoading] = useState<string | null>(null)
   const [query, setQuery] = useState('')
+  // FR-3：项目（cwd）facet 选中键；FR-2：子代理组展开态
+  const [cwdSel, setCwdSel] = useState<string | null>(null)
+  const [subOpen, setSubOpen] = useState(false)
+  // FR-1：一键接管投递态（busyKey 防双击；delivered 成功回执）
+  const [busyKey, setBusyKey] = useState<string | null>(null)
+  const [deliveredKey, setDeliveredKey] = useState<string | null>(null)
   // 预览：单行展开（openId），按会话 id 缓存
   const [openId, setOpenId] = useState<string | null>(null)
   const [previews, setPreviews] = useState<Record<string, PreviewEntry>>({})
@@ -1177,6 +1211,34 @@ function ForeignBrowser({ state, t, lang, onError }: {
   const list = sel !== null ? lists[sel] : undefined
   const provider = sel ?? ''
   const clip = (s: string, n = 260): string => (s.length > n ? `${s.slice(0, n)}…` : s)
+
+  /** FR-1 一键接管：POST 宿主投递（建新会话+queue 指令）；失败（含宿主缺控制器）
+   * 自动退回复制路径——按钮与手动粘贴的载荷同源（takeoverCommand/depositCommand），
+   * 降级永不改变语义，只多一步粘贴。 */
+  const runTakeover = (key: string, mode: 'take' | 'take_deposit', id: string): void => {
+    if (busyKey !== null) return
+    const fallback = mode === 'take_deposit' ? depositCommand(provider, id, lang) : takeoverCommand(provider, id)
+    setBusyKey(key)
+    void post<{ ok: true; sessionId: string; title: string } | { ok: false; error: string }>(
+      '/dsh-takeover/takeover',
+      { mode, provider, reference: id },
+    )
+      .then((r) => {
+        if (!r.ok) throw new Error(r.error)
+        setDeliveredKey(key)
+        return undefined
+      })
+      .catch(() => {
+        copyText(fallback)
+          .then(() => {
+            setCopied(key)
+            window.clearTimeout(copyTimer.current)
+            copyTimer.current = window.setTimeout(() => setCopied(null), 2400)
+          })
+          .catch((e: unknown) => onError(e instanceof Error ? e.message : String(e)))
+      })
+      .finally(() => setBusyKey(null))
+  }
 
   const line = (label: string, text: string, key?: string): ReturnType<typeof createElement> =>
     createElement('div', { className: 'bt-fsprev-line', key },
@@ -1249,22 +1311,59 @@ function ForeignBrowser({ state, t, lang, onError }: {
           createElement('button', {
             className: 'bt-btn bt-btn-xs',
             type: 'button',
+            disabled: busyKey !== null,
             title: t('takeoverTitle'),
-            onClick: () => copy(`take:${r.id}`, takeoverCommand(provider, r.id)),
-          }, copied === `take:${r.id}` ? t('copiedBtn') : t('takeoverBtn')),
+            onClick: () => runTakeover(`take:${r.id}`, 'take', r.id),
+          },
+            deliveredKey === `take:${r.id}` ? t('deliveredBtn')
+            : busyKey === `take:${r.id}` ? t('deliveringBtn')
+            : copied === `take:${r.id}` ? t('fallbackCopyBtn')
+            : t('takeoverBtn')),
           createElement('button', {
             className: 'bt-btn bt-btn-xs',
             type: 'button',
+            disabled: busyKey !== null,
             title: t('depositTitle'),
-            onClick: () => copy(`dep:${r.id}`, depositCommand(provider, r.id, lang)),
-          }, copied === `dep:${r.id}` ? t('copiedBtn') : t('depositBtn')),
+            onClick: () => runTakeover(`dep:${r.id}`, 'take_deposit', r.id),
+          },
+            deliveredKey === `dep:${r.id}` ? t('deliveredBtn')
+            : busyKey === `dep:${r.id}` ? t('deliveringBtn')
+            : copied === `dep:${r.id}` ? t('fallbackCopyBtn')
+            : t('depositBtn')),
         ),
       ),
       open ? previewNode(r.id) : null,
     )
   }
 
-  const visible = list !== undefined ? filterSessions(list.sessions, query) : []
+  const matched = list !== undefined ? filterByCwd(filterSessions(list.sessions, query), cwdSel) : []
+  // FR-2：子代理/工作流会话收进次级折叠组（agent-sessions #49、cc-sessions #3 两家用户各自请求）
+  const subRows = matched.filter(isSubagentSession)
+  const visible = matched.filter((r) => !isSubagentSession(r))
+  // FR-3：facet 计数随查询走（不含自身 cwd 选择，保持各 facet 计数可点）
+  const facets = list !== undefined ? cwdFacets(filterSessions(list.sessions, query)) : []
+
+  // FR-2 次级折叠组（与收件箱低信息组同款交互：组头开合，默认收起）
+  const subGroupNode = subRows.length > 0
+    ? createElement('div', { className: 'bt-group', key: 'fs-sub' },
+        createElement('div', {
+          className: `bt-pending${subOpen ? ' bt-pending-open' : ''}`,
+          role: 'button',
+          tabIndex: 0,
+          'aria-expanded': subOpen,
+          'aria-label': t('subagentGroup', { n: subRows.length }),
+          onClick: () => setSubOpen(!subOpen),
+          onKeyDown: (e: { key: string; preventDefault(): void }) => {
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSubOpen(!subOpen) }
+          },
+        },
+          createElement('span', { className: 'bt-tag bt-tag-lowinfo' }, t('subagentBadge')),
+          createElement('span', { className: 'bt-pending-title' }, t('subagentGroup', { n: subRows.length })),
+          createElement('span', { className: 'bt-pending-chev', 'aria-hidden': true }, '▸'),
+        ),
+        subOpen ? subRows.map(rowNode) : null,
+      )
+    : null
 
   return createElement('div', { className: 'bt-card' },
     createElement('div', { className: 'bt-head' },
@@ -1320,9 +1419,24 @@ function ForeignBrowser({ state, t, lang, onError }: {
               : t('browserTotal', { m: list.total, n: list.sessions.length }),
             list.note !== undefined ? ` · ${t('browserNote', { note: list.note })}` : '',
           ),
-          list.total > 0 && visible.length === 0
+          list.total > 0 && facets.length > 1
+            ? createElement('div', { className: 'bt-chips', key: 'fs-cwd', role: 'group', 'aria-label': t('facetCwdAria'), style: { marginTop: 6 } },
+                ...facets.map((f) => createElement('button', {
+                  key: f.cwd === '' ? '(empty)' : f.cwd,
+                  className: `bt-chip${cwdSel === f.cwd ? ' bt-chip-on' : ''}`,
+                  'aria-pressed': cwdSel === f.cwd,
+                  type: 'button',
+                  title: f.cwd === '' ? undefined : f.cwd,
+                  onClick: () => setCwdSel(cwdSel === f.cwd ? null : f.cwd),
+                },
+                  createElement('span', { className: 'bt-chip-label' }, f.label),
+                  createElement('span', { className: 'bt-chip-count' }, String(f.count)),
+                )),
+              )
+            : null,
+          list.total > 0 && matched.length === 0
             ? createElement('div', { className: 'bt-banner bt-banner-info', key: 'fs-nomatch' }, t('browserFilterEmpty'))
-            : createElement('div', { key: 'fs-rows' }, visible.map(rowNode)),
+            : createElement('div', { key: 'fs-rows' }, visible.map(rowNode), subGroupNode),
         ],
   )
 }
@@ -1398,6 +1512,27 @@ function Panel({ t, locale }: { t: Translate; locale: LocaleRuntime | undefined 
   const [confirmClear, setConfirmClear] = useState(false)
   // 收件箱即时过滤词：空串 = 不过滤（纯前端，输入即滤，清空恢复）
   const [query, setQuery] = useState('')
+  // FR-1：取件投递态 + 操作回执横幅（成功走 notice 8s 自清；失败走 error 横幅）
+  const [takeBusy, setTakeBusy] = useState(false)
+  const [notice, setNotice] = useState<string | null>(null)
+  const noticeTimer = useRef<number | undefined>(undefined)
+  const showNotice = (msg: string): void => {
+    setNotice(msg)
+    window.clearTimeout(noticeTimer.current)
+    noticeTimer.current = window.setTimeout(() => setNotice(null), 8000)
+  }
+  const takeInbox = (_p: PendingRow): void => {
+    if (takeBusy) return
+    setTakeBusy(true)
+    void post<{ ok: true; sessionId: string; title: string } | { ok: false; error: string }>('/dsh-takeover/takeover', { mode: 'inbox' })
+      .then((r) => {
+        if (!r.ok) throw new Error(r.error)
+        showNotice(t('deliveredNotice', { title: r.title }))
+        return undefined
+      })
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setTakeBusy(false))
+  }
   // 语言切换实时重渲染：宿主 locale revision 变化即重画（bound t 在渲染时取词）
   useSyncExternalStore(
     (cb) => {
@@ -1536,6 +1671,7 @@ function Panel({ t, locale }: { t: Translate; locale: LocaleRuntime | undefined 
         createElement('button', { className: 'bt-btn', onClick: reload, disabled: busy !== null }, t('refresh')),
       ),
       error !== null ? createElement('div', { className: 'bt-banner bt-banner-err' }, error) : null,
+      notice !== null ? createElement('div', { className: 'bt-banner bt-banner-info' }, notice) : null,
     ),
 
     // 命令速览（直接可见）
@@ -1611,6 +1747,9 @@ function Panel({ t, locale }: { t: Translate; locale: LocaleRuntime | undefined 
             t,
             lang,
             onExport: exportOne,
+            onChainFilter: (id: string) => { setQuery(id) },
+            onTakeInbox: takeInbox,
+            takeBusy,
           })
         : createElement('div', { className: 'bt-sub' }, t('loading')),
     ),

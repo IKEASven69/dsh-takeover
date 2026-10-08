@@ -427,6 +427,47 @@ export async function foreignSessionsList(
   }
 }
 
+export type ForeignResolveResult =
+  | { ok: true; ref: SessionRef }
+  | { ok: false; error: string; candidates?: ForeignListRow[] }
+
+/**
+ * 精确解析一条会话引用（FR-1 一键接管的后端步骤）：门控与工具同口径，
+ * 解析失败（not-found/ambiguous）回规范错误值；ambiguous 附候选。
+ */
+export async function foreignResolveOne(
+  args: { provider?: string; reference?: string },
+  deps?: ForeignReaders,
+  env?: ForeignEnv,
+): Promise<ForeignResolveResult> {
+  try {
+    const gate = await providerGate(args.provider, deps, env)
+    if (!gate.ok) return gate
+    const provider = (args.provider ?? '').trim().toLowerCase()
+    const reference = (args.reference ?? '').trim()
+    if (reference === '') return { ok: false, error: `缺少会话引用（provider：${provider}）` }
+    let resolved: ForeignResolve
+    try {
+      resolved = gate.readers.resolve(gate.adapter, reference)
+    } catch (e) {
+      return { ok: false, error: `解析 ${provider} 会话引用失败：${e instanceof Error ? e.message : String(e)}` }
+    }
+    if (resolved.kind === 'not-found') {
+      return { ok: false, error: `${provider} 找不到会话：${reference}` }
+    }
+    if (resolved.kind === 'ambiguous') {
+      return {
+        ok: false,
+        error: `引用「${reference}」歧义：命中 ${resolved.candidates.length} 个会话（一键接管按完整 id 取件，不该走到这）`,
+        candidates: resolved.candidates.slice(0, 5).map(rowOfRef),
+      }
+    }
+    return { ok: true, ref: resolved.ref }
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) }
+  }
+}
+
 export type ForeignPreviewResult =
   | {
       ok: true
