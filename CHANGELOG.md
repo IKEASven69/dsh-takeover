@@ -54,6 +54,7 @@
 - 单测 158/158（browser.spec 新增 11 条：轻量列表不碰 readSession / 门控三连 / limit 夹取 / 假 0 哨兵 / 预览不吐原文 / 过滤·相对时间·指令生成）；此前轮 123/123（7 条审查回归）；smoke-foreign 与 smoke-userflow（46 断言）双绿
 
 ### 文档
+- **竞品动态-1008（直接访问网站调研，绕开搜索工具配额）**：逐仓核实 9 个同类项目（GitHub API + HN API）。结论：「浏览」层已是红海（agent-sessions 893★，连 DeepSeek Harness 都只读收录），harness-remote 403★ 的 cross-agent continuation（有界上下文 + lineage）成为语义上最接近的对手；但「开放文件总线协议 handoff:1 / 证据账本四态 / 安全闸族 / harness 内嵌」四点经全样本核对仍独占。README 竞品段与 harness-remote 盯梢列入动作建议
 - skill 两处承诺对齐实现：/resume-claude 边界由「沿可恢复分支读取，排除私密与被替换内容」改为如实描述（全量读取，thinking 以 [thinking] 标记保留）；inert-history 段「隐藏推理已排除」改为「[thinking] 标记段不蒸馏进卡片」——姊妹仓 zcode 读取器同批补上此前缺失的推理标记
 - README 双语「协议语义五条」补第六条「反向锚定+剪枝」；en 版开发节补 smoke-userflow 一行
 - handoff_push 工具描述「六段（…suggested）」实列 7 项——改为「六段 + 可选 suggested」
