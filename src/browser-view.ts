@@ -146,3 +146,25 @@ export function filterByCwd(rows: SessionRow[], cwd: string | null): SessionRow[
   if (cwd === null) return rows
   return rows.filter((r) => r.cwd === cwd)
 }
+
+/**
+ * 一键接管闭环（v2）：投递成功后让整个应用切换到新会话——uiWorkspace 是宿主
+ * 客户端的导航服务（官方 sidebar 即 ctx.get("uiWorkspace").openSession(id)）。
+ * 返回是否切换成功；服务缺席/形态不符回 false（降级：面板展示「去会话树找」），
+ * 全程不抛出。ctx 以 unknown 进出——本模块保持零依赖（无 react/cordis 值引入）。
+ */
+export function uiNavigatorOf(ctx: unknown): (sessionId: string) => boolean {
+  return (sessionId: string): boolean => {
+    try {
+      const nav = (ctx as { get?: (name: string) => unknown }).get?.('uiWorkspace') as
+        | { openSession?: (id: string) => void }
+        | undefined
+      if (nav === null || typeof nav !== 'object') return false
+      if (typeof (nav as { openSession?: unknown }).openSession !== 'function') return false
+      ;(nav as { openSession: (id: string) => void }).openSession(sessionId)
+      return true
+    } catch {
+      return false
+    }
+  }
+}

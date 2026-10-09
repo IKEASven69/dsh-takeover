@@ -50,6 +50,7 @@ import {
   relTime,
   shortId,
   takeoverCommand,
+  uiNavigatorOf,
 } from './browser-view.ts'
 import type { SessionListBody, SessionPreviewBody, SessionRow } from './browser-view.ts'
 
@@ -1160,13 +1161,15 @@ interface PreviewEntry {
   error: string | null
 }
 
-function ForeignBrowser({ state, t, lang, onError, onNotice }: {
+function ForeignBrowser({ state, t, lang, onError, onNotice, navigate }: {
   state: TakeoverState | null
   t: Translate
   lang: Lang
   onError: (msg: string) => void
   /** 软回执横幅（FR-1 降级原因等，8s 自清）——审查 C5：降级不吞错 */
   onNotice: (msg: string) => void
+  /** 投递成功后切换到新会话（宿主 uiWorkspace.openSession；缺席回 false 走树内提示） */
+  navigate: (sessionId: string) => boolean
 }): ReturnType<typeof createElement> {
   const providers = state?.providers ?? []
   // 选中家：默认不选（面板打开不扫盘），点哪家读哪家；列表按家缓存
@@ -1247,6 +1250,8 @@ function ForeignBrowser({ state, t, lang, onError, onNotice }: {
       .then((r) => {
         if (!r.ok) throw new Error(r.error)
         setDeliveredKey(key)
+        const switched = navigate(r.sessionId)
+        onNotice(t(switched ? 'deliveredNoticeNav' : 'deliveredNotice', { title: r.title }))
         return undefined
       })
       .catch((e: unknown) => {
@@ -1531,7 +1536,7 @@ class PanelBoundary extends Component<{ children: ReturnType<typeof createElemen
   }
 }
 
-function Panel({ t, locale }: { t: Translate; locale: LocaleRuntime | undefined }): ReturnType<typeof createElement> {
+function Panel({ t, locale, navigate }: { t: Translate; locale: LocaleRuntime | undefined; navigate: (sessionId: string) => boolean }): ReturnType<typeof createElement> {
   const [state, setState] = useState<TakeoverState | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
@@ -1555,7 +1560,8 @@ function Panel({ t, locale }: { t: Translate; locale: LocaleRuntime | undefined 
     void post<{ ok: true; sessionId: string; title: string } | { ok: false; error: string }>('/dsh-takeover/takeover', { mode: 'inbox', reference: p.id })
       .then((r) => {
         if (!r.ok) throw new Error(r.error)
-        showNotice(t('deliveredNotice', { title: r.title }))
+        const switched = navigate(r.sessionId)
+        showNotice(t(switched ? 'deliveredNoticeNav' : 'deliveredNotice', { title: r.title }))
         return undefined
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
@@ -1782,8 +1788,8 @@ function Panel({ t, locale }: { t: Translate; locale: LocaleRuntime | undefined 
         : createElement('div', { className: 'bt-sub' }, t('loading')),
     ),
 
-    // 外部会话浏览器（浏览 + 一键投递；卡片蒸馏仍在会话里由模型完成）
-    createElement(ForeignBrowser, { state, t, lang, onError: (msg) => setError(msg), onNotice: showNotice }),
+    // 外部会话浏览器（浏览 + 一键投递 + 投递后自动切会话；卡片蒸馏仍在会话里由模型完成）
+    createElement(ForeignBrowser, { state, t, lang, onError: (msg) => setError(msg), onNotice: showNotice, navigate }),
 
     // 支持矩阵
     createElement('div', { className: 'bt-card' },
@@ -1818,7 +1824,7 @@ export function apply(ctx: Context): void {
       const t = makeT(ctx)
       return createElement(PanelBoundary, {
         t,
-        children: createElement(Panel, { t, locale: resolveLocale(ctx) }),
+        children: createElement(Panel, { t, locale: resolveLocale(ctx), navigate: uiNavigatorOf(ctx) }),
       })
     },
   ))

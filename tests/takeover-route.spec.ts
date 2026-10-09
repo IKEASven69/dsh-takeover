@@ -14,7 +14,7 @@ import {
   sessionControllerOf,
   type SessionControllerLike,
 } from '../src/index.ts'
-import { cwdFacets, filterByCwd, isSubagentSession, type SessionRow } from '../src/browser-view.ts'
+import { cwdFacets, filterByCwd, isSubagentSession, shortId, uiNavigatorOf, type SessionRow } from '../src/browser-view.ts'
 
 /** 录音式假控制器：记录调用序列，行为可编排 */
 function fakeController(overrides?: Partial<Record<'create' | 'rename' | 'prompt', (...a: never[]) => unknown>>): {
@@ -319,4 +319,21 @@ test('cwdFacets + filterByCwd：basename 计数排序、空 cwd 归「—」桶�
   assert.deepEqual(filterByCwd(rows, null).length, 5)
   assert.equal(filterByCwd(rows, 'D:\\work\\lab').length, 2)
   assert.equal(filterByCwd(rows, '').length, 1, '空 cwd 桶可被选为过滤')
+})
+
+// ---------- 一键接管闭环 v2：投递后自动切换会话（uiWorkspace） ----------
+
+test('uiNavigatorOf：宿主 uiWorkspace 可达时切会话并返回 true；缺席/抛错/形态不符全回 false', () => {
+  const opened: string[] = []
+  const ok = uiNavigatorOf({ get: (name: string) => (name === 'uiWorkspace' ? { openSession: (id: string) => { opened.push(id) } } : undefined) })
+  assert.equal(ok('sess-9'), true)
+  assert.deepEqual(opened, ['sess-9'])
+
+  // cordis 纪律：未挂载服务的 get 会 throw——不抛出，回 false 降级
+  const throwing = uiNavigatorOf({ get: () => { throw new Error('cannot get property without inject') } })
+  assert.equal(throwing('sess-9'), false)
+
+  assert.equal(uiNavigatorOf({})( 'sess-9'), false)
+  assert.equal(uiNavigatorOf({ get: () => 'not-an-object' })('sess-9'), false)
+  assert.equal(uiNavigatorOf({ get: () => ({ openSession: 'nope' }) })('sess-9'), false)
 })

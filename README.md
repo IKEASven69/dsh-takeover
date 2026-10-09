@@ -12,6 +12,7 @@ dsh-takeover 是 DeepSeek Harness（DSH）插件，实现 `handoff: 1` 开放协
 - **拉**：`/resume-claude` `/resume-codex` `/resume-opencode` `/resume-zcode` `/resume-pi` `/resume-workbuddy` `/resume-cursor` `/resume-grok` —— 把别家 agent 的本地会话只读拉进当前会话，蒸馏成六段协议卡接手工作；
 - **推**：`/handoff` + `handoff_push` —— 把当前会话寄存成一张交接卡片，落共享收件箱；
 - **接管**：`/inbox` + `handoff_inbox` —— 任何 agent 开局取件；拉取的会话也可以顺手寄存，让另一个 agent 接着干。
+- **浏览 + 一键接管**（设置卡）：不用记命令——面板里浏览八家最近会话（标题/时间/项目，可展开预览首条请求与停点），点「接管」直接新建会话投递指令并自动切换过去看模型接手；失败自动退回复制指令。
 
 ```
 ~/.handoff/
