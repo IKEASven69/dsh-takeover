@@ -337,8 +337,15 @@ export function registerTakeoverRoutes(
                 }
                 const run = admitTakeover(controller, { mode: mode as TakeoverMode, provider, reference, lang }, { env })
                 takeoverMemo.set(key, { at: Date.now(), run })
+                // 结果落地 10s 后清条目（去重窗 5s 之内仍可命中）：Map 不随使用历史无界增长
                 void run.then(
-                  (r) => { sendJson(response, 200, r) },
+                  (r) => {
+                    sendJson(response, 200, r)
+                    setTimeout(() => {
+                      const cur = takeoverMemo.get(key)
+                      if (cur !== undefined && cur.run === run) takeoverMemo.delete(key)
+                    }, 10_000)
+                  },
                   // admitTakeover 承诺不 reject——此 catch 只兜绝对意外，不让 unhandled rejection 出门
                   (e: unknown) => { sendJson(response, 500, { ok: false, error: e instanceof Error ? e.message : String(e) }) },
                 )

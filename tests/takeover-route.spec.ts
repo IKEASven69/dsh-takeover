@@ -236,6 +236,26 @@ test('路由 S3：停用 provider 一键接管被拒（env 贯通路由）', asy
   assert.match((JSON.parse(r.body) as { error: string }).error, /停用/)
 })
 
+test('路由 S8：同键短窗去重——两次同体请求只真实投递一次（防重复建会话）', async () => {
+  const { controller, calls } = fakeController()
+  const handler = routeHandler({ root: { sessionController: controller } })
+  const r1 = await callRoute(handler, { headers: { ...ORIGIN }, body: '{"mode":"inbox"}' })
+  const r2 = await callRoute(handler, { headers: { ...ORIGIN }, body: '{"mode":"inbox"}' })
+  assert.equal(r1.status, 200)
+  assert.equal(r2.status, 200)
+  const creates = calls.filter((c) => c.startsWith('create:')).length
+  assert.equal(creates, 1, `同键去重失效：create 被调了 ${creates} 次`)
+  assert.equal((JSON.parse(r2.body) as { ok: boolean }).ok, true, '去重命中的第二次请求也回成功结果')
+})
+
+test('路由：不同键不去重（不同卡各投各的）', async () => {
+  const { controller, calls } = fakeController()
+  const handler = routeHandler({ root: { sessionController: controller } })
+  await callRoute(handler, { headers: { ...ORIGIN }, body: '{"mode":"inbox","reference":"ho-a"}' })
+  await callRoute(handler, { headers: { ...ORIGIN }, body: '{"mode":"inbox","reference":"ho-b"}' })
+  assert.equal(calls.filter((c) => c.startsWith('create:')).length, 2)
+})
+
 // ---------- sessionControllerOf：防御访问 ----------
 
 test('sessionControllerOf：官方形态可用；根层可达（cordis inject 纪律）；缺方法/属性缺失抛错全回 undefined', () => {
