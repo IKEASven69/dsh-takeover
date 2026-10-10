@@ -1,0 +1,21 @@
+name: CI
+
+# 每次 push/PR 跑完整门禁：typecheck + 单测全量 + 构建（178→181 条的承诺变成机器门槛）。
+# 说明：@deepseek-ai/* 以 devDependencies 安装（host 运行时注入运行时依赖，
+# 构建期只需类型与打包器）；node >= 22（package.json engines 同款）。
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run check

@@ -4,3 +4,9 @@ node_modules/
 .turbo/
 # 注意：lib/ 产物入库（外部用户没有 dsh checkout 无法构建，dsh-hippo 的教训）
 *.tgz
+
+# 本地测试证据与内部测试档案：含真机会话截图/ids/内容——发给别人用的隐私面，不入库
+test-artifacts/
+docs/测试会话全量档案-*.md
+docs/测试报告-*.md
+docs/全场景测试文档.md
