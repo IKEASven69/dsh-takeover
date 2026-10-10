@@ -1,0 +1,129 @@
+## HN 故事：「claude code codex」（命中 5179）
+- [253分/50评] A Claude Code and Codex Skill for Deliberate Skill Development | https://github.com/DrCatHicks/learning-opportunities | 2026-05-14 | objectID=48130679
+- [147分/161评] Launch HN: Omnara (YC S25) – Run Claude Code and Codex from anywhere | (无链接) | 2026-02-12 | objectID=46991591
+- [138分/36评] Show HN: Skill that lets Claude Code/Codex spin up VMs and GPUs | https://cloudrouter.dev/ | 2026-02-13 | objectID=47006393
+- [128分/26评] Brainless: Shadcn components that look like Claude Code, Codex and Grok | https://brainless.swerdlow.dev | 2026-07-15 | objectID=48926085
+- [116分/79评] Claude Code and Codex can have real-time conversation via Git | https://medium.com/@Koukyosyumei/claude-code-and-codex-can-have-real-time-conversation-via-git-f95b696c1c05 | 2026-05-31 | objectID=48345837
+- [105分/79评] Show HN: Boxes.dev: ditch localhost; run Claude Code and Codex in the cloud | https://boxes.dev | 2026-06-04 | objectID=48399358
+- [98分/80评] Agent-Manager: A Tmux TUI for Running Claude Code, Codex and OpenCode | https://github.com/YoanWai/agent-manager | 2026-07-30 | objectID=49107749
+- [75分/38评] Agent skills that bring team coding standards to Claude Code and Codex | https://github.com/tikalk/adlc-team-skills | 2026-08-04 | objectID=49169640
+
+## HN 故事：「multiple AI coding agents」（命中 282）
+- [5分/2评] Show HN: Baag – Easily run multiple AI coding agents on the same project | https://github.com/pranav7/baag | 2025-07-26 | objectID=44690070
+- [4分/3评] Show HN: Commander AI – Mac UI for Claude Code | https://commanderai.app/ | 2026-01-17 | objectID=46653892
+
+## HN 故事：「switching between coding agents」（命中 40）
+- [15分/4评] Show HN: Modulus – Cross-repository knowledge orchestration for coding agents | https://modulus.so | 2026-03-10 | objectID=47327351
+- [10分/10评] Show HN: jmux – tmux-based development environment for humans and coding agents | https://github.com/jarredkenny/jmux | 2026-04-05 | objectID=47650233
+- [1分/3评] Show HN: Delegator – Stop juggling coding-agent sessions | https://alcubi.ai/delegator/ | 2026-10-06 | objectID=49981900
+- [1分/3评] Ask HN: How do you handle hitting AI coding agent usage limits? | (无链接) | 2026-09-30 | objectID=49904074
+
+## HN 故事：「AI coding agent workflow」（命中 470）
+- [4分/5评] Show HN: Kelos – Define your AI coding agent workflow as YAML on Kubernetes | https://github.com/kelos-dev/kelos | 2026-03-02 | objectID=47218469
+- [37分/13评] Show HN: Autofix Bot – Hybrid static analysis and AI code review agent | (无链接) | 2025-12-11 | objectID=46237358
+- [8分/3评] Show HN: VAEN – Package and import portable AI coding-agent Harnesses | https://github.com/sjhalani7/vaen | 2026-05-27 | objectID=48300485
+- [8分/7评] Show HN: eBook to audiobook narration with realistic AI voices | https://ebookaloud.com | 2026-06-24 | objectID=48661083
+- [7分/8评] Ask HN: Do you "micro-manage" your agents? | (无链接) | 2026-01-23 | objectID=46736682
+- [6分/0评] Show HN: Devplan – Generate specs and coding prompts with deep context | https://www.devplan.com/ | 2025-08-28 | objectID=45053581
+
+## BloopAI/vibe-kanban（13 条 issue）
+- [open] #3477 Add optional external_url/external_id fields to Issues（无标签，评论 0）
+  ## Request Please add optional `external_url` and/or `external_id` fields to Vibe Kanban Issues. Ideally these would be accepted by the MCP `create_issue` and `update_issue` tools, persisted on the Is
+- [open] #3476 Carry approved project decisions between Vibe Kanban workspaces（无标签，评论 0）
+  I’m Vivek Gupta, Founder & CEO of MemCode (memcode.in). Vibe Kanban gives each coding task its own workspace and agent session; a decision from task A can be useful to the agent working on task B. Cou
+- [open] #3472 Fix security advisory link（无标签，评论 0）
+  Hey following link is broken, I'm trying to report a security bug(medium severity). Please fix it so I can proceed. https://github.com/BloopAI/vibe-kanban/security/advisories/new
+- [open] #3469 cargo fmt --check fails on main (one import line in executors/copilot.rs, from #3454)（无标签，评论 1）
+  `cargo fmt --all -- --check` currently fails on `main`, on one line in one file. ## Reproduce ``` cargo fmt --all -- --check ``` on `main` at `d5cbb5380fa0b32e98ef9b8d987f63decce4be3a`: ``` Diff in cr
+- [open] #3466 How should security issues be reported? security@vibekanban.com and bloop.ai addresses bounce（无标签，评论 0）
+  I have a security finding in this project and no working private channel to send it to. `security@vibekanban.com`, `maintainers@bloop.ai` and `security@bloop.com` all bounce. This repository has priva
+- [open] #3458 Portfolio 1（无标签，评论 0）
+  
+- [closed] #3455 Replaying a stored session with heavy stderr is quadratic; large Codex transcripts never load（无标签，评论 0）
+  ## Summary Opening a workspace whose agent wrote a lot to stderr can hang the page, and in the worst case the stored transcript is silently lost. Codex is where it shows, because Codex logs heavily to
+- [open] #3445 [Feature] Render MCP Apps (interactive ui:// artifacts) inline in sessions（无标签，评论 0）
+  ## Summary [MCP Apps](https://blog.modelcontextprotocol.io/posts/2026-01-26-mcp-apps) is the first official extension to the Model Context Protocol (now part of the formal [extensions framework in the
+- [open] #3444 which version would be the last version with a workable kanban board?（无标签，评论 1）
+  must local version
+- [open] #3440 Feature Request: Official Plug and Play Docker Hub Image（无标签，评论 0）
+  ## Problem Setting up Vibe Kanban with the official repository is more complicated than it needs to be for users who just want to get started quickly. The current process requires building the image l
+- [open] #3435 npx vibe-kanban failed（无标签，评论 1）
+  When I try to start vibe-kanban by npx, it throws the following error message: npx vibe-kanban Need to install the following packages: vibe-kanban@0.1.44 Ok to proceed? (y) y Starting vibe-kanban v0.1
+- [open] #3434 [Bug] Cannot login after skipping login on first launch — deleting db.v2.sqlite does not reset auth state（无标签，评论 1）
+  ## Bug Description After skipping the login prompt on first launch, it becomes impossible to log in afterwards. Even after deleting `db.v2.sqlite`, the app still bypasses the login screen entirely and
+- [open] #3433 Website content appears outdated after project sunset（无标签，评论 2）
+  The repository homepage points to https://www.vibekanban.com/, but the site content appears to be stale after the project sunset. Examples I noticed: - The top banner says "Vibe Kanban is sunsetting" 
+
+## stravu/crystal（26 条 issue）
+- [open] #237 Great project, but I can't find  "Show Thinking" in settings（无标签，评论 3）
+  when waiting for ai responses, ``` 💡 Tip: You can view Claude's thinking process by enabling "Show Thinking" in settings ``` But I can't find it in any place of settings
+- [open] #236 Package name conflict with official 'crystal' compiler package (Debian/Ubuntu)（无标签，评论 0）
+  ## Description I've encountered a naming conflict when installing the .deb package for this project on Debian-based systems. The package generated by this project uses the name `crystal`. However, thi
+- [open] #235 Project dead?（无标签，评论 3）
+  Is this project dead? It looks perfect for my wishes, but I'm concerned about lack of activity. Are there any other good alternatives out there?
+- [open] #233 autocontext bleeding into agent's main workspace（无标签，评论 0）
+  After every prompt, autocontext is calling the same agent with the following prompt ``` /context After completing the requested changes, please create a git commit with an appropriate message. Follow 
+- [open] #229 Feature: Browser tool（无标签，评论 0）
+  Would be great to be able to have a browser tool so we can easily see the browser output for each of the sessions. If there is a simple way than copying and pasting from the console let me know!
+- [closed] #228 Crystal unable to start Claude Code?（无标签，评论 1）
+  Hey, curious to try this project. I've got `claude` configured to run from my terminal without issue. Auth and everything is working. However, when I input a prompt in Crystal nothing happens. I see `
+- [closed] #226 New Session Error（无标签，评论 1）
+  <img width="946" height="911" alt="Image" src="https://github.com/user-attachments/assets/778179b7-2e9c-4788-ae49-6b179f1a90cc" /> I encounter this error when I start a new session, why is that?
+- [open] #223 UI / Crystal Fixes（无标签，评论 0）
+  Hello All I tested the last two days Crystal for my workflows here my first observations: 1. MCP Servers: I have globally configured MCP Servers in my .claude configuration in the home folder. The ser
+- [open] #222 Crystal creates poor commit message（无标签，评论 0）
+  It didn't push to github, I asked it to push, it got stuck... I asked if it did it and it created a nonsensical commit message from a checkpoint: One example: <img width="424" height="89" alt="Image" 
+- [open] #221 "Full Access" mode switches back to "Workspace", tasks hanging（无标签，评论 0）
+  I have a couple of tasks and I started them in "Workspace" mode. I then realized that it can't push to github with those permissions so I switched to "Full Access". Now I'm facing 2 issues: - "Full Ac
+- [closed] #219 Display both 'auto' and actual model name in message badges（无标签，评论 1）
+  ## Feature Request When a user selects 'auto' as the model setting, the message badges should display both: 1. The user's selection ('auto') 2. The actual model that Claude Code chose to use ## Why Th
+- [open] #218 Feature: Show selected model in chat history（无标签，评论 0）
+  ## Description Currently, the chat history shows the persona selected next to Claude messages, but not which model was used (e.g., sonnet-4, opus-4, haiku). ## Requested Feature Display the model name
+- [open] #217 support to work on non git repos（无标签，评论 2）
+  can we please enable it to work without creating git repo for directories, for the usecases where we use claude-code for non-coding but analysis(on db etc) work, where we put some context(claude.md, d
+- [open] #216 Error at the end of each session（无标签，评论 3）
+  I see an error like this dumped to the log at the end of each session in Crystal. Seemingly, this is because codex exits with 1 at some point but it seems that more logs leak into the output. When I r
+- [closed] #213 Worktree Feature Requests: Default Naming, .gitignore Conditional, Cleanup（无标签，评论 0）
+  I use an external folder for my worktrees: ../{{Project_Name}}.worktrees I would request 3 things: 1. the hiding of the adding worktrees folder to .gitignore if you worktrees folder is outside of the 
+- [closed] #210 latest release broken on mac（无标签，评论 7）
+  Uncaught Exception: SqliteError: no such table: tool_panels at Database.prepare (/Applications/Crystal.app/Contents/Resources/ app.asar/node_modules/better-sqlite3/lib/methods/wrappers.js:5:21) at Dat
+- [closed] #209 Add Persona Support to Codex Panels（无标签，评论 1）
+  It would be cool to support personas in codex and claude.
+- [closed] #208 A JavaScript error occurred in the main process（无标签，评论 4）
+  Tried to run it for the first time and got error on screenshot. Apple M3 Mac, MacOS 15.6.1. Used Crystal-0.3.1-macOS-universal.dmg from this release: https://github.com/stravu/crystal/releases/tag/v0.
+- [open] #205 Needs Fix - Double close X and double border at top in Project settings（无标签，评论 0）
+  <img width="963" height="117" alt="Image" src="https://github.com/user-attachments/assets/2263f101-c78d-4fbb-8e99-ff09c7cbe4fd" />
+- [open] #203 Feature Request: Support for Custom Claude Code Env Variables (For GLM)（无标签，评论 1）
+  **GLM coding models** can be used with **claude code** and are an excellent low cost version compared to Anthropic models. https://docs.z.ai/scenario-example/develop-tools/claude We can do this in the
+- [open] #202 Terminal tab text formatting messes up after switching to Claude tab（无标签，评论 0）
+  Terminal tab text shows fine when using it as active tab, but if there is terminal text being output and I switch to a claude code tab, the text that is output while I'm in the claude code tab will be
+- [open] #200 mac release 0.3.0 doesn't show any window（无标签，评论 17）
+  The 0.3.0 release can launch the app successfully but it shows no window. Crystal 0.2.3 doesn't have this problem. Upgrading to 0.3.0 breaks it. macOS 15.6.1 (24G90)
+- [open] #199 Consider adding support for making a PR（无标签，评论 3）
+  - Making a PR (rather than just rebasing). This can sometimes be superior because it can trigger GitHub actions (I think anyway, if I'm wrong about this being a useful feature just close this issue)
+- [closed] #198 remove this Model selector thing here（无标签，评论 1）
+  <img width="264" height="180" alt="Image" src="https://github.com/user-attachments/assets/192e9eec-4a9e-4df9-89e2-17a030d33a31" /> the Model: gpt-5-codex is redundant. you already change it here. Sepa
+- [open] #197 Starting a request with dash in the initial message causes this unexpected error（无标签，评论 0）
+  <img width="1283" height="740" alt="Image" src="https://github.com/user-attachments/assets/12ed47e5-68bb-4d60-b1c1-6f457528d507" />
+- [closed] #196 Deleting a Folder (eg multiple sessions started from 1 prompt) leaves worktree folders in the worktrees directory orphaned（无标签，评论 1）
+  Basically title, if you delete a folder and change directory to worktrees and do ls, the folders that were created from the New Session don't actually get deleted. These local worktrees should be when
+
+## awslabs/cli-agent-orchestrator（9 条 issue）
+- [open] #896 Eager inbox delivery types into an open AskUserQuestion dialog on herdr (message lost or dialog auto-answered)（bug，评论 1）
+  ## Symptom With `CAO_EAGER_INBOX_DELIVERY=true` and the herdr backend, inbox messages sent to a `claude_code` terminal are pasted into an open AskUserQuestion dialog. The message is marked `delivered`
+- [open] #894 Script workflow that leaves a background process holding stdout is reported as a timeout (3.11+) or never settles (3.10)（无标签，评论 0）
+  ### What happens A script workflow that starts a background process and then exits 0 is not treated as finished when it exits. `_drive_process` (`services/script_runner.py`) waits for the stdout/stder
+- [open] #885 [Feat] Inbox messages API: newest-first order and sender_id filter（无标签，评论 0）
+  ## Overview `GET /terminals/{terminal_id}/inbox/messages` always returns messages oldest first, capped at `limit` (max 100). Once a terminal has received more than 100 messages, its newest messages ca
+- [open] #882 Deferred follow-ups from #566: initial-delivery wait retry, --async docs, interrupted wording, init allowance（无标签，评论 1）
+  Tracking the items @haofeif asked to be filed when #566 merged (final review, 2026-10-05), so they are not lost in that thread. None of these blocked the merge; each is a bounded follow-up. ### 1. `wa
+- [closed] #877 cao install --provider fails for profiles with ${VAR} inside YAML flow collections（无标签，评论 0）
+  Installing a profile with a provider other than its frontmatter `provider:` (`cao install ./p.md --provider claude_code`, or `POST /agents/profiles/install` with `provider`) fails with `while parsing 
+- [closed] #874 [Bug] A failing schedule script re-runs every minute and blocks cao-server's event loop（无标签，评论 1）
+  ### Summary Two problems in `execute_flow` (`services/flow_service.py`), and they compound: 1. **A failed run never advances `next_run`.** Every failure path raises before `db_update_flow_run_times` a
+- [closed] #870 [Bug] copilot_cli fails to detect idle prompt with GitHub Copilot CLI 1.0.91（无标签，评论 2）
+  ## Summary The `copilot_cli` provider fails to initialize with GitHub Copilot CLI 1.0.91 even though Copilot successfully starts, loads the CAO-installed custom agent, connects the injected MCP server
+- [open] #867 [Feat] Memory → skill promotion: reviewed, versioned skills from durable memories (builds on #861, #810)（enhancement,feature，评论 0）
+  ## Overview #861 gives memories reversible ways out (superseded, expired, retired), but durable procedural know-how has no way up. This proposes a reviewed path from durable memories to a versioned CA
+- [open] #865 claude_code: status reads COMPLETED while a long answer is still streaming, so `run_step` / `handoff` tear the worker down mid-task (2.5.0, 2.5.1, main)（无标签，评论 3）
+  ### Summary When a Claude Code turn produces output taller than the pane, the live spinner scrolls out of the viewport while the boxed `❯` input prompt and a `⏺` response marker stay visible. `ClaudeC
