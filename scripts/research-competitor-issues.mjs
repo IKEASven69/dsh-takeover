@@ -3,10 +3,13 @@ import { writeFileSync } from 'node:fs'
 // 竞品 issue 区挖掘：feature request 与抱怨 = 最硬的需求证据。
 // state=all 拿开+关（关掉的往往是已满足的需求，也是证据）。PR 排除。
 const repos = [
+  // 双周巡检名单（需求调研-1010/竞品动态-1008）：跨家浏览器头部/语义最近对手/
+  // 实验性 transfer/中文会话管理器/限额切换 context layer
   'jazzyalex/agent-sessions',
   'giuliastro/harness-remote',
   'nicosuave/memex',
   'ccpopy/cc-sessions',
+  'damli40/mida-context',
 ]
 const out = []
 for (const repo of repos) {

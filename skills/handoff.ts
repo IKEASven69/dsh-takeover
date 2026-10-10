@@ -47,7 +47,8 @@ export const HANDOFF_SKILL_CONTENT = `# 交接当前会话（/handoff）
    两道守门被拦时的正确反应：**密钥闸**（报「发现疑似密钥」）→ redact 后重试，
    确要带密传 allowSecrets: true（留痕）；**空壳卡守门**（报「六段全是兜底占位」）→
    这是在提醒你亲手蒸馏——确要寄存空壳（如「无在途工作」声明）传 confirmSkeleton: true。
-3. 把返回的卡片 id 与路径告诉用户。对方（或另一台机器上的你）用 \`handoff_inbox\` 或 \`/inbox\` 取件。
+3. 把返回的卡片 id 与路径告诉用户。对方（或另一台机器上的你）用 \`handoff_inbox\` 或 \`/inbox\` 取件
+   ——目标 harness 装有本插件即可接力；限额用尽想换一家接着干，也是这个用法（寄存后换家开局 \`/inbox\`）。
 `
 
 /** /handoff 注册项 */

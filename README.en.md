@@ -42,7 +42,7 @@ dsh-takeover's niche: **in-harness takeover** (six-section protocol card injecte
 
 ## Cross-machine relay
 
-Point `HANDOFF_HOME` at a synced-drive folder or a git repository and the inbox is shared across machines: `handoff_push` on machine A, `/inbox` pickup on machine B. One environment variable, zero code.
+Point `HANDOFF_HOME` at a synced-drive folder or a git repository and the inbox is shared across machines: `handoff_push` on machine A, `/inbox` pickup on machine B. One environment variable, zero code. Cards on the synced drive are readable from any phone's file viewer too — check cards on the go, or start an agent session on the phone and pick up from there.
 
 ## Install
 
