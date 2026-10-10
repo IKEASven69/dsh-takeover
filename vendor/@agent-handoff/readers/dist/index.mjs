@@ -1,8 +1,8 @@
 import { createRequire } from "node:module";
 import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, statSync } from "node:fs";
-import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
-//#region ../agent-handoff/packages/readers/dist/index.mjs
+import { homedir } from "node:os";
+//#region src/resolve.ts
 /** 路径形态判断：含分隔符或盘符即按路径匹配（文件系适配器的 id 就是绝对路径）。 */
 function looksLikePath(reference) {
 	return /[\\/]/.test(reference) || /^[A-Za-z]:/.test(reference);
@@ -58,6 +58,8 @@ function resolveReference(reference, refs) {
 		reference
 	};
 }
+//#endregion
+//#region src/transcript.ts
 function makeTurn(partial) {
 	return {
 		cwd: "",
@@ -192,6 +194,8 @@ function entryToTurns(entry) {
 	}
 	return turns;
 }
+//#endregion
+//#region src/claude.ts
 /**
 * Claude Code 适配器：~/.claude/projects 下递归的全部 .jsonl（引擎原生格式）。
 * 移植自 dsh-hippo src/agents/claude.ts；root 可用 HANDOFF_ROOT_CLAUDE 覆盖（测试用）。
@@ -269,6 +273,8 @@ const claudeAdapter = {
 		return turns;
 	}
 };
+//#endregion
+//#region src/types.ts
 /**
 * 假 0 哨兵：存储根目录存在但 discover 为 0——上游可能已迁移存储布局。
 * 出处：opencode 1.18 迁 SQLite 后旧读取器本机假报 0（casr #26 同日中招）。
@@ -276,6 +282,8 @@ const claudeAdapter = {
 * 根目录不存在（没装）不触发——那是正常静默。
 */
 const FAKE_ZERO_NOTE = "存储目录存在但未发现会话——上游可能已迁移存储布局（参考 opencode 1.18 迁 SQLite）";
+//#endregion
+//#region src/codex.ts
 /**
 * Codex 适配器：~/.codex/sessions 下递归的 rollout-*.jsonl。
 * session_meta 给 cwd；response_item 是权威消息流（event_msg 为 UI 事件，跳过避免重复）。
@@ -383,6 +391,8 @@ const codexAdapter = {
 		}
 	}
 };
+//#endregion
+//#region src/opencode.ts
 /**
 * opencode 适配器：双布局自动探测。
 * - 新版：~/.local/share/opencode/opencode.db（SQLite）——session / message / part 三表，
@@ -586,6 +596,8 @@ const opencodeAdapter = {
 		return parseOpenCodeDbSession(id);
 	}
 };
+//#endregion
+//#region src/zcode.ts
 /**
 * zcode 适配器：~/.zcode/cli/db/db.sqlite 的 session/message/part 三层表。
 * 活库（当前会话在写）——一律 readonly 打开，随开随关。
@@ -702,6 +714,8 @@ const zcodeAdapter = {
 		return parseZcodeSession(id);
 	}
 };
+//#endregion
+//#region src/pi.ts
 /**
 * pi 适配器（badlogic/pi-mono）：~/.pi/agent/sessions/<路径转义>/时间戳_uuid.jsonl
 * 事件流格式：type=session 给 cwd；type=message 的 message.content[] 是文本块。
@@ -829,6 +843,8 @@ const piAdapter = {
 		}
 	}
 };
+//#endregion
+//#region src/workbuddy.ts
 /**
 * WorkBuddy 适配器：~/.workbuddy/projects/<workspace-slug>/<uuid>.jsonl
 * 一文件 = 一会话（单 sessionId）。记录类型（2026-09-01 实测真实会话）：
@@ -990,6 +1006,8 @@ const workbuddyAdapter = {
 		return turns;
 	}
 };
+//#endregion
+//#region src/cursor.ts
 /**
 * Cursor 适配器（自研 TS 实现；格式为公开逆向调研，
 * Apache-2.0，其 NOTICE 声明该 reader 逐字节来自 xAI Grok 1.0.5 捆绑 skill——
@@ -1411,6 +1429,8 @@ const cursorAdapter = {
 		}
 	}
 };
+//#endregion
+//#region src/grok.ts
 /**
 * Grok 适配器（自研 TS 实现；格式为公开逆向调研，
 * Apache-2.0，其 NOTICE 声明该 reader 逐字节来自 xAI Grok 1.0.5 捆绑 skill——
@@ -1621,6 +1641,8 @@ function parseGrokSession(id) {
 	}
 	return parseGrokUpdatesText(text, cwd, model);
 }
+//#endregion
+//#region src/index.ts
 /**
 * @agent-handoff/readers：八家 agent 会话的只读读取层。
 * 移植自 dsh-hippo src/agents/，零三方运行时依赖（zcode / cursor store 用 Node 内建 node:sqlite）。
@@ -1782,11 +1804,23 @@ function fileFingerprint(id) {
 		return "";
 	}
 }
+/** 测试钩子：清空解析缓存 */
+function clearSessionCache() {
+	sessionCache.clear();
+}
 /** 引用解析：先发现该 agent 的会话，再按 id/路径/标题规则匹配。 */
 function resolveAgentReference(agent, reference) {
 	return resolveReference(reference, listSessions(agent));
 }
+/** 各 agent 的 inventory（root / 会话数 / 支持情况）。 */
+function inventory() {
+	return AGENTS.map((a) => ({
+		agent: a.name,
+		root: a.root,
+		sessions: a.supported ? a.discover().length : 0,
+		supported: a.supported,
+		note: a.note
+	}));
+}
 //#endregion
-export { AGENTS, listSessions, readSession, resolveAgentReference };
-
-//# sourceMappingURL=dist-CYCruh2_.js.map
+export { AGENTS, clearSessionCache, decodeCursorBlob, entryToTurns, inventory, listSessions, makeTurn, parseCodexText, parseCursorStore, parseCursorTranscriptText, parseGrokSession, parseGrokUpdatesText, parseJsonl, parseOpenCodeSession, parsePiText, parseZcodeSession, readSession, renderCursorValue, resolveAgentReference, resolveReference, summarizeToolCall };

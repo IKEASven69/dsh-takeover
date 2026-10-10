@@ -78,8 +78,8 @@
     }
   },
   "devDependencies": {
-    "@agent-handoff/core": "file:../agent-handoff/packages/core",
-    "@agent-handoff/readers": "file:../agent-handoff/packages/readers",
+    "@agent-handoff/core": "file:vendor/@agent-handoff/core",
+    "@agent-handoff/readers": "file:vendor/@agent-handoff/readers",
     "@deepseek-ai/cordis": "4.0.4",
     "@deepseek-ai/dsh-agent": "0.2.0-rc.2",
     "@deepseek-ai/dsh-client-locale": "^0.2.0-rc.2",

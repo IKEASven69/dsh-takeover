@@ -1,7 +1,7 @@
 import { Context } from "@deepseek-ai/cordis";
 import { Agent } from "@deepseek-ai/dsh-agent";
 import { SkillRegistration } from "@deepseek-ai/dsh-skill";
-//#region ../agent-handoff/packages/core/dist/index.d.mts
+//#region vendor/@agent-handoff/core/dist/index.d.mts
 /** 六段正文 + 可选「建议加载」段 */
 interface CardSections {
   goal: string;
@@ -194,7 +194,7 @@ export declare function handoffHostNotice(userQuestions: unknown, action: 'push'
   signal?: AbortSignal;
 }, log?: (msg: string) => void): Promise<void>;
 //#endregion
-//#region ../agent-handoff/packages/readers/dist/index.d.mts
+//#region vendor/@agent-handoff/readers/dist/index.d.mts
 //#region src/transcript.d.ts
 /**
  * 会话 Turn 的最小类型与 Claude transcript 解析（移植自 dsh-hippo src/patterns/transcript.ts，
