@@ -12,6 +12,7 @@ dsh-takeover is a DeepSeek Harness (DSH) plugin implementing the full takeover l
 - **Pull**: `/resume-claude` `/resume-codex` `/resume-opencode` `/resume-zcode` `/resume-pi` `/resume-workbuddy` `/resume-cursor` `/resume-grok` — read-only pull of a foreign agent's local session into the current one, distilled into a six-section protocol card;
 - **Push**: `/handoff` + `handoff_push` — check the current session into the shared inbox as a handoff card;
 - **Take over**: `/inbox` + `handoff_inbox` — any agent picks up on start; pulled sessions can optionally be checked in too, so another agent can relay the work.
+- **Browse + one-click takeover** (settings card): no commands to memorize — browse recent sessions of all eight agents (title / time / project, expandable previews with the first user request and stop point), click **Take over** to spawn a new session with the command delivered and the app switched to it automatically; on failure it falls back to copying the command.
 
 ```
 ~/.handoff/
@@ -45,11 +46,17 @@ Point `HANDOFF_HOME` at a synced-drive folder or a git repository and the inbox 
 
 ## Install
 
+Three equivalent forms (the "Plugins → Add plugin" dialog or the CLI):
+
 ```
+# npm package name (available once published to npm; CN users resolve via npmmirror automatically)
+dsh-takeover
+
+# GitHub repository (works right now — built artifacts are committed, no toolchain needed)
 dsh plugin --profile web add github:IKEASven69/dsh-takeover
 ```
 
-> Requires DSH `>=0.2.0-rc.2` (the settings-card i18n uses the host locale service; declared via `engines.dsh`); **Node ≥22** (the zcode reader, cursor store.db reads, and new-layout opencode.db reads use the built-in `node:sqlite`; opencode's legacy file layout and the other readers have no such requirement, but the plugin as a whole declares Node ≥22). Built artifacts (lib/) are committed — install and go, no local toolchain required. Pin a release with `#v0.1.0` (version numbering restarted at 0.1.0; git tags are provided per release).
+> Requires DSH `>=0.2.0-rc.2` (the settings-card i18n uses the host locale service; declared via `engines.dsh`); **Node ≥22** (the zcode reader, cursor store.db reads, and new-layout opencode.db reads use the built-in `node:sqlite`; opencode's legacy file layout and the other readers have no such requirement, but the plugin as a whole declares Node ≥22). Built artifacts (lib/) are committed — install and go, no local toolchain required. Pin a release with `#v0.2.0` (git tags are provided per release).
 
 ## Surface
 

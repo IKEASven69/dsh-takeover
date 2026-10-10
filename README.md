@@ -46,11 +46,17 @@ dsh-takeover 的生态位：**harness 内接管**（六段协议卡注入当轮�
 
 ## 安装
 
+三种形态任选（设置卡「插件 → 添加插件」对话框或命令行等价）：
+
 ```
+# npm 包名（发布到 npm 后可用，大陆用户自动走 npmmirror 镜像）
+dsh-takeover
+
+# GitHub 仓库地址（即刻可用，lib/ 产物已入库无需构建）
 dsh plugin --profile web add github:IKEASven69/dsh-takeover
 ```
 
-> 需要 DSH `>=0.2.0-rc.2`（设置卡 i18n 依赖宿主 locale 服务，`engines.dsh` 同步声明），**Node ≥22**（zcode 与 cursor 的 store.db、新版 opencode 的 opencode.db 读取走 Node 内建 `node:sqlite`；opencode 旧版文件布局与其余各家无此要求，但插件整体按 Node ≥22 声明）。lib/ 产物已入库，安装即用，无需本地构建环境。固定版本可写 `#v0.1.0`（版本体系 0.1.0 重置起算，git tag 随版本提供）。
+> 需要 DSH `>=0.2.0-rc.2`（设置卡 i18n 依赖宿主 locale 服务，`engines.dsh` 同步声明），**Node ≥22**（zcode 与 cursor 的 store.db、新版 opencode 的 opencode.db 读取走 Node 内建 `node:sqlite`；opencode 旧版文件布局与其余各家无此要求，但插件整体按 Node ≥22 声明）。lib/ 产物已入库，安装即用，无需本地构建环境。固定版本可写 `#v0.2.0`（git tag 随版本提供）。
 
 ## 注册面
 
