@@ -1,0 +1,13 @@
+{
+  "name": "@agent-handoff/readers",
+  "version": "0.1.1",
+  "type": "module",
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
+    }
+  }
+}
