@@ -1,0 +1,5 @@
+# portable overlay：仅相对包名。--patch 相对 profile 目录解析，
+# 而不是相对本 checkout 裸跑 `pnpm dsh`。
+- insert:
+    - id: dsh-takeover
+      name: './lib/index.js'
