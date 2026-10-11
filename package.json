@@ -1,0 +1,116 @@
+{
+  "name": "dsh-takeover",
+  "version": "0.2.1",
+  "description": "会话接管插件：拉取八家外部 agent 会话（/resume-*）、把当前 DSH 会话按 handoff: 1 开放协议寄存进 ~/.handoff/pending/、开局取件接着干",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./cordis.yml": "./cordis.yml",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json",
+    "./client": "./lib/client.js"
+  },
+  "files": [
+    "lib/",
+    "!lib/**/*.map",
+    "assets/",
+    "cordis.yml",
+    "cordis.patch.yml",
+    "README.md",
+    "README.en.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsdown && node scripts/build-client.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx/esm --test tests/*.spec.ts",
+    "check": "npm run typecheck && npm test && npm run build"
+  },
+  "engines": {
+    "node": ">=22",
+    "dsh": ">=0.2.0-rc.2"
+  },
+  "license": "MIT",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "handoff",
+    "session-handoff",
+    "inbox",
+    "agent-handoff",
+    "takeover",
+    "session-takeover",
+    "resume",
+    "multi-agent"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-settings-general"
+      ],
+      "platform": "web"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-agent": ">=0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-locale": ">=0.2.0-rc.2",
+    "@deepseek-ai/dsh-skill": ">=0.2.0-rc.2",
+    "@deepseek-ai/dsh-tools": ">=0.2.0-rc.2",
+    "react": "^18.2.0 || ^19.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-agent": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@agent-handoff/core": "file:vendor/@agent-handoff/core",
+    "@agent-handoff/readers": "file:vendor/@agent-handoff/readers",
+    "@deepseek-ai/cordis": "4.0.4",
+    "@deepseek-ai/dsh-agent": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-locale": "^0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-renderer": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-settings": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-slots": "^0.2.0-rc.2",
+    "@deepseek-ai/dsh-host-webserver": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-sandbox": "^0.2.0-rc.2",
+    "@deepseek-ai/dsh-scope": "^0.2.1-alpha.4",
+    "@deepseek-ai/dsh-session": "^0.2.1-alpha.4",
+    "@deepseek-ai/dsh-skill": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-tools": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-user-questions": "0.2.0-rc.2",
+    "@types/node": "^26.6.3",
+    "@types/react": "~19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "esbuild": "^0.28.2",
+    "happy-dom": "^20.14.6",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "tsdown": "^0.23.0",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/IKEASven69/dsh-takeover.git"
+  },
+  "homepage": "https://github.com/IKEASven69/dsh-takeover#readme",
+  "bugs": {
+    "url": "https://github.com/IKEASven69/dsh-takeover/issues"
+  }
+}

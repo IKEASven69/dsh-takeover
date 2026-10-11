@@ -1,0 +1,23 @@
+name: CI
+
+# 每次 push/PR 跑完整门禁：typecheck + 单测全量 + 构建（typecheck + 单测全量 + 构建的机器门槛）。
+# 说明：@deepseek-ai/* 以 devDependencies 安装（host 运行时注入运行时依赖，
+# 构建期只需类型与打包器）；node >= 22（package.json engines 同款）。
+# --legacy-peer-deps：测试依赖的宿主实验包（dsh-session alpha）与 rc.2 工具链
+# 的 peer 声明互相打架，安装期显式放宽——运行时无此要求。
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --legacy-peer-deps
+      - run: npm run check
