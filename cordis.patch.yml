@@ -1,0 +1,9 @@
+# 官方 bundle 层：`dsh plugin add` 把它合入 profile。
+# 行按包名解析，安装进 profile 的副本就是启动副本。
+# host 半：工具 handoff_push / handoff_inbox / foreign_session_read + slash
+# /handoff /inbox /resume-*×8 + webServer 路由 /dsh-takeover/*（设置卡 JSON API）。
+# 浏览器半（设置页「dsh-takeover」卡）由 package.json 的 dsh.client 声明 +
+# exports["./client"] 提供，不进本 patch。
+- insert:
+    - id: dsh-takeover
+      name: dsh-takeover
