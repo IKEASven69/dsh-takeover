@@ -41,18 +41,24 @@ import {
 } from './inbox-view.ts'
 import type { PendingGroup, SeenStore } from './inbox-view.ts'
 import type { TakeoverState, PendingRow, ProviderRow } from './settings.ts'
+import type { MemorySourceRow } from './memory.ts'
 import {
   cwdFacets,
   depositCommand,
   filterByCwd,
   filterSessions,
+  humanChars,
   isSubagentSession,
+  OUTBOUND_LABELS,
+  OUTBOUND_TARGETS,
+  outboundCommand,
+  pickupCommand,
   relTime,
   shortId,
   takeoverCommand,
   uiNavigatorOf,
 } from './browser-view.ts'
-import type { SessionListBody, SessionPreviewBody, SessionRow } from './browser-view.ts'
+import type { OutboundTarget, SessionListBody, SessionPreviewBody, SessionRow } from './browser-view.ts'
 
 /** 卡片渲染语言（跟随宿主 active locale；未登记语言回退 zh）。
  * 导出——报告纯函数按 lang 出 <html lang> 与文案注入，单测两套词典都要能过。 */
@@ -359,8 +365,7 @@ const CSS = `
 /* 窄容器（侧栏收窄）：命令单列、矩阵行收掉会话数列，避免挤压换行 */
 /* 来源筛选 chips：全部/各家/只看新卡，pill 基座 + 选中态品牌描边 */
 .bt-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 8px; }
-.bt-chip { display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
-  border: 1px solid var(--bt-line); border-radius: 999px; padding: 3px 12px;
+.bt-chip { display: inline-flex; align-items: center; gap: 6px; cursor: pointer;  border: 1px solid var(--bt-line); border-radius: 999px; padding: 3px 12px;
   background: transparent; color: var(--bt-mut); font-size: 11.5px; font-weight: 500;
   font-variant-numeric: tabular-nums;
   transition: border-color .15s ease, color .15s ease, background .15s ease; }
@@ -368,6 +373,8 @@ const CSS = `
 .bt-chip-on { color: var(--bt-a); background: rgba(99,102,241,.12);
   border-color: rgba(99,102,241,.45); font-weight: 600; }
 .bt-chip-count { font-size: 10px; opacity: .75; }
+/* chips 内品牌图标（来源筛选 / 接收方选择 / 外部会话浏览器 pills 同款） */
+.bt-chip svg { width: 13px; height: 13px; display: block; }
 /* 外部会话浏览器：行 + 预览展开体。接管/寄存一键投递——面板不产卡，
  * 蒸馏都在会话里由模型完成（卡片质量跟模型能力走）。
  * 样式：主操作「接管」有主按钮权重；动作按钮定宽防状态文案切换跳动；
@@ -1152,6 +1159,256 @@ export function ProviderMatrix({ rows, busy, onToggle, t }: {
 }
 
 // ---------------------------------------------------------------------------
+// 交接出去（outbound）+ 记忆快照：右栏新增两卡。与 ForeignBrowser 同层。
+// ---------------------------------------------------------------------------
+
+/** 接收方 chips：交接出去与记忆快照共用（任意 agent + 八家） */
+export function TargetChips({ sel, lang, onSelect }: {
+  sel: string
+  lang: Lang
+  onSelect: (t: OutboundTarget) => void
+}): ReturnType<typeof createElement> {
+  return createElement('div', { className: 'bt-chips', role: 'group', style: { marginTop: 8 } },
+    ...OUTBOUND_TARGETS.map((tg) => createElement('button', {
+      key: tg,
+      className: `bt-chip${sel === tg ? ' bt-chip-on' : ''}`,
+      'aria-pressed': sel === tg,
+      type: 'button',
+      onClick: () => onSelect(tg),
+    },
+      createElement('span', { className: 'bt-chip-label' }, OUTBOUND_LABELS[tg][lang]),
+    )),
+  )
+}
+
+/** 对面取件指引：按选中目标给一条可复制命令（CLI 家给一键启动行，输入框家给同句） */
+export function PickupGuide({ target, lang, t }: { target: OutboundTarget; lang: Lang; t: Translate }): ReturnType<typeof createElement> {
+  const sample = pickupCommand(target, '<卡片编号>', lang)
+  const lines = [
+    createElement('div', { className: 'bt-sub', key: 'g0' }, t('pickupGuideIntro', { label: OUTBOUND_LABELS[target][lang] })),
+    createElement('div', { className: 'bt-fsprev-line', key: 'g1' },
+      createElement('span', { className: 'bt-fsprev-text', style: { fontFamily: 'monospace', fontSize: 11 } }, sample),
+    ),
+    createElement('div', { className: 'bt-sub', key: 'g2' }, t('pickupGuideDsh')),
+  ]
+  return createElement('div', { className: 'bt-fsprev', style: { marginTop: 8 } }, ...lines)
+}
+
+/** 交接出去卡：当前会话 → 共享收件箱 → 对面接手。
+ * 一键把寄存指令 queue 进本会话（sessionId 由宿主座位注入）；
+ * 老宿主拿不到 sessionId 时自动退回复制路径（粘进输入框效果相同）。 */
+export function SendCard({ sessionId, t, lang, onError, onNotice }: {
+  sessionId?: string
+  t: Translate
+  lang: Lang
+  onError: (msg: string) => void
+  onNotice: (msg: string) => void
+}): ReturnType<typeof createElement> {
+  const [target, setTarget] = useState<OutboundTarget>('any')
+  const [busy, setBusy] = useState(false)
+  const [sent, setSent] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const copyTimer = useRef<number | undefined>(undefined)
+
+  const copyInstruction = (text: string, notice: string): void => {
+    void copyText(text)
+      .then(() => {
+        setCopied(true)
+        window.clearTimeout(copyTimer.current)
+        copyTimer.current = window.setTimeout(() => setCopied(false), 2400)
+        onNotice(notice)
+      })
+      .catch((e: unknown) => onError(e instanceof Error ? e.message : String(e)))
+  }
+
+  const send = (): void => {
+    if (busy) return
+    const instruction = outboundCommand(lang)
+    if (sessionId === undefined || sessionId === '') {
+      // 老宿主：座位没带 sessionId——复制指令，用户粘进输入框（语义一致）
+      copyInstruction(instruction, t('sendCopiedNotice'))
+      return
+    }
+    setBusy(true)
+    void post<{ ok: true } | { ok: false; error: string; instruction?: string }>('/dsh-takeover/send', { sessionId, lang })
+      .then((r) => {
+        if (r.ok) {
+          setSent(true)
+          onNotice(t('sentNotice'))
+          return undefined
+        }
+        // 规范降级：服务端带回指令 → 复制路径（失败原因随横幅浮出，不吞错）
+        if (typeof r.instruction === 'string' && r.instruction !== '') {
+          copyInstruction(r.instruction, `${t('sendFallbackNotice')}：${r.error}`)
+          return undefined
+        }
+        throw new Error(r.error)
+      })
+      .catch((e: unknown) => onError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false))
+  }
+
+  return createElement('div', { className: 'bt-card' },
+    createElement('div', { className: 'bt-head' },
+      createElement('span', { className: 'bt-title', style: { fontSize: 13 } }, t('sendTitle')),
+    ),
+    createElement('div', { className: 'bt-sub' }, sessionId !== undefined && sessionId !== '' ? t('sendHint') : t('sendHintCopy')),
+    createElement(TargetChips, { sel: target, lang, onSelect: setTarget }),
+    createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 } },
+      createElement('button', {
+        className: 'bt-btn bt-btn-primary',
+        type: 'button',
+        disabled: busy,
+        onClick: send,
+        title: t('sendBtnTitle'),
+      },
+        copied ? t('copiedBtn') : busy ? t('sendBusy') : t('sendBtn'),
+      ),
+    ),
+    createElement('details', { className: 'bt-note', open: sent, style: { marginTop: 8 } },
+      createElement('summary', null, t('pickupGuideTitle')),
+      createElement('div', { className: 'bt-note-body' },
+        createElement(PickupGuide, { target, lang, t }),
+      ),
+    ),
+  )
+}
+
+/** 记忆快照卡：扫描本机各 agent 的记忆文件，勾选打包成一张交接卡进收件箱。
+ * 会话能交接，记忆也能——取件方按卡「建议加载」吸收进自己的记忆文件。 */
+export function MemoryCard({ t, lang, onError, onNotice, onPushed, defaultOpen }: {
+  t: Translate
+  lang: Lang
+  onError: (msg: string) => void
+  onNotice: (msg: string) => void
+  /** 出卡成功后回调（工作台 reload state，新卡即刻出现在收件箱） */
+  onPushed: () => void
+  /** 初始展开（默认收起；展开即扫描一次） */
+  defaultOpen?: boolean
+}): ReturnType<typeof createElement> {
+  const [open, setOpen] = useState(defaultOpen === true)
+  const [scanned, setScanned] = useState(false)
+  const [rows, setRows] = useState<MemorySourceRow[] | null>(null)
+  const [picked, setPicked] = useState<Set<string>>(new Set())
+  const [target, setTarget] = useState<OutboundTarget>('any')
+  const [busy, setBusy] = useState(false)
+
+  const scan = (): void => {
+    setScanned(true)
+    setRows(null)
+    void getJson<{ ok: true; sources: MemorySourceRow[] }>('/dsh-takeover/memory-scan')
+      .then((b) => {
+        setRows(b.sources)
+        setPicked(new Set(b.sources.filter((r) => r.exists).map((r) => r.key)))
+      })
+      .catch((e: unknown) => onError(e instanceof Error ? e.message : String(e)))
+  }
+
+  // 展开即扫描（onToggle 与初始 defaultOpen 两条路都汇到这里；scanned 防重）
+  useEffect(() => {
+    if (open && !scanned) scan()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- scan 只闭包 setState，挂载期稳定
+  }, [open, scanned])
+
+  const toggle = (key: string): void => {
+    setPicked((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  const push = (): void => {
+    if (busy || picked.size === 0) return
+    setBusy(true)
+    void post<{ ok: true; sources: number } | { ok: false; error: string }>('/dsh-takeover/memory-push', { keys: [...picked], target })
+      .then((r) => {
+        if (!r.ok) throw new Error(r.error)
+        onNotice(t('memoryPushedNotice', { n: r.sources }))
+        onPushed()
+      })
+      .catch((e: unknown) => onError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false))
+  }
+
+  const kb = (n: number): string => (n >= 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${n} B`)
+  const existing = rows?.filter((r) => r.exists) ?? []
+
+  return createElement('details', {
+    className: 'bt-group',
+    open,
+    onToggle: (e: unknown) => {
+      const now = (e as { target?: { open?: boolean } }).target?.open === true
+      setOpen(now)
+      if (now && !scanned) scan()
+    },
+  },
+    createElement('summary', { className: 'bt-pending', style: { listStyle: 'none', cursor: 'pointer' } },
+      createElement('span', { className: 'bt-title', style: { fontSize: 13 } }, `🧠 ${t('memoryTitle')}`),
+      createElement('span', { className: 'bt-spacer' }),
+      createElement('span', { className: 'bt-pending-chev', 'aria-hidden': true }, '▸'),
+    ),
+    createElement('div', { style: { padding: '8px 2px 2px' } },
+      createElement('div', { className: 'bt-sub' }, t('memoryHint')),
+      rows === null
+        ? createElement('div', { className: 'bt-sub bt-fs-empty' }, scanned ? t('memoryScanning') : t('memoryExpandHint'))
+        : existing.length === 0
+          ? createElement('div', { className: 'bt-sub bt-fs-empty' }, t('memoryNone'))
+          : [
+              createElement('div', { key: 'rows', style: { display: 'grid', gap: 4, marginTop: 8 } },
+                ...rows.map((r) => createElement('label', {
+                  key: r.key,
+                  style: {
+                    display: 'flex', gap: 8, alignItems: 'center', fontSize: 12,
+                    opacity: r.exists ? 1 : 0.45, cursor: r.exists ? 'pointer' : 'default',
+                  },
+                  title: r.preview !== '' ? r.preview : r.path,
+                },
+                  createElement('input', {
+                    type: 'checkbox',
+                    checked: picked.has(r.key),
+                    disabled: !r.exists,
+                    onChange: () => { if (r.exists) toggle(r.key) },
+                  }),
+                  createElement('span', { style: { flex: '0 0 auto', fontWeight: 600 } }, r.agent),
+                  createElement('span', { style: { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: 0.75 } }, r.path),
+                  r.exists ? createElement('span', { style: { flex: '0 0 auto', opacity: 0.6 } }, kb(r.bytes)) : null,
+                )),
+              ),
+              createElement(TargetChips, { key: 'targets', sel: target, lang, onSelect: setTarget }),
+              createElement('div', { key: 'act', style: { display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 } },
+                createElement('button', {
+                  className: 'bt-btn bt-btn-primary',
+                  type: 'button',
+                  disabled: busy || picked.size === 0,
+                  onClick: push,
+                  title: t('memoryPushBtnTitle'),
+                }, busy ? t('memoryPushing') : t('memoryPushBtn', { n: picked.size })),
+              ),
+            ],
+    ),
+  )
+}
+
+/** 新手帮助 / FAQ：折叠卡（工作台左栏顶部与设置卡各一份，纯词典文案） */
+export function HelpCard({ t }: { t: Translate }): ReturnType<typeof createElement> {
+  const entries = [1, 2, 3, 4, 5, 6, 7, 8].map((i) => ({
+    q: t(`qa${i}q`),
+    a: t(`qa${i}a`),
+  }))
+  return createElement('details', { className: 'bt-note' },
+    createElement('summary', null, t('helpTitle')),
+    createElement('div', { className: 'bt-note-body' },
+      ...entries.map((e, i) => createElement('div', { key: i, style: { marginBottom: 8 } },
+        createElement('div', { style: { fontWeight: 600, marginBottom: 2 } }, e.q),
+        createElement('div', { style: { opacity: 0.85 } }, e.a),
+      )),
+    ),
+  )
+}
+
+// ---------------------------------------------------------------------------
 // 外部会话浏览器：浏览 + 一键投递。面板不产卡——蒸馏都在会话里由
 // 模型完成（卡片质量跟着模型能力走，这正是「跟着模型升级」的接法）；
 // 一键投递只是把与手动复制同源的指令送进新会话，失败退回复制。
@@ -1422,6 +1679,7 @@ export function ForeignBrowser({ state, t, lang, onError, onNotice, navigate }: 
             if (lists[p.name] === undefined && loading[p.name] !== true) load(p.name)
           },
         },
+          createElement(ProviderIcon, { name: p.name, size: 13 }),
           createElement('span', { className: 'bt-chip-label' }, PROVIDER_LABEL[p.name] ?? p.name),
           createElement('span', { className: 'bt-chip-count' }, p.sessions >= 0 ? String(p.sessions) : '…'),
         )
@@ -1601,14 +1859,17 @@ function useTakeoverPolling(): {
   return { state, setState, error, setError, reload, generationRef }
 }
 
-/** 工作台面：收件箱概览 + 外部会话浏览器（一键接管/定向取件/导出全在这里）。
- * 挂载面有两个——宿主 0.2 右侧栏「接管」tab（chrome=true，自带 slim 头卡）与
- * 老宿主降级时的设置卡内嵌（chrome=false，头卡由设置卡提供）。 */
-export function WorkspaceBody({ t, locale, navigate, chrome }: {
+/** 工作台面：收件箱概览 + 交接出去 + 外部会话浏览器 + 记忆快照（一键接管/定向取件/
+ * 出站交接/记忆打包全在这里）。挂载面有两个——宿主 0.2 右侧栏「接管」tab
+ * （chrome=true，自带 slim 头卡）与老宿主降级时的设置卡内嵌（chrome=false，
+ * 头卡由设置卡提供）。sessionId 由宿主座位注入（交接出去用）；缺席只降级该卡。 */
+export function WorkspaceBody({ t, locale, navigate, chrome, sessionId }: {
   t: Translate
   locale: LocaleRuntime | undefined
   navigate: (sessionId: string) => boolean
   chrome: boolean
+  /** 当前会话 id（宿主 conversation 座位注入；设置卡/老宿主缺席 → 交接出去卡走复制路径） */
+  sessionId?: string
 }): ReturnType<typeof createElement> {
   useLocaleSync(locale)
   const { state, error, setError, reload } = useTakeoverPolling()
@@ -1715,8 +1976,11 @@ export function WorkspaceBody({ t, locale, navigate, chrome }: {
 
     // 工作台双栏栅格：宽容器（浮层 ≥920px）下收件箱与浏览器并排，窄容器 auto-fit 收单列
     createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(440px, 1fr))', gap: 10, alignItems: 'start' } },
-    // 收件箱概览
-    createElement('div', { className: 'bt-card' },
+    // 左栏：新手帮助（默认收起）+ 收件箱概览
+    createElement('div', { style: { display: 'grid', gap: 10, alignItems: 'start' } },
+      createElement(HelpCard, { t }),
+      // 收件箱概览
+      createElement('div', { className: 'bt-card' },
       createElement('div', { className: 'bt-head' },
         createElement('span', { className: 'bt-title', style: { fontSize: 13 } }, t('inboxTitle')),
         createElement('span', { className: 'bt-spacer' }),
@@ -1743,8 +2007,8 @@ export function WorkspaceBody({ t, locale, navigate, chrome }: {
                   t('coverageBadge', { v: coverage }))
               : null,
             envelopeChars !== null
-              ? createElement('span', { className: 'bt-stat', title: t('envelopeArchived', { n: envelopeChars }) },
-                  t('envelopeArchived', { n: envelopeChars }))
+              ? createElement('span', { className: 'bt-stat', title: t('envelopeArchivedTitle', { n: envelopeChars }) },
+                  t('envelopeArchived', { v: humanChars(envelopeChars) }))
               : null,
             (state?.pendingDuplicates ?? 0) > 0
               ? createElement('span', { className: 'bt-stat bt-stat-warn', title: t('pendingDupTitle') },
@@ -1791,20 +2055,28 @@ export function WorkspaceBody({ t, locale, navigate, chrome }: {
           })
         : createElement('div', { className: 'bt-sub' }, t('loading')),
     ),
+    ), // 左栏收尾（帮助 + 收件箱）
 
-    // 外部会话浏览器（浏览 + 一键投递 + 投递后自动切会话；卡片蒸馏仍在会话里由模型完成）
-    createElement(ForeignBrowser, { state, t, lang, onError: (msg) => setError(msg), onNotice: showNotice, navigate }),
+    // 右栏：交接出去（出站）+ 外部会话浏览器（入站）+ 记忆快照
+    createElement('div', { style: { display: 'grid', gap: 10, alignItems: 'start' } },
+      createElement(SendCard, { sessionId, t, lang, onError: (msg) => setError(msg), onNotice: showNotice }),
+      // 外部会话浏览器（浏览 + 一键投递 + 投递后自动切会话；卡片蒸馏仍在会话里由模型完成）
+      createElement(ForeignBrowser, { state, t, lang, onError: (msg) => setError(msg), onNotice: showNotice, navigate }),
+      createElement(MemoryCard, { t, lang, onError: (msg) => setError(msg), onNotice: showNotice, onPushed: reload }),
+    ),
     ),
   )
 }
 
-/** composer 卡内浮动「接管」chip：一枚小按钮（挂在 conversation.input.overlay
- * 座位——composer 卡内部浮动条目，与消息反馈对话框同座），点开向上浮出工作台
- * 卡片（收件箱 + 外部会话浏览器）。fixed 透明遮罩点击关闭，浮层挂 chip 上方。 */
-export function ComposerChip({ t, locale, navigate }: {
+/** composer 卡内浮动「接力」chip：一枚小按钮（挂在 conversation.input.activity
+ * 座位——composer 卡内部浮动条目），点开向上浮出工作台卡片（帮助 + 收件箱 +
+ * 交接出去 + 外部会话浏览器 + 记忆快照）。fixed 透明遮罩点击关闭，浮层挂 chip 上方。
+ * sessionId 由宿主座位注入（session 级座位的标准参数；交接出去一键用，缺席降级复制路径）。 */
+export function ComposerChip({ t, locale, navigate, sessionId }: {
   t: Translate
   locale: LocaleRuntime | undefined
   navigate: (sessionId: string) => boolean
+  sessionId?: string
 }): ReturnType<typeof createElement> {
   useLocaleSync(locale)
   const [open, setOpen] = useState(false)
@@ -1857,7 +2129,7 @@ export function ComposerChip({ t, locale, navigate }: {
       ),
       createElement(PanelBoundary, {
         t,
-        children: createElement(WorkspaceBody, { t, locale, navigate, chrome: false }),
+        children: createElement(WorkspaceBody, { t, locale, navigate, chrome: false, sessionId }),
       }),
     ) : null,
   )
@@ -1924,6 +2196,9 @@ export function Panel({ t, locale, navigate, slim }: { t: Translate; locale: Loc
         createElement('summary', null, t('noteSummary')),
         createElement('div', { className: 'bt-note-body' }, t('noteBody'))),
     ),
+
+    // 新手帮助 / FAQ（设置卡同款，工作台左栏顶部另有一份）
+    createElement(HelpCard, { t }),
   )
 }
 
@@ -1951,13 +2226,24 @@ export function apply(ctx: Context): void {
       // 绑定后调用：slots 服务对象经属性访问现取（getter），把方法抽成局部函数
       // 再调用会丢 this（实测 TypeError: Cannot read properties of undefined
       // (reading 'ctx')）——必须 bind 或直接以方法形式调用。
-      const injectSeat = (ctx.slots.inject as (this: unknown, name: string, fn: () => unknown, label?: string) => void).bind(ctx.slots)
-      const registerSeat = (ctx.slots.register as (this: unknown, metadata: Record<string, unknown>, body: unknown) => unknown).bind(ctx.slots)
-      injectSeat('conversation.input.activity', () => registerSeat(
+      const injectSeat = (ctx.slots.inject as (this: unknown, name: string, fn: (...args: unknown[]) => unknown, label?: string) => void).bind(ctx.slots)
+      const registerSeat = (ctx.slots.register as (this: unknown, metadata: Record<string, unknown>, body: (...args: unknown[]) => unknown) => unknown).bind(ctx.slots)
+      // session 级座位把 sessionId 递给注入方（位置参数）与渲染体（标准 props）——
+      // 两处形态都防御式接（老宿主不给 → undefined → 交接出去卡走复制路径）
+      const sessionIdOf = (arg: unknown): string | undefined => {
+        if (typeof arg === 'string' && arg !== '') return arg
+        if (arg !== null && typeof arg === 'object') {
+          const v = (arg as { sessionId?: unknown }).sessionId
+          if (typeof v === 'string' && v !== '') return v
+        }
+        return undefined
+      }
+      injectSeat('conversation.input.activity', (injectSession?: unknown) => registerSeat(
         { name: 'conversation.input.activity', id: 'dsh-takeover' },
-        () => {
+        (...seatArgs: unknown[]) => {
           const chipT = makeT(ctx)
-          return createElement(ComposerChip, { t: chipT, locale: resolveLocale(ctx), navigate: uiNavigatorOf(ctx) })
+          const sessionId = sessionIdOf(seatArgs[0]) ?? sessionIdOf(injectSession)
+          return createElement(ComposerChip, { t: chipT, locale: resolveLocale(ctx), navigate: uiNavigatorOf(ctx), sessionId })
         },
       ), 'dsh-takeover: takeover composer chip')
       chipReady = true

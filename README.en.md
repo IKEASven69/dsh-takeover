@@ -2,7 +2,7 @@
 
 # dsh-takeover · Session Takeover Plugin
 
-**Pull, push, take over: pull sessions from eight foreign agents, check in the current one, pick up where they left off.**
+**Pull, push, take over: pull sessions from eight foreign agents, check in the current one, pick up where they left off — sessions and memory both, in either direction.**
 
 > **Why "takeover"?** Because that is exactly what happens: a session another agent left half-done is yours to take over and drive.
 > The protocol layer keeps the industry-generic word *handoff*; the product owns *takeover*.
@@ -13,6 +13,8 @@ dsh-takeover is a DeepSeek Harness (DSH) plugin implementing the full takeover l
 - **Push**: `/handoff` + `handoff_push` — check the current session into the shared inbox as a handoff card;
 - **Take over**: `/inbox` + `handoff_inbox` — any agent picks up on start; pulled sessions can optionally be checked in too, so another agent can relay the work.
 - **Browse + one-click takeover** (a "Relay" chip inside the session composer): no commands to memorize — click it to unfold a floating workbench listing recent sessions of all eight agents (title / time / project, expandable previews with the first user request and stop point), click **Take over** to spawn a new session with the command delivered and the app switched to it automatically; on failure it falls back to copying the command.
+- **Send out** (bidirectional): relaying is not only inbound — click **Send out** in the workbench to check the current DSH session into the shared inbox; the other side (Claude Code / Codex / any agent) pastes the pickup instruction shown with the card and continues.
+- **Memory snapshot**: sessions are not the only thing that hands over — bundle each agent's memory files (CLAUDE.md / AGENTS.md / .cursorrules; the dsh-hippo store gets a dump/import path) into one handoff card in the inbox; the picker absorbs the card into its own memory files.
 
 ```
 ~/.handoff/
@@ -70,6 +72,7 @@ dsh plugin --profile web add github:IKEASven69/dsh-takeover
 | `foreign_session_read` | Read-only pull of eight foreign agents' local sessions (claude / codex / opencode / zcode / pi / workbuddy / cursor / grok). `action=list` lists candidates (title/time/turn count); `action=show` resolves a reference (empty or `latest` = newest; id / id prefix / path / title keyword; ambiguity returns candidates, never guesses) and returns a **structured summary**: title, turn counts, first user message, tail progress, top-15 involved files, and six-section skeleton-card material. Raw turns are paged only when `limit` is explicitly passed (offset applies together with `limit`; a lone `offset` returns no raw text). Canonical `{ ok, ... }` values; probe/parse failures return `{ ok: false, error }`, never throw. |
 | `handoff_push` | Checks the current session into the inbox as a protocol card. The six section texts (goal/files/done/remaining/stopped/warnings/suggested) are optional; empty sections fall back to **deterministic** collection from the session event stream (no LLM calls; probe failures degrade, never throw). Returns a canonical `{ ok, id, path, coverage, patch? }` value. Uncommitted changes in a git work tree are captured as a companion patch (`<id>.patch`; taker restores with `git apply`; diffs over 512KB are rejected whole rather than truncated), and the envelope carries the origin host identity plus a baseline-test hint.|
 | `handoff_inbox` | `action=list` lists pending cards (id/source/project/time); `action=load` + `id` picks one up (consume-and-archive, with git-verify MISMATCH / UNAVAILABLE warnings). Returns canonical `{ ok, ... }` values. |
+| `handoff_memory` | Memory snapshot handover. `action=scan` read-only lists each agent's local memory files (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.zcode/AGENTS.md`, project-level AGENTS.md, …, with sizes/previews); `action=push` packs the selected memories into one handoff card in the inbox (secret gate and coverage discipline apply, same as session cards); the picker absorbs the card's "suggested" section. |
 
 **Slash skills (user-invocable, not model-invocable)**
 
@@ -88,7 +91,7 @@ Settings hold settings and guidance only, two blocks (copy follows the host UI l
 - **Commands**: `/handoff`, `/inbox` and the eight `/resume-*` laid out directly; disabled vendors dim in sync;
 - **Support matrix**: one row per reader — official brand icon + display name, discovered session count, and an enable toggle. Toggles persist to `<HANDOFF_HOME>/config.json` and survive restarts. Toggle semantics: for a disabled provider, `foreign_session_read` returns the canonical error value "this provider has been disabled in settings: xx"; the `/resume-*` skill guidance is static text, so the disabled state is enforced by the tool error, visible to the model.
 
-The workbench is not in settings: **every session's composer toolbar carries a compact "Relay" chip** (passing context between agents) — click it to unfold a floating workbench above the composer: the inbox overview (pending/consumed badges, source filters, relay-chain badges with one-click chain filtering, collapsed low-info cards, single/all/HTML export) + the external session browser (recent sessions of all eight agents, project facets with instant filtering, expandable previews of the first user request / recent progress / stop point / warnings, one-click takeover and takeover-with-deposit).
+The workbench is not in settings: **every session's composer toolbar carries a compact "Relay" chip** (passing context between agents) — click it to unfold a two-column floating workbench above the composer: on the left, the inbox overview (pending/consumed badges, evidence coverage, source filters, relay-chain badges with one-click chain filtering, collapsed low-info cards, single/all/HTML export, a beginner FAQ card) + on the right, three cards: **Send out** (one-click deposit of the current session + per-target pickup instructions), the **external session browser** (recent sessions of all eight agents, project facets with instant filtering, expandable previews of the first user request / recent progress / stop point / warnings, one-click takeover and takeover-with-deposit), and the **memory snapshot** (scan, select, pack into a card).
 
 ## Permission scope
 

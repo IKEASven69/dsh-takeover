@@ -162,7 +162,7 @@ test('WorkspaceBody：统计条 / 接力链徽标 / 低信息折叠组全渲染'
   await waitText('待取件 3')
   assert.ok(has('待取件 3'), '待取件徽标缺失')
   assert.ok(has('已消费 5'), '已消费徽标缺失')
-  assert.ok(has('覆盖率 10/12'), '覆盖率徽标缺失')
+  assert.ok(has('可查证 10/12'), '覆盖率徽标缺失（0.3.0 改版：覆盖率→可查证）')
   assert.ok(has('← 接力自 ho-test-0001'), '接力链徽标缺失')
   assert.ok(has('导出全部'), '导出按钮缺失')
   assert.ok(has('导出 HTML 报告'))
@@ -271,6 +271,78 @@ test('PanelBoundary：子树抛错渲染错误卡而非白屏', async () => {
 test('静态词典回退：缺宿主 locale 时 t 输出 zh 文案', () => {
   assert.ok(String(DICTS.zh.appTitle).includes('dsh-takeover'))
   assert.ok(String(DICTS.en.browserTitle ?? '').length > 0)
+})
+
+// ---------------------------------------------------------------- 0.3.0 新三卡（交接出去 / 记忆快照 / 帮助）
+
+test('WorkspaceBody：帮助/交接出去/记忆快照齐渲染；统计条改版（可查证 + 信封 7.4K）；pills 带品牌图标', async () => {
+  await render(createElement(client.WorkspaceBody, { t, locale: undefined, navigate, chrome: false, sessionId: 'sess-cur-1' }))
+  assert.ok(has('❓ 新手帮助 / FAQ'), '帮助卡应渲染')
+  assert.ok(has('交接出去'), '出站卡应渲染')
+  assert.ok(has('🧠 记忆快照'), '记忆卡应渲染')
+  assert.ok(has('可查证'), '覆盖率徽标应改为「可查证」')
+  assert.ok(has('机器信封 7.4K'), '信封字数应人性化（7426→7.4K）')
+  // 外部会话浏览器 pills（state.providers 两家）：应带品牌 svg 图标
+  const icons = container.querySelectorAll('.bt-chip svg')
+  assert.ok(icons.length >= 2, `浏览器 pills 应有品牌图标，实得 ${icons.length}`)
+})
+
+test('SendCard：无 sessionId 复制降级不发请求；有 sessionId 一键 POST send', async () => {
+  const copied: string[] = []
+  const nav = globalThis.navigator as unknown as { clipboard?: { writeText: (s: string) => Promise<void> } }
+  if (nav.clipboard !== undefined) nav.clipboard.writeText = async (s: string) => { copied.push(s) }
+  // 复制降级路径（老宿主座位不带 sessionId）
+  await render(createElement(client.SendCard, { t, lang: 'zh' as const, onError: () => {}, onNotice: () => {} }))
+  resetCalls()
+  await clickButton('交接出去')
+  await flush()
+  assert.ok(copied.some((s) => s.startsWith('/handoff')), '无 sessionId 应复制寄存指令')
+  assert.ok(!calls.some((c) => c.url.startsWith('/dsh-takeover/send')), '无 sessionId 不应发请求')
+  // 一键路径（key 换新实例：前一步「已复制」状态不复位）
+  await render(createElement(client.SendCard, { key: 'b', t, lang: 'zh' as const, sessionId: 'sess-cur-9', onError: () => {}, onNotice: () => {} }))
+  resetCalls()
+  await clickButton('交接出去')
+  await flush()
+  assert.deepEqual(lastBody('/dsh-takeover/send'), { sessionId: 'sess-cur-9', lang: 'zh' })
+})
+
+test('MemoryCard：展开即扫描、不存在的来源不可选、出卡 POST memory-push 只带勾选项', async () => {
+  stubPlan['/dsh-takeover/memory-scan'] = { body: { ok: true, sources: [
+    { key: 'claude-user', agent: 'Claude Code', path: 'C:/u/.claude/CLAUDE.md', exists: true, bytes: 1200, mtime: '', preview: '偏好 bun' },
+    { key: 'codex-user', agent: 'Codex CLI', path: 'C:/u/.codex/AGENTS.md', exists: false, bytes: 0, mtime: '', preview: '' },
+  ] } }
+  stubPlan['/dsh-takeover/memory-push'] = { body: { ok: true, sources: 1, id: 'ho-mem-1', path: 'x' } }
+  // 初始展开（defaultOpen）经挂载副作用触发扫描；toggle 事件路径在真实浏览器走 onToggle
+  resetCalls()
+  await render(createElement(client.MemoryCard, { t, lang: 'zh' as const, onError: () => {}, onNotice: () => {}, onPushed: () => {}, defaultOpen: true }))
+  await flush()
+  assert.ok(calls.some((c) => c.url.startsWith('/dsh-takeover/memory-scan')), '展开应触发扫描')
+  await waitText('CLAUDE.md')
+  assert.ok(has('CLAUDE.md') && has('1 KB'), '扫描行应渲染（路径 + 大小）')
+  // 不存在的 codex 行 checkbox 应禁用
+  const boxes = [...container.querySelectorAll('input[type="checkbox"]')] as HTMLInputElement[]
+  assert.equal(boxes.length, 2)
+  assert.equal(boxes[1]?.disabled, true, '不存在的来源应禁用勾选')
+  // 出卡
+  await clickButton('生成记忆交接卡')
+  await flush()
+  const pushed = lastBody('/dsh-takeover/memory-push') as { keys: string[]; target: string }
+  assert.deepEqual(pushed.keys, ['claude-user'], '不存在的来源不应入选')
+  assert.equal(pushed.target, 'any')
+  delete stubPlan['/dsh-takeover/memory-scan']
+  delete stubPlan['/dsh-takeover/memory-push']
+})
+
+test('HelpCard：8 条问答渲染，zh 词典齐全（en 同键）', async () => {
+  await render(createElement(client.HelpCard, { t }))
+  assert.ok(has('三步上手'))
+  assert.ok(has('隐私'))
+  for (const lang of ['zh', 'en'] as const) {
+    for (let i = 1; i <= 8; i++) {
+      assert.ok(String(DICTS[lang][`qa${i}q`] ?? '').length > 0, `${lang} qa${i}q 缺失`)
+      assert.ok(String(DICTS[lang][`qa${i}a`] ?? '').length > 0, `${lang} qa${i}a 缺失`)
+    }
+  }
 })
 
 after(() => { try { root?.unmount() } catch { /* 已卸载 */ } })

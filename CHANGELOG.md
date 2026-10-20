@@ -1,5 +1,13 @@
 # Changelog — dsh-takeover
 
+## [0.3.0] — 2026-10-20
+
+Relaying goes bidirectional, and memory joins the loop.
+
+- **Send out**: the workbench grows an outbound card — one click queues the deposit instruction into the *current* DSH session; the agent distills and checks the card into the shared inbox, and the other side (Claude Code / Codex / any agent) pastes the per-target pickup instruction shown under the card. Falls back to copying the instruction on hosts without the session controller.
+- **Memory snapshot**: a new card (and a `handoff_memory` tool) scans each agent's local memory files — `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.zcode/AGENTS.md`, `~/.config/opencode/AGENTS.md`, `~/.cursorrules`, project-level AGENTS.md / CLAUDE.md / .cursorrules, plus a dsh-hippo store probe with the official `/memory dump` / `/memory import` interop path — and packs the selected ones into a handoff card in the inbox. Secret gate, skeleton gate, coverage ledger and machine envelope all apply, same as session cards.
+- **Beginner pass**: a built-in FAQ card (8 entries, zh/en) ships in the workbench and the settings card; the coverage badge is renamed 「可查证 / Evidence」, the envelope stat is humanized (7426 → 7.4K) with a plain-language tooltip, foreign sessions without a human title get one sniffed from their first user message, and the browser's provider pills now carry brand icons.
+
 ## [0.2.3] — 2026-10-19
 
 Two-column relay workbench: the popover widens to a side-by-side layout — inbox overview on the left, external session browser on the right — collapsing back to a single column in narrow containers. Visual polish aligned with the product one-pager.
