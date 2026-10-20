@@ -1334,6 +1334,9 @@ export function MemoryCard({ t, lang, onError, onNotice, onPushed, defaultOpen }
 
   const kb = (n: number): string => (n >= 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${n} B`)
   const existing = rows?.filter((r) => r.exists) ?? []
+  // 不存在的来源不渲染（对没装某家的用户就是噪音——「跟 hippo 有啥关系」），
+  // 只报个数保持「扫过哪些」的透明度
+  const missing = rows?.filter((r) => !r.exists).length ?? 0
 
   return createElement('details', {
     className: 'bt-group',
@@ -1357,25 +1360,25 @@ export function MemoryCard({ t, lang, onError, onNotice, onPushed, defaultOpen }
           ? createElement('div', { className: 'bt-sub bt-fs-empty' }, t('memoryNone'))
           : [
               createElement('div', { key: 'rows', style: { display: 'grid', gap: 4, marginTop: 8 } },
-                ...rows.map((r) => createElement('label', {
+                ...existing.map((r) => createElement('label', {
                   key: r.key,
                   style: {
                     display: 'flex', gap: 8, alignItems: 'center', fontSize: 12,
-                    opacity: r.exists ? 1 : 0.45, cursor: r.exists ? 'pointer' : 'default',
+                    cursor: 'pointer',
                   },
                   title: r.preview !== '' ? r.preview : r.path,
                 },
                   createElement('input', {
                     type: 'checkbox',
                     checked: picked.has(r.key),
-                    disabled: !r.exists,
-                    onChange: () => { if (r.exists) toggle(r.key) },
+                    onChange: () => { toggle(r.key) },
                   }),
                   createElement('span', { style: { flex: '0 0 auto', fontWeight: 600 } }, r.agent),
                   createElement('span', { style: { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: 0.75 } }, r.path),
-                  r.exists ? createElement('span', { style: { flex: '0 0 auto', opacity: 0.6 } }, kb(r.bytes)) : null,
+                  createElement('span', { style: { flex: '0 0 auto', opacity: 0.6 } }, kb(r.bytes)),
                 )),
               ),
+              missing > 0 ? createElement('div', { key: 'missing', className: 'bt-sub', style: { marginTop: 4, opacity: 0.6 } }, t('memoryMissingNote', { n: missing })) : null,
               createElement(TargetChips, { key: 'targets', sel: target, lang, onSelect: setTarget }),
               createElement('div', { key: 'act', style: { display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 } },
                 createElement('button', {
@@ -2070,7 +2073,9 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId }: {
 
 /** composer 卡内浮动「接力」chip：一枚小按钮（挂在 conversation.input.activity
  * 座位——composer 卡内部浮动条目），点开向上浮出工作台卡片（帮助 + 收件箱 +
- * 交接出去 + 外部会话浏览器 + 记忆快照）。fixed 透明遮罩点击关闭，浮层挂 chip 上方。
+ * 交接出去 + 外部会话浏览器 + 记忆快照）。fixed 透明遮罩点击关闭。
+ * 浮层几何按按钮实际位置现算（fixed + 视口夹取）：矮窗限高到按钮上缘以上空间
+ * （不够放就改朝下），窄窗左缘夹进视口——不再顶出屏幕外、不再钻进侧栏底下。
  * sessionId 由宿主座位注入（session 级座位的标准参数；交接出去一键用，缺席降级复制路径）。 */
 export function ComposerChip({ t, locale, navigate, sessionId }: {
   t: Translate
@@ -2080,6 +2085,37 @@ export function ComposerChip({ t, locale, navigate, sessionId }: {
 }): ReturnType<typeof createElement> {
   useLocaleSync(locale)
   const [open, setOpen] = useState(false)
+  const chipRef = useRef<HTMLButtonElement | null>(null)
+  // 浮层定位（打开瞬间与视口变化时现算；CSS 无法知道 chip 在哪，必须量）
+  const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number; maxH: number; width: number } | null>(null)
+  const measure = (): void => {
+    const el = chipRef.current
+    if (el === null || typeof window === 'undefined' || typeof window.innerHeight !== 'number') return
+    const r = el.getBoundingClientRect()
+    if (typeof r.top !== 'number') return
+    const vw = window.innerWidth
+    const width = Math.max(360, Math.min(1040, vw - 16))
+    const left = Math.max(8, Math.min(vw - width - 8, r.right - width))
+    const spaceAbove = r.top - 12
+    const spaceBelow = window.innerHeight - r.bottom - 12
+    // 上方放不下（<280px）且下方更宽裕时朝下弹，否则朝上（composer 常态）
+    if (spaceAbove < 280 && spaceBelow > spaceAbove) {
+      setPos({ left, top: r.bottom + 8, maxH: Math.max(240, spaceBelow), width })
+    } else {
+      setPos({ left, bottom: window.innerHeight - r.top + 8, maxH: Math.max(240, spaceAbove), width })
+    }
+  }
+  useEffect(() => {
+    if (!open) return
+    const onRe = (): void => { measure() }
+    window.addEventListener('resize', onRe)
+    // 捕获阶段听滚动：宿主页面任何容器滚动都改 chip 视口位置，浮层跟随重算
+    window.addEventListener('scroll', onRe, true)
+    return () => {
+      window.removeEventListener('resize', onRe)
+      window.removeEventListener('scroll', onRe, true)
+    }
+  }, [open])
   return createElement('div', { style: { position: 'relative', display: 'inline-flex' } },
     // ghost 样式对齐宿主 composer 原生控件（无边框/次级标签色/悬停浅底），
     // 颜色直接吃宿主 dsw alias 变量；<style> 就地注入——chip 挂载点在
@@ -2092,7 +2128,11 @@ export function ComposerChip({ t, locale, navigate, sessionId }: {
     createElement('button', {
       className: 'bt-chip',
       'data-open': String(open),
-      onClick: () => setOpen((v) => !v),
+      ref: chipRef,
+      onClick: () => {
+        if (!open) measure() // 打开瞬间先量好几何，首帧就位（避免闪到旧位置）
+        setOpen((v) => !v)
+      },
       title: t('sidebarTabDesc'),
     },
       createElement('span', {
@@ -2112,8 +2152,12 @@ export function ComposerChip({ t, locale, navigate, sessionId }: {
         // 宿主输入卡变量，暗亮主题随宿主。
         '--bg': 'var(--dsw-specific-input-major, #171717)',
         '--border': 'var(--dsw-alias-border-l2, rgba(127,127,127,.25))',
-        position: 'absolute', bottom: 'calc(100% + 8px)', right: 0, zIndex: 9999,
-        width: 'min(1040px, calc(100vw - 48px))', maxHeight: 'min(72vh, 640px)', overflowY: 'auto',
+        position: 'fixed', zIndex: 9999,
+        boxSizing: 'border-box', // maxHeight 必须含 padding+border，否则矮窗仍溢出视口（实测 583>568）
+        ...(pos !== null
+          ? { left: pos.left, width: pos.width, maxHeight: pos.maxH, ...(pos.top !== undefined ? { top: pos.top } : { bottom: pos.bottom }) }
+          : { right: 8, bottom: 72, width: 'min(1040px, calc(100vw - 16px))', maxHeight: '70vh' }),
+        overflowY: 'auto',
         background: 'var(--bg)',
         border: '1px solid var(--border)', borderRadius: 12,
         boxShadow: '0 10px 32px rgba(0,0,0,.28)', padding: 8,

@@ -319,10 +319,12 @@ test('MemoryCard：展开即扫描、不存在的来源不可选、出卡 POST m
   assert.ok(calls.some((c) => c.url.startsWith('/dsh-takeover/memory-scan')), '展开应触发扫描')
   await waitText('CLAUDE.md')
   assert.ok(has('CLAUDE.md') && has('1 KB'), '扫描行应渲染（路径 + 大小）')
-  // 不存在的 codex 行 checkbox 应禁用
-  const boxes = [...container.querySelectorAll('input[type="checkbox"]')] as HTMLInputElement[]
-  assert.equal(boxes.length, 2)
-  assert.equal(boxes[1]?.disabled, true, '不存在的来源应禁用勾选')
+  assert.ok(has('另有 1 处常见记忆路径'), '缺失来源应只报个数')
+  // 不存在的来源不渲染（用户反馈：没装 hippo 的机器不该看到 hippo 行）
+  assert.ok(!has('.codex/AGENTS.md'), '不存在的来源不应渲染')
+  const boxes = [...container.querySelectorAll('input[type="checkbox"]')] as unknown as HTMLInputElement[]
+  assert.equal(boxes.length, 1)
+  assert.equal(boxes[0]?.disabled, false)
   // 出卡
   await clickButton('生成记忆交接卡')
   await flush()
