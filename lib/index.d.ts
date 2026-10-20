@@ -1,7 +1,7 @@
 import { Context } from "@deepseek-ai/cordis";
 import { Agent } from "@deepseek-ai/dsh-agent";
 import { SkillRegistration } from "@deepseek-ai/dsh-skill";
-//#region vendor/@agent-handoff/core/dist/index.d.mts
+//#region node_modules/.pnpm/@agent-handoff+core@file+vendor+@agent-handoff+core/node_modules/@agent-handoff/core/dist/index.d.mts
 /** 六段正文 + 可选「建议加载」段 */
 interface CardSections {
   goal: string;
@@ -194,7 +194,7 @@ export declare function handoffHostNotice(userQuestions: unknown, action: 'push'
   signal?: AbortSignal;
 }, log?: (msg: string) => void): Promise<void>;
 //#endregion
-//#region vendor/@agent-handoff/readers/dist/index.d.mts
+//#region node_modules/.pnpm/@agent-handoff+readers@file+vendor+@agent-handoff+readers/node_modules/@agent-handoff/readers/dist/index.d.mts
 //#region src/transcript.d.ts
 /**
  * 会话 Turn 的最小类型与 Claude transcript 解析（transcript 解析模式，

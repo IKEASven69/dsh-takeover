@@ -1,0 +1,56 @@
+[
+  {
+    "title": "sess-000",
+    "cwd": "/corpus/proj6",
+    "kind": "file",
+    "hasCwd": true
+  },
+  {
+    "title": "sess-001",
+    "cwd": "/corpus/proj1",
+    "kind": "file",
+    "hasCwd": true
+  },
+  {
+    "title": "sess-002",
+    "cwd": "/corpus/proj0",
+    "kind": "file",
+    "hasCwd": true
+  },
+  {
+    "title": "sess-003",
+    "cwd": "/corpus/proj3",
+    "kind": "file",
+    "hasCwd": true
+  },
+  {
+    "title": "sess-004",
+    "cwd": "/corpus/proj2",
+    "kind": "file",
+    "hasCwd": true
+  },
+  {
+    "title": "sess-005",
+    "cwd": "/corpus/proj1",
+    "kind": "file",
+    "hasCwd": true
+  },
+  {
+    "title": "sess-006",
+    "cwd": "/corpus/proj4",
+    "kind": "file",
+    "hasCwd": true
+  },
+  {
+    "title": "sess-007",
+    "cwd": "/corpus/proj3",
+    "kind": "file",
+    "hasCwd": true
+  },
+  {
+    "title": "sess-008",
+    "cwd": "/corpus/proj6",
+    "kind": "file",
+    "hasCwd": true
+  }
+]

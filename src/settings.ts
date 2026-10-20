@@ -216,26 +216,33 @@ export function buildState(readers: ForeignReaders, dir?: string): TakeoverState
       // 会把超尺寸/解析失败但仍在册的卡的信封误当孤儿销毁（supersedes 链等机器层
       // 元数据不可恢复）——core 对这类卡明确「保留在收件箱」
       const supersedesByOwner = new Map<string, string>()
+      // 伴生文件孤儿清扫：信封（*.envelope.json）与补丁（*.patch）是纯派生物，
+      // 仅当对应 .md 确实不在盘上（已被任何实现取走，含不认识伴生文件的旧版）才删。
+      // 补丁孤儿是真实崩溃窗口的产物：inboxLoad 顺序是 md→信封→补丁，中途崩溃会留下
+      // 列表永不显示（列表只认 .md）、永不消费的僵尸补丁——清扫是恢复语义的最后一环
       for (const f of readdirSync(pd)) {
-        if (!f.endsWith('.envelope.json')) continue
+        if (!f.endsWith('.envelope.json') && !f.endsWith('.patch')) continue
+        const ownerId = f.endsWith('.envelope.json')
+          ? f.slice(0, -'.envelope.json'.length)
+          : f.slice(0, -'.patch'.length)
+        const hasMd = existsSync(join(pd, `${ownerId}.md`))
         try {
-          // 孤儿信封清扫：信封是纯派生物，仅当对应 .md 确实不在盘上（已被任何实现
-          // 取走，含不认识信封的旧版）才删；正在推送的卡 .md 先落盘，不会误删
-          const ownerId = f.slice(0, -'.envelope.json'.length)
-          if (!existsSync(join(pd, `${ownerId}.md`))) {
+          if (!hasMd) {
             rmSync(join(pd, f))
             continue
           }
           const st = statSync(join(pd, f))
-          envelopeChars = (envelopeChars ?? 0) + st.size
-          // 链数据源 + S6 尺寸闸：supersedes 按协议设计只随信封走（卡片本体
-          // 不含，卡片侧注入不算数）；信封超 64KB 只计字符不读入（30s 轮询不被
-          // 外来巨信封阻塞），坏 JSON 不拦统计
-          if (supersedesByOwner.size < 200 && st.isFile() && st.size <= 65536) {
-            try {
-              const env = JSON.parse(readFileSync(join(pd, f), 'utf-8')) as { supersedes?: unknown }
-              if (typeof env.supersedes === 'string' && env.supersedes !== '') supersedesByOwner.set(ownerId, env.supersedes)
-            } catch { /* 单信封解析失败不影响统计 */ }
+          if (f.endsWith('.envelope.json')) {
+            envelopeChars = (envelopeChars ?? 0) + st.size
+            // 链数据源 + S6 尺寸闸：supersedes 按协议设计只随信封走（卡片本体
+            // 不含，卡片侧注入不算数）；信封超 64KB 只计字符不读入（30s 轮询不被
+            // 外来巨信封阻塞），坏 JSON 不拦统计
+            if (supersedesByOwner.size < 200 && st.isFile() && st.size <= 65536) {
+              try {
+                const env = JSON.parse(readFileSync(join(pd, f), 'utf-8')) as { supersedes?: unknown }
+                if (typeof env.supersedes === 'string' && env.supersedes !== '') supersedesByOwner.set(ownerId, env.supersedes)
+              } catch { /* 单信封解析失败不影响统计 */ }
+            }
           }
         } catch {
           /* 单项 stat/删除失败不计入 */

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -497,12 +497,33 @@ function writeCard(card, dir) {
 	writeFileSync(p, renderCard(card), "utf-8");
 	return p;
 }
+/** 取件认领文件的过期阈值（毫秒）：认领到 rename 之间崩溃留下的认领会挡住后续
+* 取件——超过此 age 的认领视为中断残留，可被安全接管（正常取件是毫秒级）。 */
+const CLAIM_STALE_MS = 6e4;
+/** 清扫 pending/ 里的取件认领残留：孤儿（对应 .md 已不在）直接删；
+* 过期（.md 还在但认领超龄=取件进程中断）也删，让卡重新可取。 */
+function sweepClaims(pd) {
+	if (!existsSync(pd)) return;
+	for (const f of readdirSync(pd)) {
+		if (!f.endsWith(".claim")) continue;
+		const p = join(pd, f);
+		try {
+			const md = join(pd, `${f.slice(0, -6)}.md`);
+			if (!existsSync(md)) {
+				rmSync(p);
+				continue;
+			}
+			if (Date.now() - statSync(p).mtimeMs > 6e4) rmSync(p);
+		} catch {}
+	}
+}
 function listDirCards(d) {
 	const report = {
 		cards: [],
 		skipped: []
 	};
 	if (!existsSync(d)) return report;
+	sweepClaims(d);
 	for (const f of readdirSync(d)) {
 		if (!f.endsWith(".md")) continue;
 		try {
@@ -554,24 +575,57 @@ const listArchivedReport = (dir) => listDirCards(archivedDir(dir));
 */
 function loadCard(id, dir) {
 	assertSafeId(id);
-	const src = join(pendingDir(dir), `${id}.md`);
+	const pd = pendingDir(dir);
+	const src = join(pd, `${id}.md`);
 	if (!existsSync(src)) throw new Error(`收件箱无此待取件：${id}（可能已取过——消费即弃）`);
 	if (statSync(src).size > 8388608) throw new Error(`卡片超过 ${MAX_CARD_BYTES} 字节上限，拒载（卡片保留在收件箱）`);
-	const card = parseCardLenient(readFileSync(src, "utf-8"), { filename: `${id}.md` });
+	const claim = join(pd, `${id}.claim`);
 	try {
-		renderCard(card);
-	} catch (e) {
-		throw new Error(`卡片无法渲染，取件被拒绝（卡片保留在收件箱）：${e instanceof Error ? e.message : String(e)}`);
+		closeSync(openSync(claim, "wx"));
+	} catch {
+		throw new Error(`卡片 ${id} 正在被另一个进程取件（并发冲突，消费即弃不变）`);
 	}
-	const ad = archivedDir(dir);
-	mkdirSync(ad, { recursive: true });
-	renameSync(src, join(ad, `${id}.md`));
 	try {
-		trimArchived(ad);
-	} catch (e) {
-		console.warn(`archived 滚动清理失败（取件本身已成功）：${e.message}`);
+		const card = parseCardLenient(readFileSync(src, "utf-8"), { filename: `${id}.md` });
+		const rendered = (() => {
+			try {
+				return renderCard(card);
+			} catch (e) {
+				throw new Error(`卡片无法渲染，取件被拒绝（卡片保留在收件箱）：${e instanceof Error ? e.message : String(e)}`);
+			}
+		})();
+		const ad = archivedDir(dir);
+		mkdirSync(ad, { recursive: true });
+		const dst = join(ad, `${id}.md`);
+		if (existsSync(dst)) {
+			const prev = readFileSync(dst, "utf-8");
+			if (prev === rendered) {
+				rmSync(src);
+				try {
+					trimArchived(ad);
+				} catch (e) {
+					console.warn(`archived 滚动清理失败（取件本身已成功）：${e.message}`);
+				}
+				return card;
+			}
+			const stamp = /* @__PURE__ */ new Date();
+			const p2 = (n) => String(n).padStart(2, "0");
+			let conflictDst = join(ad, `${id}.conflict-${p2(stamp.getHours())}${p2(stamp.getMinutes())}${p2(stamp.getSeconds())}.md`);
+			for (let n = 1; existsSync(conflictDst); n++) conflictDst = join(ad, `${id}.conflict-${p2(stamp.getHours())}${p2(stamp.getMinutes())}${p2(stamp.getSeconds())}-${n}.md`);
+			writeFileSync(conflictDst, prev, "utf-8");
+		}
+		renameSync(src, dst);
+		try {
+			trimArchived(ad);
+		} catch (e) {
+			console.warn(`archived 滚动清理失败（取件本身已成功）：${e.message}`);
+		}
+		return card;
+	} finally {
+		try {
+			rmSync(claim);
+		} catch {}
 	}
-	return card;
 }
 /** archived 滚动：按 mtime 留最新 ARCHIVED_KEEP 份，其余删除；*.md 目录等异常项不进候选 */
 function trimArchived(ad) {
@@ -741,4 +795,4 @@ function collectPatch(cwd, maxBytes = PATCH_MAX_BYTES) {
 	};
 }
 //#endregion
-export { ARCHIVED_KEEP, MAX_CARD_BYTES, PATCH_MAX_BYTES, SAFE_ID, SAFE_KEY, SECTION_KEYS, UNTRACKED_LIST_MAX, archivedDir, assertSafeId, cardToFrontmatter, collectGitSnapshot, collectPatch, frontmatterToCard, generateId, listArchived, listArchivedReport, listPending, listPendingReport, loadCard, parseCard, parseCardLenient, parseSections, pendingDir, porcelainPaths, renderCard, resolveHome, sanitizeKey, verifyGit, writeCard, yamlEmit, yamlParse };
+export { ARCHIVED_KEEP, CLAIM_STALE_MS, MAX_CARD_BYTES, PATCH_MAX_BYTES, SAFE_ID, SAFE_KEY, SECTION_KEYS, UNTRACKED_LIST_MAX, archivedDir, assertSafeId, cardToFrontmatter, collectGitSnapshot, collectPatch, frontmatterToCard, generateId, listArchived, listArchivedReport, listPending, listPendingReport, loadCard, parseCard, parseCardLenient, parseSections, pendingDir, porcelainPaths, renderCard, resolveHome, sanitizeKey, verifyGit, writeCard, yamlEmit, yamlParse };

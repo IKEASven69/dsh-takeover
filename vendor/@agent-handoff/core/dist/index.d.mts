@@ -115,6 +115,9 @@ export interface DirCardsReport {
     reason: string;
   }>;
 }
+/** 取件认领文件的过期阈值（毫秒）：认领到 rename 之间崩溃留下的认领会挡住后续
+ * 取件——超过此 age 的认领视为中断残留，可被安全接管（正常取件是毫秒级）。 */
+export declare const CLAIM_STALE_MS = 60000;
 /** 列 pending/（只读不消费） */
 export declare const listPending: (dir?: string) => Card[];
 /** 列 archived/（只读不消费） */
