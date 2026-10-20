@@ -2,7 +2,7 @@
 
 # dsh-takeover · 会话接管插件
 
-**会拉、会推、会接管：拉取八家外部 agent 会话，寄存当前会话，开局取件。**
+**会拉、会推、会接管：拉取八家外部 agent 会话，寄存当前会话，开局取件——会话和记忆都能交接，方向随意。**
 
 > **为什么叫 takeover？** takeover = 接管：别的 agent 干到一半的会话，你随时接管接着掌控。
 > 协议层词汇保留 handoff（交接，业界通用语），产品层只占「接管」这个词。
@@ -13,6 +13,8 @@ dsh-takeover 是 DeepSeek Harness（DSH）插件，实现 `handoff: 1` 开放协
 - **推**：`/handoff` + `handoff_push` —— 把当前会话寄存成一张交接卡片，落共享收件箱；
 - **接管**：`/inbox` + `handoff_inbox` —— 任何 agent 开局取件；拉取的会话也可以顺手寄存，让另一个 agent 接着干。
 - **浏览 + 一键接管**（会话输入框里的「接力」按钮）：不用记命令——点开即浮出工作台，浏览八家最近会话（标题/时间/项目，可展开预览首条请求与停点），点「接管」直接新建会话投递指令并自动切换过去看模型接手；失败自动退回复制指令。
+- **交接出去**（双向）：接力不只是「接进来」——工作台点「交接出去」，把当前 DSH 会话一键寄存进共享收件箱，对面（Claude Code / Codex / 任何 agent）粘贴取件指令即接手，指引随卡给出。
+- **记忆快照**：交接的不止会话——把各家的记忆文件（CLAUDE.md / AGENTS.md / .cursorrules，dsh-hippo 记忆库给 dump/import 通路）打包成一张交接卡进收件箱，取件方按卡吸收进自己的记忆文件。
 
 ```
 ~/.handoff/
@@ -70,6 +72,7 @@ dsh plugin --profile web add github:IKEASven69/dsh-takeover
 | `foreign_session_read` | 只读拉取八家会话（claude / codex / opencode / zcode / pi / workbuddy / cursor / grok）。`action=list` 列候选（标题/时间/轮数）；`action=show` 按引用（空或 `latest`=最新；id/前缀/路径/标题关键词；歧义返回候选不猜）返回**结构化摘要**：标题、轮数、首条用户消息、尾部进展、涉及文件 top15、骨架卡六段素材；turns 原文只在显式传 `limit` 时分页给（offset 需与 limit 同传，offset 单传不返回原文）。返回 `{ ok, ... }` 规范值，探测/解析失败 `{ ok: false, error }` 不抛。 |
 | `handoff_push` | 把当前会话寄存为协议卡片。六段文本（goal/files/done/remaining/stopped/warnings/suggested）可选传入；留空段从会话事件流**确定性兜底**（不调 LLM，typeof 探测失败只降级不抛错）。git 仓库内的未提交改动自动随卡打补丁（`<id>.patch`，取件方 `git apply` 复原；超 512KB 拒带不截断），信封另带源机标识与基线测试提示。返回 `{ ok, id, path, coverage, patch? }` 规范值。 |
 | `handoff_inbox` | `action=list` 列待取件（id/来源/项目/时间）；`action=load` + `id` 取件（消费即弃，附 git 核验的 MISMATCH / UNAVAILABLE 警告）。返回 `{ ok, ... }` 规范值。 |
+| `handoff_memory` | 记忆快照交接。`action=scan` 只读列本机各 agent 的记忆文件（`~/.claude/CLAUDE.md`、`~/.codex/AGENTS.md`、`~/.zcode/AGENTS.md`、项目级 AGENTS.md 等，含大小/预览）；`action=push` 把勾选的记忆打包成一张 handoff 卡寄存进收件箱（密钥闸与覆盖率纪律同会话卡），取件方按卡「建议加载」吸收。 |
 
 **slash skill（用户可调，模型不可调）**
 
@@ -88,7 +91,7 @@ dsh plugin --profile web add github:IKEASven69/dsh-takeover
 - **命令速览**：`/handoff`、`/inbox` 与八条 `/resume-*` 直接平铺可见，停用的家灰显联动；
 - **支持矩阵**：八家读取器各一行——官方品牌图标 + 规范显示名、发现的会话数、启用开关。开关持久化在 `<HANDOFF_HOME>/config.json`——改动即刻生效（每次调用现读），并跨重启保留。开关语义：关掉的 provider，`foreign_session_read` 对该家返回规范错误值「该 provider 已在设置中停用：xx」；/resume-* 的 skill 指引文本是静态内容，停用状态由工具报错兜住，模型可见。
 
-工作台不在设置里：**每个会话输入框的工具行里有一枚「接力」按钮**（agent 之间传上下文接着干），点开向上浮出工作台——收件箱概览（待取件/已消费徽章、来源筛选、接力链徽标一键只看此链、空壳卡折叠、单卡/全量/HTML 导出）+ 外部会话浏览器（八家最近会话、项目 facet 即时过滤、行展开预览首条请求/近期进展/停点/警告、一键接管/接管并寄存）。
+工作台不在设置里：**每个会话输入框的工具行里有一枚「接力」按钮**（agent 之间传上下文接着干），点开向上浮出双栏工作台——左栏收件箱概览（待取件/已消费徽章、可查证账本覆盖、来源筛选、接力链徽标一键只看此链、空壳卡折叠、单卡/全量/HTML 导出、新手 FAQ 折叠卡）+ 右栏三卡：**交接出去**（当前会话一键寄存 + 对面取件指引）、**外部会话浏览器**（八家最近会话、项目 facet 即时过滤、行展开预览首条请求/近期进展/停点/警告、一键接管/接管并寄存）、**记忆快照**（扫描勾选打包出卡）。
 
 ## 权限范围
 

@@ -12,18 +12,58 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { randomUUID } from 'node:crypto'
-import { writeFileSync as diagWrite } from 'node:fs'
+import { closeSync, existsSync, openSync, readSync } from 'node:fs'
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: pulls the Context.webServer merge（宿主由 web bundle 提供，不打进产物）。
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { defaultForeignReaders, foreignResolveOne, foreignSessionPreview, foreignSessionsList, type ForeignProvider } from './foreign.ts'
-import { depositCommand, takeoverCommand } from './browser-view.ts'
+import { depositCommand, outboundCommand, takeoverCommand, type SessionRowLike } from './browser-view.ts'
 import { writeRelayProvenance } from './relay-records.ts'
+import { pushMemoryCard, scanMemorySources } from './memory.ts'
 import { buildState, clearArchived, isProviderEnabled, setProviderEnabled } from './settings.ts'
 
 function sendJson(response: ServerResponse, code: number, body: unknown): void {
   response.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
   response.end(JSON.stringify(body))
+}
+
+// ---------------------------------------------------------------------------
+// 列表标题增强（文件系会话缺人类标题时的头窥取）：读文件头 64KB 找首条用户
+// 消息文本。尽力而为——任何一步失败回空串按原行展示，列表页永不因此变慢报错。
+// ---------------------------------------------------------------------------
+
+/** 判「没有人类标题」：空串 / 标题就是 id（或其文件名 stem）/ UUID 形态 */
+export function looksUntitled(r: SessionRowLike): boolean {
+  if (r.kind !== 'file') return false
+  const base = r.id.split(/[\\/]/).pop() ?? ''
+  const stem = base.replace(/\.jsonl$/i, '')
+  return r.title === '' || r.title === r.id || r.title === base || r.title === stem || /^[0-9a-f]{8}-[0-9a-f]{4}/i.test(r.title)
+}
+
+/** 头窥标题：首条含 "type":"user" 的行里抠 text / content 字符串值（JSON 转义最简还原） */
+export function sniffTitle(id: string): string {
+  try {
+    if (!id.toLowerCase().endsWith('.jsonl') || !existsSync(id)) return ''
+    const fd = openSync(id, 'r')
+    try {
+      const buf = Buffer.alloc(65536)
+      const n = readSync(fd, buf, 0, 65536, 0)
+      for (const line of buf.toString('utf-8', 0, n).split('\n')) {
+        if (!line.includes('"type":"user"')) continue
+        const raw = /"text":"((?:[^"\\]|\\.)*)"/.exec(line)?.[1]
+          ?? /"content":"((?:[^"\\]|\\.)*)"/.exec(line)?.[1]
+        if (raw === undefined || raw.trim() === '') continue
+        const text = raw
+          .replace(/\\n/g, ' ')
+          .replace(/\\"/g, '"')
+          .replace(/\\u[0-9a-fA-F]{4}/g, '')
+          .replace(/\\t/g, ' ')
+          .trim()
+        if (text !== '') return text.slice(0, 80)
+      }
+    } finally { closeSync(fd) }
+  } catch { /* 尽力而为 */ }
+  return ''
 }
 
 /** Host 头是否指向本机回环。面板只服务本机：DNS rebinding 下 Host 是攻击者域，
@@ -281,13 +321,6 @@ export function registerTakeoverRoutes(
     const rootSessions = read(() => (rootObj as { sessions?: unknown })?.sessions)
     const ctxSessions = read(() => (ctx as unknown as { sessions?: unknown }).sessions)
     const cand = (rootSessions ?? ctxSessions) as { get?: unknown } | undefined
-    // 临时诊断：接管时 dump live 会话列表（确认 root.sessions 是否为接管新会话所在的 store）
-    try {
-      const liveList = Array.isArray((rootSessions as { list?: () => unknown[] })?.list?.())
-        ? ((rootSessions as { list: () => Array<{ id?: unknown }> }).list().map((x) => String(x.id ?? '?'))).slice(-4)
-        : null
-      diagWrite('diag-list.json', JSON.stringify({ via: rootSessions ? 'root.sessions' : ctxSessions ? 'ctx.sessions' : 'none', liveCount: liveList ? liveList.length : -1, liveTail: liveList }))
-    } catch { /* 诊断失败静默 */ }
     if (cand && typeof cand.get === 'function') return cand as { get: (id: string) => unknown }
     return undefined
   }
@@ -348,7 +381,17 @@ export function registerTakeoverRoutes(
                   { provider: q.get('provider') ?? '', limit: Number.isFinite(limitRaw) && limitRaw > 0 ? Math.floor(limitRaw) : undefined },
                   undefined,
                   env,
-                )
+                ).then((res) => {
+                  // 标题增强：缺人类标题的文件系会话头窥首条用户消息（同步、每行 ≤64KB、失败原样）
+                  if (res.ok) {
+                    for (const r of res.sessions) {
+                      if (!looksUntitled(r)) continue
+                      const t = sniffTitle(r.id)
+                      if (t !== '') r.title = t
+                    }
+                  }
+                  return res
+                })
               })()
             : foreignSessionPreview(
                 { provider: q.get('provider') ?? '', reference: q.get('reference') ?? '' },
@@ -409,6 +452,96 @@ export function registerTakeoverRoutes(
                   // admitTakeover 承诺不 reject——此 catch 只兜绝对意外，不让 unhandled rejection 出门
                   (e: unknown) => { sendJson(response, 500, { ok: false, error: e instanceof Error ? e.message : String(e) }) },
                 )
+              } catch (e) {
+                sendJson(response, 500, { ok: false, error: e instanceof Error ? e.message : String(e) })
+              }
+            },
+            (error: unknown) => { sendJson(response, 400, { ok: false, error: error instanceof Error ? error.message : String(error) }) },
+          )
+          return
+        }
+
+        if (sub === 'send') {
+          // 交接出去：把寄存指令 queue 进「当前会话」——本会话的 agent 蒸馏寄存后，
+          // 卡进共享收件箱，对面按取件指引接手。与 takeover 反向：不建新会话。
+          if (request.method !== 'POST') {
+            response.writeHead(405, { allow: 'POST' })
+            response.end()
+            return
+          }
+          if (!sameOrigin(request)) {
+            sendJson(response, 403, { error: '仅接受同源请求' })
+            return
+          }
+          void readJsonBody(request).then(
+            (body) => {
+              try {
+                const sessionId = String(body['sessionId'] ?? '').trim()
+                if (sessionId === '') {
+                  sendJson(response, 200, { ok: false, error: '缺少当前会话 id（老宿主座位不带 sessionId 时走复制路径）', instruction: outboundCommand(body['lang'] === 'en' ? 'en' : 'zh') })
+                  return
+                }
+                const controller = sessionControllerOf(ctx)
+                if (controller === undefined) {
+                  // 规范降级：带指令回包，面板自动退回复制路径
+                  sendJson(response, 200, { ok: false, error: '宿主缺会话控制器，一键交接不可用——请复制指令粘进输入框', instruction: outboundCommand(body['lang'] === 'en' ? 'en' : 'zh') })
+                  return
+                }
+                void controller.prompt({
+                  requestId: randomUUID(),
+                  sessionId,
+                  mode: 'queue',
+                  content: [{ type: 'text', text: outboundCommand(body['lang'] === 'en' ? 'en' : 'zh') }],
+                }, new AbortController().signal).then(
+                  () => { sendJson(response, 200, { ok: true }) },
+                  (e: unknown) => {
+                    sendJson(response, 200, {
+                      ok: false,
+                      error: e instanceof Error ? e.message : String(e),
+                      instruction: outboundCommand(body['lang'] === 'en' ? 'en' : 'zh'),
+                    })
+                  },
+                )
+              } catch (e) {
+                sendJson(response, 500, { ok: false, error: e instanceof Error ? e.message : String(e) })
+              }
+            },
+            (error: unknown) => { sendJson(response, 400, { ok: false, error: error instanceof Error ? error.message : String(error) }) },
+          )
+          return
+        }
+
+        if (sub === 'memory-scan') {
+          if (request.method !== 'GET') {
+            response.writeHead(405, { allow: 'GET' })
+            response.end()
+            return
+          }
+          if (!readGuard(request)) {
+            sendJson(response, 403, { error: '仅接受本机同源读取' })
+            return
+          }
+          // 只读扫描：清单确定（已知路径逐个探测），不猜测目录内容
+          sendJson(response, 200, { ok: true, sources: scanMemorySources() })
+          return
+        }
+
+        if (sub === 'memory-push') {
+          if (request.method !== 'POST') {
+            response.writeHead(405, { allow: 'POST' })
+            response.end()
+            return
+          }
+          if (!sameOrigin(request)) {
+            sendJson(response, 403, { error: '仅接受同源请求' })
+            return
+          }
+          void readJsonBody(request).then(
+            (body) => {
+              try {
+                const keys = Array.isArray(body['keys']) ? body['keys'].map((x: unknown) => String(x)) : undefined
+                const result = pushMemoryCard({ keys, target: String(body['target'] ?? ''), title: String(body['title'] ?? '') })
+                sendJson(response, 200, result)
               } catch (e) {
                 sendJson(response, 500, { ok: false, error: e instanceof Error ? e.message : String(e) })
               }

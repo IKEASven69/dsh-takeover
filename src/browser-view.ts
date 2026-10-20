@@ -20,6 +20,13 @@ export interface SessionRow {
   kind: string
 }
 
+/** 标题增强用的最小行形状（服务端 sniff 只需要这三个字段） */
+export interface SessionRowLike {
+  id: string
+  title: string
+  kind: string
+}
+
 /**
  * 即时过滤：query 按 ASCII 大小写不敏感（中文原样比较），
  * 命中标题 / 目录 / id 任一子串即保留；空 query 返回全量（原数组，不复制）。
@@ -66,6 +73,70 @@ export function depositTail(lang: Lang): string {
   return lang === 'en'
     ? 'When the takeover is done, deposit the six-section handoff card into the shared inbox.'
     : '接管完成后，把六段交接卡寄存进共享收件箱。'
+}
+
+// ---------------------------------------------------------------------------
+// 交接出去（outbound）：DSH 会话 → 共享收件箱 → 别的 agent 接手。
+// 方向与接管相反：指令投进「当前会话」（queue 模式），模型用 handoff_push
+// 蒸馏寄存；对面按 pickupCommand 的指引取卡。全部纯文案，无 I/O。
+// ---------------------------------------------------------------------------
+
+/** 交接出去的接收方（any = 不指定，任何 agent 可取） */
+export const OUTBOUND_TARGETS = ['any', 'claude', 'codex', 'opencode', 'zcode', 'pi', 'workbuddy', 'cursor', 'grok'] as const
+export type OutboundTarget = (typeof OUTBOUND_TARGETS)[number]
+
+/** 接收方展示名（与 PROVIDER_LABEL 同风格；any 是协议词不是 provider） */
+export const OUTBOUND_LABELS: Record<OutboundTarget, { zh: string; en: string }> = {
+  any: { zh: '任意 agent', en: 'Any agent' },
+  claude: { zh: 'Claude Code', en: 'Claude Code' },
+  codex: { zh: 'Codex CLI', en: 'Codex CLI' },
+  opencode: { zh: 'OpenCode', en: 'OpenCode' },
+  zcode: { zh: 'ZCode', en: 'ZCode' },
+  pi: { zh: 'Pi', en: 'Pi' },
+  workbuddy: { zh: 'WorkBuddy', en: 'WorkBuddy' },
+  cursor: { zh: 'Cursor', en: 'Cursor' },
+  grok: { zh: 'Grok CLI', en: 'Grok CLI' },
+}
+
+/** 投进当前会话的寄存指令（queue 模式打给本会话的 agent）。
+ * 两行式（同 depositCommand 的换行纪律）：引用/命令行在前，指示行在后。 */
+export function outboundCommand(lang: Lang): string {
+  const head = '/handoff'
+  return lang === 'en'
+    ? `${head}\nWhen the deposit is done, tell me the card id.`
+    : `${head}\n寄存完成后，把卡片编号发给我。`
+}
+
+/** 对面取卡指引：在目标 agent 的输入框里粘贴这句话，它读完卡即接手。
+ * CLI 系给可直接启动的一行命令；输入框系给同句。路径用 ~（POSIX/Windows 均按
+ * 目标 agent 的 home 展开习惯），卡 id 恒在句中。 */
+export function pickupCommand(target: string, id: string, lang: Lang): string {
+  const card = `~/.handoff/pending/${id}.md`
+  const zhSentence = `读 ${card}，按卡接手。`
+  const enSentence = `Read ${card} and continue per the card.`
+  const sentence = lang === 'en' ? enSentence : zhSentence
+  switch (target) {
+    case 'claude':
+      return lang === 'en' ? `claude "${enSentence}"` : `claude "${zhSentence}"`
+    case 'codex':
+      return lang === 'en' ? `codex "${enSentence}"` : `codex "${zhSentence}"`
+    case 'opencode':
+      return lang === 'en' ? `opencode "${enSentence}"` : `opencode "${zhSentence}"`
+    case 'grok':
+      return lang === 'en' ? `grok "${enSentence}"` : `grok "${zhSentence}"`
+    default:
+      // zcode / pi / workbuddy / cursor / any：在输入框粘贴同句（装了本插件的
+      // DSH 侧则直接工作台收件箱点取件，指引卡另有说明）
+      return sentence
+  }
+}
+
+/** 字数人性化：7426 → 7.3K；1200000 → 1.2M；<1000 原样。统计条不再出现 6 位数字墙。 */
+export function humanChars(n: number): string {
+  if (!Number.isFinite(n) || n < 0) return String(n)
+  if (n < 1000) return String(n)
+  if (n < 1_000_000) return `${(n / 1000).toFixed(1).replace(/\.0$/, '')}K`
+  return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`
 }
 
 /** 接管并寄存指令：两行式——第二行是给模型的本轮指示，不是引用的一部分。

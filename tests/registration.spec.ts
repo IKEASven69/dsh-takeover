@@ -250,7 +250,7 @@ test('宿主 apply（src/index）：工具/技能/路由全注册，logger 收�
       }),
     }
     mod.apply(ctx as never)
-    assert.deepEqual(toolNames.sort(), ['foreign_session_read', 'handoff_inbox', 'handoff_push'])
+    assert.deepEqual(toolNames.sort(), ['foreign_session_read', 'handoff_inbox', 'handoff_memory', 'handoff_push'])
     assert.ok(skillNames.length >= 10, `skill 数不足: ${skillNames.length}`)
     assert.ok(routes.includes('/dsh-takeover'))
     assert.ok(logs[0]?.includes('会话接管已加载'))

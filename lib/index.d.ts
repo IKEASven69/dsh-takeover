@@ -495,6 +495,35 @@ export declare function buildState(readers: ForeignReaders, dir?: string): Takeo
  * 此前一个 *.md 目录就让整个清空操作抛 EISDIR，违背「绝不抛出」且永远 500。 */
 export declare function clearArchived(dir?: string): number;
 //#endregion
+//#region src/browser-view.d.ts
+/**
+ * 外部会话浏览器的纯函数层（client 面板与服务端共享语义，零 DOM / 零 cordis 依赖）：
+ * - 会话行的即时过滤（标题 / 目录 / id 子串，大小写不敏感）；
+ * - 相对时间（行内扫读友好：刚刚 / N分钟前 / …；超 30 天回退绝对日期）；
+ * - 接管 / 寄存指令生成——/resume-* 的引用解析在首个换行前截断（skills/resume 同轮修订），
+ *   所以寄存指令是「引用行 + 指示行」两行式：一行塞尾巴会把尾巴吞进引用导致解析失败。
+ * 不碰会话内容本体——浏览是只读的，接管与蒸馏都在会话里由模型完成。
+ * @module dsh-takeover/browser-view
+ */
+type Lang = 'zh' | 'en';
+/** 交接出去的接收方（any = 不指定，任何 agent 可取） */
+export declare const OUTBOUND_TARGETS: readonly ['any', 'claude', 'codex', 'opencode', 'zcode', 'pi', 'workbuddy', 'cursor', 'grok'];
+type OutboundTarget = (typeof OUTBOUND_TARGETS)[number];
+/** 接收方展示名（与 PROVIDER_LABEL 同风格；any 是协议词不是 provider） */
+export declare const OUTBOUND_LABELS: Record<OutboundTarget, {
+  zh: string;
+  en: string;
+}>;
+/** 投进当前会话的寄存指令（queue 模式打给本会话的 agent）。
+ * 两行式（同 depositCommand 的换行纪律）：引用/命令行在前，指示行在后。 */
+export declare function outboundCommand(lang: Lang): string;
+/** 对面取卡指引：在目标 agent 的输入框里粘贴这句话，它读完卡即接手。
+ * CLI 系给可直接启动的一行命令；输入框系给同句。路径用 ~（POSIX/Windows 均按
+ * 目标 agent 的 home 展开习惯），卡 id 恒在句中。 */
+export declare function pickupCommand(target: string, id: string, lang: Lang): string;
+/** 字数人性化：7426 → 7.3K；1200000 → 1.2M；<1000 原样。统计条不再出现 6 位数字墙。 */
+export declare function humanChars(n: number): string;
+//#endregion
 //#region src/server.d.ts
 /** 会话控制器最小面（对齐 dsh-api-session-controller 0.2.0-rc.2 的 Remote 形状；多退少补） */
 interface SessionControllerLike {
@@ -570,6 +599,70 @@ export declare function registerTakeoverRoutes(ctx: Context, opts?: {
     isEnabled: (p: ForeignProvider) => boolean;
   };
 }): void;
+//#endregion
+//#region src/memory.d.ts
+/** 记忆来源定义：路径确定、只读；project 级仅在给出 cwd 时扫描 */
+interface MemorySourceDef {
+  /** 稳定键（客户端勾选回传 / 工具 push 用） */
+  key: string;
+  /** 归属 agent（展示用） */
+  agent: string;
+  scope: 'user' | 'project';
+  path: (home: string, cwd: string) => string;
+}
+/** 已知记忆文件清单（用户级全局 + 项目级常用约定文件）。
+ * 只列有公开文档惯例的路径；没列入的家不是不支持，是路径无公开惯例。
+ * hippo-db 特殊行：dsh-hippo（伴侣智能体长期记忆插件）的 SQLite 库——二进制不随卡
+ * 直带，存在性照报（UI 提示装了记忆库），出卡时正文替换为 dump/import 指引。 */
+export declare const MEMORY_SOURCES: readonly MemorySourceDef[];
+/** 扫描结果行 */
+interface MemorySourceRow {
+  key: string;
+  agent: string;
+  path: string;
+  exists: boolean;
+  bytes: number;
+  /** ISO 时间；不存在为空串 */
+  mtime: string;
+  /** 开头预览（截 240 字符；不存在/超大为空串） */
+  preview: string;
+  [k: string]: string | number | boolean;
+}
+/** 扫描已知记忆文件（纯读；deps.home/cwd 可注入，缺省真实 home / 无项目级） */
+export declare function scanMemorySources(deps?: {
+  home?: string;
+  cwd?: string;
+}): MemorySourceRow[];
+/** 记忆出卡参数（工作台路由与 handoff_memory 工具共用） */
+interface MemoryPushArgs {
+  /** 要带的来源键；缺省 = 全部存在的用户级来源 */
+  keys?: string[];
+  target?: string;
+  title?: string;
+  lang?: 'zh' | 'en';
+}
+type MemoryPushResult = {
+  ok: true;
+  id: string;
+  path: string;
+  sources: number;
+} | {
+  ok: false;
+  error: string;
+};
+/** 记忆出卡核心（pushHandoff 复用——session 传 undefined，六段全部手写，守门不误伤） */
+export declare function pushMemoryCard(args: MemoryPushArgs, deps?: {
+  scan?: typeof scanMemorySources;
+  push?: typeof pushHandoff;
+  dir?: string;
+}): MemoryPushResult;
+/** 注册 handoff_memory 工具（agent 侧同款能力：scan 看清单 / push 出卡） */
+export declare function registerMemoryTool(ctx: Context): void;
+/** execute 规范值 → 模型可见文本 */
+export declare function renderMemory(_args: unknown, value: unknown): Array<{
+  type: 'text';
+  text: string;
+}>;
 //#endregion
 //#region skills/handoff.d.ts
 /** /handoff 注册项 */
@@ -652,5 +745,5 @@ export declare const name = "dsh-takeover";
 export declare const inject: string[];
 export declare function apply(ctx: Context): void;
 //#endregion
-export type { ForeignCandidate, ForeignEnv, ForeignListResult, ForeignListRow, ForeignPreviewResult, ForeignProvider, ForeignReadArgs, ForeignReadResult, ForeignReaders, ForeignResolve, ForeignSkeleton, ForeignSummary, ForeignTurn, InboxItem, InboxListResult, InboxLoadResult, PendingRow, ProbeResult, ProviderRow, PushArgs, PushResult, ResumeSkillSpec, SessionControllerLike, SessionFacts, TakeoverMode, TakeoverOutcome, TakeoverState, TakeoverSwitches };
+export type { ForeignCandidate, ForeignEnv, ForeignListResult, ForeignListRow, ForeignPreviewResult, ForeignProvider, ForeignReadArgs, ForeignReadResult, ForeignReaders, ForeignResolve, ForeignSkeleton, ForeignSummary, ForeignTurn, InboxItem, InboxListResult, InboxLoadResult, MemoryPushArgs, MemoryPushResult, MemorySourceDef, MemorySourceRow, OutboundTarget, PendingRow, ProbeResult, ProviderRow, PushArgs, PushResult, ResumeSkillSpec, SessionControllerLike, SessionFacts, TakeoverMode, TakeoverOutcome, TakeoverState, TakeoverSwitches };
 //# sourceMappingURL=index.d.ts.map
