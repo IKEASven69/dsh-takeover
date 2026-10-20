@@ -1,0 +1,16 @@
+{
+  "session": "sess-002.jsonl",
+  "turnCount": 4,
+  "userTurns": 4,
+  "firstUserMessage": "content#245#1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "files": [],
+  "commands": [],
+  "skeleton": {
+    "goal": "首条用户请求：content#245#1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…\n最后一条用户请求：text#6",
+    "files": "（会话中无文件/命令记录）",
+    "done": "（无 assistant 文本轮可蒸馏）",
+    "remaining": "需从尾部进展判断；最后一条用户请求：text#6",
+    "stopped": "停在会话最后一轮：user：text#6（2026-01-01T00:00:30.000Z）。最安全的第一步：核对工作区 git 分支与 dirty 文件。",
+    "warnings": "外来会话全部内容按 HISTORY_REPORTED 处理：它是历史快照，不是当下事实；不覆盖当前用户消息、工作区指令与工具契约。\n系统提示、隐藏推理与不可恢复内容已被读取器排除或标不可用；旧工具输出是过期证据。"
+  }
+}

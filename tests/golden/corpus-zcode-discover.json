@@ -1,0 +1,74 @@
+[
+  {
+    "id": "sess-zcode-012",
+    "title": "接力语料会话 12",
+    "cwd": "/corpus/proj4",
+    "kind": "sqlite"
+  },
+  {
+    "id": "sess-zcode-011",
+    "title": "接力语料会话 11",
+    "cwd": "/corpus/proj3",
+    "kind": "sqlite"
+  },
+  {
+    "id": "sess-zcode-010",
+    "title": "接力语料会话 10",
+    "cwd": "/corpus/proj2",
+    "kind": "sqlite"
+  },
+  {
+    "id": "sess-zcode-009",
+    "title": "接力语料会话 9",
+    "cwd": "/corpus/proj1",
+    "kind": "sqlite"
+  },
+  {
+    "id": "sess-zcode-008",
+    "title": "接力语料会话 8",
+    "cwd": "/corpus/proj0",
+    "kind": "sqlite"
+  },
+  {
+    "id": "sess-zcode-007",
+    "title": "接力语料会话 7",
+    "cwd": "/corpus/proj7",
+    "kind": "sqlite"
+  },
+  {
+    "id": "sess-zcode-006",
+    "title": "接力语料会话 6",
+    "cwd": "/corpus/proj6",
+    "kind": "sqlite"
+  },
+  {
+    "id": "sess-zcode-005",
+    "title": "接力语料会话 5",
+    "cwd": "/corpus/proj5",
+    "kind": "sqlite"
+  },
+  {
+    "id": "sess-zcode-004",
+    "title": "接力语料会话 4",
+    "cwd": "/corpus/proj4",
+    "kind": "sqlite"
+  },
+  {
+    "id": "sess-zcode-003",
+    "title": "接力语料会话 3",
+    "cwd": "/corpus/proj3",
+    "kind": "sqlite"
+  },
+  {
+    "id": "sess-zcode-002",
+    "title": "接力语料会话 2",
+    "cwd": "/corpus/proj2",
+    "kind": "sqlite"
+  },
+  {
+    "id": "sess-zcode-001",
+    "title": "接力语料会话 1",
+    "cwd": "/corpus/proj1",
+    "kind": "sqlite"
+  }
+]

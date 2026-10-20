@@ -1,0 +1,173 @@
+{
+  "generated": "scripts/corpus-build.mjs",
+  "privacy": "structural-clones-only",
+  "sources": [
+    {
+      "kind": "claude",
+      "files": 9
+    },
+    {
+      "kind": "zcode",
+      "sessions": 12
+    }
+  ],
+  "files": [
+    {
+      "file": "claude/proj0/sess-000.jsonl",
+      "lines": 10,
+      "bytes": 12035,
+      "corruptLines": 0,
+      "kinds": {
+        "user": 4,
+        "assistant": 0,
+        "tool": 0,
+        "other": 6
+      },
+      "source": {
+        "sha256": "53c6a277186f4729",
+        "bytes": 12255,
+        "mtime": 1791599567335.017
+      }
+    },
+    {
+      "file": "claude/proj1/sess-001.jsonl",
+      "lines": 8,
+      "bytes": 11640,
+      "corruptLines": 0,
+      "kinds": {
+        "user": 1,
+        "assistant": 0,
+        "tool": 0,
+        "other": 7
+      },
+      "source": {
+        "sha256": "4535470655ad0ab3",
+        "bytes": 12111,
+        "mtime": 1791958324105.7502
+      }
+    },
+    {
+      "file": "claude/proj2/sess-002.jsonl",
+      "lines": 10,
+      "bytes": 12035,
+      "corruptLines": 0,
+      "kinds": {
+        "user": 4,
+        "assistant": 0,
+        "tool": 0,
+        "other": 6
+      },
+      "source": {
+        "sha256": "ca61378c652315ec",
+        "bytes": 12255,
+        "mtime": 1791950114672.3064
+      }
+    },
+    {
+      "file": "claude/proj3/sess-003.jsonl",
+      "lines": 8,
+      "bytes": 11638,
+      "corruptLines": 0,
+      "kinds": {
+        "user": 1,
+        "assistant": 0,
+        "tool": 0,
+        "other": 7
+      },
+      "source": {
+        "sha256": "01ec09819a22ccae",
+        "bytes": 12109,
+        "mtime": 1791950075628.5063
+      }
+    },
+    {
+      "file": "claude/proj4/sess-004.jsonl",
+      "lines": 8,
+      "bytes": 11638,
+      "corruptLines": 0,
+      "kinds": {
+        "user": 1,
+        "assistant": 0,
+        "tool": 0,
+        "other": 7
+      },
+      "source": {
+        "sha256": "f115037b9024f921",
+        "bytes": 12109,
+        "mtime": 1791596306226.4143
+      }
+    },
+    {
+      "file": "claude/proj5/sess-005.jsonl",
+      "lines": 10,
+      "bytes": 12035,
+      "corruptLines": 0,
+      "kinds": {
+        "user": 4,
+        "assistant": 0,
+        "tool": 0,
+        "other": 6
+      },
+      "source": {
+        "sha256": "3d4fd12af1fa003b",
+        "bytes": 12255,
+        "mtime": 1791958375709.091
+      }
+    },
+    {
+      "file": "claude/proj6/sess-006.jsonl",
+      "lines": 8,
+      "bytes": 11639,
+      "corruptLines": 0,
+      "kinds": {
+        "user": 1,
+        "assistant": 0,
+        "tool": 0,
+        "other": 7
+      },
+      "source": {
+        "sha256": "fc43f0b387b613fd",
+        "bytes": 12110,
+        "mtime": 1791954550832.286
+      }
+    },
+    {
+      "file": "claude/proj7/sess-007.jsonl",
+      "lines": 10,
+      "bytes": 12034,
+      "corruptLines": 0,
+      "kinds": {
+        "user": 4,
+        "assistant": 0,
+        "tool": 0,
+        "other": 6
+      },
+      "source": {
+        "sha256": "8d02cef0e8f8b8cf",
+        "bytes": 12254,
+        "mtime": 1791954581943.8672
+      }
+    },
+    {
+      "file": "claude/proj0/sess-008.jsonl",
+      "lines": 8,
+      "bytes": 11595,
+      "corruptLines": 0,
+      "kinds": {
+        "user": 1,
+        "assistant": 0,
+        "tool": 0,
+        "other": 7
+      },
+      "source": {
+        "sha256": "350284a04c223441",
+        "bytes": 12059,
+        "mtime": 1790139731161.8171
+      }
+    },
+    {
+      "file": "zcode/db.sqlite",
+      "sessions": 12
+    }
+  ]
+}
