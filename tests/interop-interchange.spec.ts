@@ -6,6 +6,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createHash } from 'node:crypto'
+// .mjs 脚本无类型声明——转换器是纯 JS，导入处按 any 使用并在逻辑测试里验证行为
+// @ts-expect-error .mjs 无声明文件
 import { bundleToCardMarkdown, cardToInterchange, distillTurns, verifyBundle } from '../scripts/interop-interchange.mjs'
 
 /** 按其规范合成的最小 bundle（双层指纹真实计算） */
@@ -127,8 +129,8 @@ test('互通 · 卡 → interchange：字段齐全、轮结构与 tool 配对不
   assert.equal(doc.title, '互通测试卡')
   const turns = doc.turns as Array<{ prompt: string; steps: Array<{ toolCalls: unknown[]; toolResults: unknown[] }> }>
   assert.equal(turns.length, 1)
-  assert.match(turns[0].prompt, /把收件箱功能做完/)
-  assert.match(turns[0].prompt, /取件方收尾/)
+  assert.match(turns[0]?.prompt ?? '', /把收件箱功能做完/)
+  assert.match(turns[0]?.prompt ?? '', /取件方收尾/)
   // 配对不变量：toolCalls[].id 都要有 toolResults[].toolCallId
   for (const t of turns) {
     for (const s of t.steps) {
