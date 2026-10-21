@@ -24,6 +24,16 @@ dsh-takeover 是 DeepSeek Harness（DSH）插件，实现 `handoff: 1` 开放协
 
 文件系统即总线：写入 `pending/` 就是投递，取件即移到 `archived/`（消费即弃，二次取件报错）。卡片 = Markdown + YAML frontmatter + 六段中文正文（目标 / 涉及文件 / 做到哪 / 还差什么 / 停在哪 / 读者警告），格式与语义见协议仓 SPEC。
 
+## 质量与证据（0.4.0）
+
+接力质量不是感觉，是数字、测试与第三方可复核的证明：
+
+- **质量基线**：50 张真实交接卡回测延续率 34.7%；done 段带账本标注的卡延续率 50%、无标注 0%（`scripts/backtest-archived.mjs`，明细本地）。端到端双卡接力真 host 真模型评测 PASS（`scripts/eval-e2e.mjs`）。
+- **解析回归**：真实会话结构克隆脱敏语料 + 13 份 golden files 逐字节冻结（`scripts/corpus-build.mjs` → `tests/corpus-golden.spec.ts`），上游存储布局一变就红在提交前。
+- **安全**：威胁模型见 [THREAT-MODEL.md](THREAT-MODEL.md)；红队套件 8 组随 CI（`tests/redteam.spec.ts`）——密钥闸覆盖六段正文、全部标量与随卡补丁 diff。
+- **协议符合性**：`conformance/` 可执行套件（MUST 9 条推导自 SPEC）；参考实现与「只读 SPEC 从零手写」的独立第二实现**双双符合**——开放协议的资格由第二实现背书。
+- **互通**：INTERCHANGE v1（dsh-chat-import）↔ handoff: 1 双向转换（`scripts/interop-interchange.mjs`），转换产物已经对方插件 v0.26.2 真实导入互验。
+
 ## 和单向导出工具的区别
 
 [dsh-handoff](https://www.npmjs.com/package/dsh-handoff)（v0.1.0）是**单向导出**：把会话事件流确定性导出成一份工作区里的 HANDOFF.md 文档，没有收件箱、不落共享目录、不跨 agent。
