@@ -49,7 +49,8 @@ test('语料隐私自检：fixtures 不含本机路径特征（结构克隆纪�
       if (f.isDirectory()) scan(p)
       else {
         const text = readFileSync(p, 'utf8')
-        if (/123456|C:\\\\?Users|[A-Z]:\\\\|\/Users\/|CodingProjects/.test(text)) bad.push(p)
+        // 检测模式保持通用形态——不得把开发者本机真实用户名硬编码进正则（那本身是泄漏，历史手术已清）
+        if (/[A-Za-z]:[\\/][^\s'"]{0,60}|\/Users\/[^\s'"//]+|[0-9]{5,}/.test(text)) bad.push(p)
       }
     }
   }
