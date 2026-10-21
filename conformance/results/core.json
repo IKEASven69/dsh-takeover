@@ -1,0 +1,87 @@
+{
+  "adapter": "@agent-handoff/core（参考实现）",
+  "adapterPath": "D:\\CodingProjects\\dsh-takeover\\conformance\\adapter-core.mjs",
+  "results": [
+    {
+      "level": "MUST",
+      "id": "C1",
+      "title": "HANDOFF_HOME 环境变量覆盖目录根（SPEC 一、）",
+      "status": "pass",
+      "detail": ""
+    },
+    {
+      "level": "MUST",
+      "id": "C2",
+      "title": "写入即投递：合法卡落 pending 后可列出（SPEC 一、）",
+      "status": "pass",
+      "detail": ""
+    },
+    {
+      "level": "MUST",
+      "id": "C3",
+      "title": "文件名即卡片 id：ho-<36进制时间戳>-<随机4位> 形态且 frontmatter id 与文件名一致",
+      "status": "pass",
+      "detail": ""
+    },
+    {
+      "level": "MUST",
+      "id": "C4",
+      "title": "六段必选标题按序在场（SPEC 二、）",
+      "status": "pass",
+      "detail": ""
+    },
+    {
+      "level": "MUST",
+      "id": "C5",
+      "title": "缺字段 frontmatter：给默认值不报错",
+      "status": "pass",
+      "detail": ""
+    },
+    {
+      "level": "MUST",
+      "id": "C6",
+      "title": "未知字段保留不报错；更高 handoff 版本容错不硬失败",
+      "status": "pass",
+      "detail": ""
+    },
+    {
+      "level": "MUST",
+      "id": "C7",
+      "title": "消费即弃：load 后进 archived、离开 pending；二次取件必报错",
+      "status": "pass",
+      "detail": ""
+    },
+    {
+      "level": "MUST",
+      "id": "C8",
+      "title": "宽松模式：无 frontmatter 纯 Markdown 也能取（id 从文件名）",
+      "status": "pass",
+      "detail": ""
+    },
+    {
+      "level": "MUST",
+      "id": "C9",
+      "title": "路径穿越 id：取件必须拒绝，不触碰 pending 外文件",
+      "status": "pass",
+      "detail": ""
+    },
+    {
+      "level": "SHOULD",
+      "id": "C10",
+      "title": "archived 滚动保留 50 份（执行归档方删最旧）",
+      "status": "pass",
+      "detail": ""
+    },
+    {
+      "level": "SHOULD",
+      "id": "C11",
+      "title": "并发取件单胜者：两线程同时 load 同一 id，恰好一胜（实现如未支持会在 detail 注明）",
+      "status": "pass",
+      "detail": ""
+    }
+  ],
+  "mustTotal": 9,
+  "mustFailed": 0,
+  "shouldFailed": 0,
+  "conformant": true
+}
