@@ -255,7 +255,7 @@ const CSS = `
   --bt-line: var(--border, rgba(127,127,127,.2)); --bt-mut: rgba(30,41,59,.72);
   --bt-card: var(--bg, rgba(127,127,127,.05)); --bt-hover: rgba(127,127,127,.07);
   --bt-shadow: 0 1px 2px rgba(16,24,40,.05), 0 12px 32px -18px rgba(16,24,40,.16); }
-.bt-card { background: var(--bt-card); border: 1px solid var(--bt-line); border-radius: 14px;
+.bt-card { background: var(--bt-card); border: 1px solid var(--bt-line); border-radius: 12px;
   padding: 16px 18px; display: flex; flex-direction: column; gap: 12px;
   box-shadow: var(--bt-shadow); }
 .bt-head { display: flex; align-items: center; gap: 12px; }
@@ -271,8 +271,9 @@ const CSS = `
 .bt-badge-hot { color: var(--bt-a); background: rgba(99,102,241,.1); border-color: rgba(99,102,241,.3); }
 /* 收件箱统计条：待取件/已消费/覆盖率/信封 四格，label+数字同 chip */
 .bt-statstrip { display: flex; gap: 6px; flex-wrap: wrap; }
-.bt-stat { font-size: 11px; color: var(--bt-mut); background: rgba(127,127,127,.08);
-  border: 1px solid var(--bt-line); border-radius: 999px; padding: 2px 10px;
+.bt-stat { font-size: 11px; color: var(--bt-mut); background: none;
+  border: none; border-radius: 0; padding: 0;
+  font-variant-numeric: tabular-nums;
   font-variant-numeric: tabular-nums; }
 .bt-stat-hot { color: var(--bt-a); background: rgba(99,102,241,.1); border-color: rgba(99,102,241,.3); }
 .bt-stat-warn { color: var(--bt-warn); background: rgba(251,191,36,.12); border-color: rgba(251,191,36,.4); }
@@ -300,13 +301,13 @@ const CSS = `
 .bt-pend-line1 { display: flex; align-items: baseline; gap: 8px; }
 .bt-pending-title { flex: 1; min-width: 0; font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bt-pend-time { flex: none; font-size: 11px; color: var(--bt-mut); font-variant-numeric: tabular-nums; }
-.bt-pending-chev { flex: none; font-size: 10px; color: var(--bt-mut); align-self: center; transition: transform .15s ease; }
+.bt-pending-chev { flex: none; font-size: 10px; color: var(--bt-mut); align-self: flex-start; margin-top: 3px; transition: transform .15s ease; }
 .bt-pending-open .bt-pending-chev { transform: rotate(90deg); }
 .bt-pend-meta { display: flex; gap: 6px; align-items: baseline; font-size: 11px; color: var(--bt-mut);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .bt-pend-src { font-weight: 500; }
 .bt-pend-dot { opacity: .45; }
-.bt-pend-id { font-family: ui-monospace, monospace; font-size: 10.5px; opacity: .68; }
+.bt-pend-id { font-family: ui-monospace, monospace; font-size: 11px; color: var(--bt-id); }
 .bt-preview { flex-basis: 100%; font-size: 12px; line-height: 1.65; color: inherit;
   background: var(--bt-card); border-left: 2px solid var(--bt-a); border-radius: 0 10px 10px 0;
   padding: 8px 12px; margin: 4px 0 2px 0; white-space: pre-wrap;
@@ -316,7 +317,8 @@ const CSS = `
 .bt-preview-actions { display: flex; align-items: center; gap: 8px; justify-content: space-between;
   white-space: normal; }
 /* 收件箱工具行：即时过滤输入 + 导出全部（过滤词空 = 全量） */
-.bt-inbox-toolbar { display: flex; gap: 8px; align-items: center; margin-top: -2px; }
+.bt-inbox-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: -2px; }
+.bt-inbox-toolbar .bt-filter { flex: 1 1 180px; }
 .bt-filter { flex: 1; min-width: 0; height: 32px; box-sizing: border-box;
   border: 1px solid var(--bt-line); border-radius: 10px; background: var(--bt-card);
   color: inherit; font-size: 12.5px; padding: 0 10px; outline: none;
@@ -385,7 +387,7 @@ const CSS = `
 .bt-note-body { margin-top: 6px; }
 /* 窄容器（侧栏收窄）：命令单列、矩阵行收掉会话数列，避免挤压换行 */
 /* 来源筛选 chips：全部/各家/只看新卡，pill 基座 + 选中态品牌描边 */
-.bt-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 8px; }
+.bt-chips { display: flex; flex-wrap: wrap; gap: 6px 8px; margin: 2px 0 8px; }
 .bt-chip { display: inline-flex; align-items: center; gap: 6px; cursor: pointer;  border: 1px solid var(--bt-line); border-radius: 999px; padding: 3px 12px;
   background: transparent; color: var(--bt-mut); font-size: 11.5px; font-weight: 500;
   font-variant-numeric: tabular-nums;
@@ -1276,6 +1278,7 @@ export function SendCard({ sessionId, t, lang, onError, onNotice }: {
       createElement('span', { className: 'bt-title', style: { fontSize: 13 } }, t('sendTitle')),
     ),
     createElement('div', { className: 'bt-sub' }, sessionId !== undefined && sessionId !== '' ? t('sendHint') : t('sendHintCopy')),
+    createElement('div', { className: 'bt-sub', style: { marginTop: 6, fontWeight: 600 } }, t('targetGroupLabel')),
     createElement(TargetChips, { sel: target, lang, onSelect: setTarget, ariaLabel: t('targetGroupLabel') }),
     createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 } },
       createElement('button', {
@@ -1409,7 +1412,7 @@ export function MemoryCard({ t, lang, onError, onNotice, onPushed, defaultOpen }
                 )),
               ),
               missing > 0 ? createElement('div', { key: 'missing', className: 'bt-sub', style: { marginTop: 4, opacity: 0.6 } }, t('memoryMissingNote', { n: missing })) : null,
-              createElement(TargetChips, { key: 'targets', sel: target, lang, onSelect: setTarget }),
+              createElement(TargetChips, { key: 'targets', sel: target, lang, onSelect: setTarget, ariaLabel: t('targetGroupLabel') }),
               createElement('div', { key: 'act', style: { display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 } },
                 createElement('button', {
                   className: 'bt-btn bt-btn-primary',
@@ -1920,6 +1923,8 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
   useLocaleSync(locale)
   const { state, error, setError, reload } = useTakeoverPolling()
   const lang: Lang = langOf(locale)
+  // 新手引导条：知道了之后 localStorage 记住不再出现
+  const [onboardGone, setOnboardGone] = useState(() => { try { return localStorage.getItem('dsh-takeover-onboard') === '1' } catch { return true } })
   // 收件箱即时过滤词：空串 = 不过滤（纯前端，输入即滤，清空恢复全部）
   const [query, setQuery] = useState('')
   const [confirmClear, setConfirmClear] = useState(false)
@@ -2019,6 +2024,25 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
       : null,
     error !== null ? createElement('div', { className: 'bt-banner bt-banner-err' }, error) : null,
     notice !== null ? createElement('div', { className: 'bt-banner bt-banner-info' }, notice) : null,
+
+    // 新手三步引导条（仅浮层挂载；「知道了」后 localStorage 记住不再出现）
+    bounded === true && onboardGone === false
+      ? createElement('div', { className: 'bt-card', style: { borderColor: 'var(--bt-a)' } },
+          createElement('div', { style: { display: 'grid', gap: 4, fontSize: 12.5 } },
+            createElement('span', { style: { fontWeight: 600 } }, t('popoverSubtitle')),
+            createElement('span', null, `① ${t('onboard1')} → ② ${t('onboard2')} → ③ ${t('onboard3')}`),
+          ),
+          createElement('div', { style: { display: 'flex', justifyContent: 'flex-end', marginTop: 6 } },
+            createElement('button', {
+              className: 'bt-btn bt-btn-xs',
+              onClick: () => {
+                setOnboardGone(true)
+                try { localStorage.setItem('dsh-takeover-onboard', '1') } catch { /* 隐私模式 */ }
+              },
+            }, t('onboardDone')),
+          ),
+        )
+      : null,
 
     // 工作台双栏栅格：宽容器（浮层 ≥920px）下收件箱与浏览器并排，窄容器 auto-fit 收单列
     createElement('div', { className: 'bt-cols', style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(480px, 1fr))', gap: 16, alignItems: 'start', ...(bounded === true ? { flex: '1 1 auto', minHeight: 0 } : {}) } },
@@ -2229,7 +2253,7 @@ export function ComposerChip({ t, locale, navigate, sessionId }: {
         t,
         children: createElement('div', { style: { display: 'grid', gap: 8 } },
           showHelp ? createElement(HelpCard, { t }) : null,
-          createElement(WorkspaceBody, { t, locale, navigate, chrome: false, sessionId, showHelp }),
+          createElement(WorkspaceBody, { t, locale, navigate, chrome: false, sessionId, showHelp, bounded: true }),
         ),
       }),
     ) : null,
