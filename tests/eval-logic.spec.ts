@@ -14,7 +14,10 @@ import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+// .mjs 脚本无类型声明——评测器是纯 JS，导入处按 any 使用并在逻辑测试里验证行为
+// @ts-expect-error .mjs 无声明文件
 import { backtest, continuationEvidence, extractPaths, markedRatioOf, sectionOf, frontmatterValue } from '../scripts/backtest-archived.mjs'
+// @ts-expect-error .mjs 无声明文件
 import { fidelity, groundTruthOf } from '../scripts/eval-distill.mjs'
 
 // ---------- backtest 逻辑 ----------
@@ -122,7 +125,7 @@ test('backtest · 解析：新旧段标题兼容 + 路径提取 + 覆盖率口�
   assert.equal(sectionOf(text, ['涉及文件']).includes('src/a.ts'), true)
   assert.equal(frontmatterValue(text, 'cwd'), '/nonexistent-dir-xyz')
   const paths = extractPaths(sectionOf(text, ['涉及文件']))
-  assert.ok(paths.some((p) => p.includes('a.ts')), '反引号内的路径应被提取')
+  assert.ok(paths.some((p: string) => p.includes('a.ts')), '反引号内的路径应被提取')
   const ratio = markedRatioOf(text)
   assert.equal(ratio?.statements, 3)
   assert.equal(ratio?.marked, 2)
