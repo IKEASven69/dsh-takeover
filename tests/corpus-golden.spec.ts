@@ -50,7 +50,8 @@ test('语料隐私自检：fixtures 不含本机路径特征（结构克隆纪�
       else {
         const text = readFileSync(p, 'utf8')
         // 检测模式保持通用形态——不得把开发者本机真实用户名硬编码进正则（那本身是泄漏，历史手术已清）
-        if (/[A-Za-z]:[\\/][^\s'"]{0,60}|\/Users\/[^\s'"//]+|[0-9]{5,}/.test(text)) bad.push(p)
+        // 只认路径形态：盘符路径与 /Users/ 家目录；裸数字串是时间戳/字节数，不算泄漏
+        if (/[A-Za-z]:[\\/][^\s'"]{3,80}|\/Users\/[^\s'"//]+/.test(text)) bad.push(p)
       }
     }
   }
