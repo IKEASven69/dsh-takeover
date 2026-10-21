@@ -147,8 +147,25 @@ function themeVars(): Record<string, string> {
     /* 保底按深色 */
   }
   return dark
-    ? { '--bt-mut': 'rgba(255,255,255,.55)', '--bt-ok': '#4ade80', '--bt-warn': '#fbbf24', '--bt-err': '#f87171' }
-    : { '--bt-mut': 'rgba(30,41,59,.72)', '--bt-ok': '#15803d', '--bt-warn': '#b45309', '--bt-err': '#d93025' }
+    ? {
+        '--bt-mut': 'rgba(255,255,255,.62)',
+        '--bt-ok': '#4ade80',
+        '--bt-warn': '#fbbf24',
+        '--bt-err': '#f87171',
+        // 暗色分层（视觉审查 P0-3）：卡面比壳抬一档、卡线更轻，内容才浮得起
+        '--bt-card': 'rgba(255,255,255,.035)',
+        '--bt-line': 'rgba(255,255,255,.08)',
+        '--bt-id': 'rgba(255,255,255,.48)',
+      }
+    : {
+        '--bt-mut': 'rgba(30,41,59,.72)',
+        '--bt-ok': '#15803d',
+        '--bt-warn': '#b45309',
+        '--bt-err': '#d93025',
+        '--bt-card': '#ffffff',
+        '--bt-line': 'rgba(15,23,42,.12)',
+        '--bt-id': 'rgba(30,41,59,.55)',
+      }
 }
 
 // 注意：不要把 'sidebarRightTabs' 加进 inject——第三方插件入口的加载器对未知
@@ -161,6 +178,9 @@ export const inject = ['slots', 'locale']
 // 圆角方底 + 接管意象（双箭头 » 进格 |，读作"接管席位"），渐变 #6366F1→#8B5CF6。
 // 渐变 id 加 bt- 前缀避免与宿主页面里的 defs 撞名。
 // ---------------------------------------------------------------------------
+
+export const HELP_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>'
+export const MEMORY_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>'
 
 const ICON_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="100%" height="100%" role="img" aria-label="dsh-takeover">' +
   '<defs>' +
@@ -985,7 +1005,7 @@ export function PendingList({ rows, query, home, t, lang, onExport, onChainFilte
     // 嵌套可交互元素违反 ARIA 禁则（stopPropagation 只解决事件，不解决语义）
     return createElement('div', { key: p.id, className: inGroup ? 'bt-pending-member' : undefined },
       createElement('div', {
-      className: `bt-pending${open ? ' bt-pending-open' : ''}`,
+      className: `bt-pending${open ? ' bt-pending-open' : ''}${isNew ? ' bt-pending-unread' : ''}`,
       title: p.id,
       role: 'button',
       tabIndex: 0,
@@ -999,7 +1019,8 @@ export function PendingList({ rows, query, home, t, lang, onExport, onChainFilte
       createElement('span', { className: 'bt-pend-main' },
         createElement('span', { className: 'bt-pend-line1' },
           createElement('span', { className: 'bt-pending-title', title: p.id }, displayTitleOf(p)),
-          isNew ? createElement('span', { className: 'bt-tag bt-tag-new' }, t('newBadge')) : null,
+          // 未读态已由行首强调条表达；「新」徽标只留给 1 小时内的新卡（防满屏 amber 噪音）
+          (isNew && Date.now() - Date.parse(p.pushedAt) < 3_600_000) ? createElement('span', { className: 'bt-tag bt-tag-new' }, t('newBadge')) : null,
           p.lowInfo === true ? createElement('span', { className: 'bt-tag bt-tag-lowinfo' }, t('lowInfoBadge')) : null,
           // 接力链徽标（展示位；过滤入口在展开态「只看此链」——行内不嵌交互，ARIA 禁则同前）
           p.supersedes !== undefined
@@ -1163,12 +1184,13 @@ export function ProviderMatrix({ rows, busy, onToggle, t }: {
 // ---------------------------------------------------------------------------
 
 /** 接收方 chips：交接出去与记忆快照共用（任意 agent + 八家） */
-export function TargetChips({ sel, lang, onSelect }: {
+export function TargetChips({ sel, lang, onSelect, ariaLabel }: {
   sel: string
   lang: Lang
   onSelect: (t: OutboundTarget) => void
+  ariaLabel?: string
 }): ReturnType<typeof createElement> {
-  return createElement('div', { className: 'bt-chips', role: 'group', style: { marginTop: 8 } },
+  return createElement('div', { className: 'bt-chips', role: 'group', 'aria-label': ariaLabel, style: { marginTop: 8 } },
     ...OUTBOUND_TARGETS.map((tg) => createElement('button', {
       key: tg,
       className: `bt-chip${sel === tg ? ' bt-chip-on' : ''}`,
@@ -1221,16 +1243,17 @@ export function SendCard({ sessionId, t, lang, onError, onNotice }: {
       .catch((e: unknown) => onError(e instanceof Error ? e.message : String(e)))
   }
 
+  const targetLabelText = OUTBOUND_LABELS[target][lang]
   const send = (): void => {
     if (busy) return
-    const instruction = outboundCommand(lang)
+    const instruction = outboundCommand(lang, target === 'any' ? undefined : targetLabelText)
     if (sessionId === undefined || sessionId === '') {
       // 老宿主：座位没带 sessionId——复制指令，用户粘进输入框（语义一致）
       copyInstruction(instruction, t('sendCopiedNotice'))
       return
     }
     setBusy(true)
-    void post<{ ok: true } | { ok: false; error: string; instruction?: string }>('/dsh-takeover/send', { sessionId, lang })
+    void post<{ ok: true } | { ok: false; error: string; instruction?: string }>('/dsh-takeover/send', { sessionId, lang, target })
       .then((r) => {
         if (r.ok) {
           setSent(true)
@@ -1253,7 +1276,7 @@ export function SendCard({ sessionId, t, lang, onError, onNotice }: {
       createElement('span', { className: 'bt-title', style: { fontSize: 13 } }, t('sendTitle')),
     ),
     createElement('div', { className: 'bt-sub' }, sessionId !== undefined && sessionId !== '' ? t('sendHint') : t('sendHintCopy')),
-    createElement(TargetChips, { sel: target, lang, onSelect: setTarget }),
+    createElement(TargetChips, { sel: target, lang, onSelect: setTarget, ariaLabel: t('targetGroupLabel') }),
     createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 } },
       createElement('button', {
         className: 'bt-btn bt-btn-primary',
@@ -1262,7 +1285,7 @@ export function SendCard({ sessionId, t, lang, onError, onNotice }: {
         onClick: send,
         title: t('sendBtnTitle'),
       },
-        copied ? t('copiedBtn') : busy ? t('sendBusy') : t('sendBtn'),
+        copied ? t('copiedBtn') : busy ? t('sendBusy') : target === 'any' ? t('sendBtn') : t('sendBtnTo', { label: targetLabelText }),
       ),
     ),
     createElement('details', { className: 'bt-note', open: sent, style: { marginTop: 8 } },
@@ -1353,7 +1376,9 @@ export function MemoryCard({ t, lang, onError, onNotice, onPushed, defaultOpen }
         style: { width: 13, height: 13, display: 'inline-block', opacity: 0.9 },
         dangerouslySetInnerHTML: { __html: MEMORY_SVG },
       }),
+      createElement('span', { className: 'bt-logo', style: { width: 13, height: 13, display: 'inline-block', opacity: 0.9 }, dangerouslySetInnerHTML: { __html: MEMORY_SVG } }),
       createElement('span', { className: 'bt-title', style: { fontSize: 13 } }, `${t('memoryTitle')}`),
+      createElement('span', { className: 'bt-sub' }, t('memoryHint')),
       createElement('span', { className: 'bt-spacer' }),
       createElement('span', { className: 'bt-pending-chev', 'aria-hidden': true }, '▸'),
     ),
@@ -1399,9 +1424,6 @@ export function MemoryCard({ t, lang, onError, onNotice, onPushed, defaultOpen }
   )
 }
 
-/** 帮助/记忆小图标（13px 线条风，与品牌图标同语言；替代系统 emoji） */
-export const HELP_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>'
-export const MEMORY_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>'
 
 /** 新手帮助 / FAQ：问答列表本体（显隐由挂载方的按钮控制——工作台在浮层标题栏，
  * 设置卡在头卡按钮；不再各占一整行） */
@@ -1883,7 +1905,7 @@ function useTakeoverPolling(): {
  * 出站交接/记忆打包全在这里）。挂载面有两个——宿主 0.2 右侧栏「接管」tab
  * （chrome=true，自带 slim 头卡）与老宿主降级时的设置卡内嵌（chrome=false，
  * 头卡由设置卡提供）。sessionId 由宿主座位注入（交接出去用）；缺席只降级该卡。 */
-export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp }: {
+export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp, bounded }: {
   t: Translate
   locale: LocaleRuntime | undefined
   navigate: (sessionId: string) => boolean
@@ -1892,6 +1914,8 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
   sessionId?: string
   /** 新手 FAQ 显隐（由浮层标题栏的 [?] 按钮切换；默认隐藏不占行） */
   showHelp?: boolean
+  /** 浮层挂载（有固定高度外壳：面板变 flex 列、栅格内滚） */
+  bounded?: boolean
 }): ReturnType<typeof createElement> {
   useLocaleSync(locale)
   const { state, error, setError, reload } = useTakeoverPolling()
@@ -1927,7 +1951,7 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
   const clear = (): void => {
     if (!confirmClear) {
       setConfirmClear(true)
-      setTimeout(() => { setConfirmClear(false) }, 3000)
+      setTimeout(() => { setConfirmClear(false) }, 6000)
       return
     }
     setConfirmClear(false)
@@ -1979,7 +2003,7 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
       setError(e instanceof Error ? e.message : String(e))
     }
   }
-  return createElement('div', { className: 'bt-panel', style: themeVars() },
+  return createElement('div', { className: `bt-panel${bounded === true ? ' bt-bounded' : ''}`, style: themeVars() },
     createElement('style', null, CSS),
 
     // 右侧栏挂载时的 slim 头卡：标识 + 手动刷新（设置卡内嵌时头卡由 Panel 提供）
@@ -1997,7 +2021,7 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
     notice !== null ? createElement('div', { className: 'bt-banner bt-banner-info' }, notice) : null,
 
     // 工作台双栏栅格：宽容器（浮层 ≥920px）下收件箱与浏览器并排，窄容器 auto-fit 收单列
-    createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(440px, 1fr))', gap: 10, alignItems: 'start' } },
+    createElement('div', { className: 'bt-cols', style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(480px, 1fr))', gap: 16, alignItems: 'start', ...(bounded === true ? { flex: '1 1 auto', minHeight: 0 } : {}) } },
     // 左栏：新手帮助（[?] 按钮切换，默认隐藏）+ 收件箱概览
     createElement('div', { style: { display: 'grid', gap: 10, alignItems: 'start' } },
       showHelp === true ? createElement(HelpCard, { t }) : null,
@@ -2079,11 +2103,11 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
     ),
     ), // 左栏收尾（帮助 + 收件箱）
 
-    // 右栏：交接出去（出站）+ 外部会话浏览器（入站）+ 记忆快照
-    createElement('div', { style: { display: 'grid', gap: 10, alignItems: 'start' } },
-      createElement(SendCard, { sessionId, t, lang, onError: (msg) => setError(msg), onNotice: showNotice }),
-      // 外部会话浏览器（浏览 + 一键投递 + 投递后自动切会话；卡片蒸馏仍在会话里由模型完成）
+    // 右栏（按三步上手顺序）：① 浏览外部会话（接进来）② 交接出去（寄存出站）③ 记忆快照（低频）
+    createElement('div', { style: { display: 'grid', gap: 16, alignItems: 'start' } },
+      // 外部会话浏览器（浏览 + 一键接管 + 投递后自动切会话；卡片蒸馏仍在会话里由模型完成）
       createElement(ForeignBrowser, { state, t, lang, onError: (msg) => setError(msg), onNotice: showNotice, navigate }),
+      createElement(SendCard, { sessionId, t, lang, onError: (msg) => setError(msg), onNotice: showNotice }),
       createElement(MemoryCard, { t, lang, onError: (msg) => setError(msg), onNotice: showNotice, onPushed: reload }),
     ),
     ),
@@ -2114,8 +2138,10 @@ export function ComposerChip({ t, locale, navigate, sessionId }: {
     const r = el.getBoundingClientRect()
     if (typeof r.top !== 'number') return
     const vw = window.innerWidth
-    const width = Math.max(360, Math.min(1040, vw - 16))
-    const left = Math.max(8, Math.min(vw - width - 8, r.right - width))
+    // 宽度分档（视觉审查 P0-1）：大屏放大、中屏定宽、小屏贴边，不再焊死 1040
+    const width = vw >= 1600 ? Math.min(1240, vw - 48) : vw >= 1200 ? Math.min(1040, vw - 48) : Math.max(360, Math.min(720, vw - 16))
+    // 以 chip 中心对齐再夹取进视口——chip 在宿主页里不居中，浮层也不歪
+    const left = Math.max(16, Math.min(vw - width - 16, r.left + r.width / 2 - width / 2))
     const spaceAbove = r.top - 12
     const spaceBelow = window.innerHeight - r.bottom - 12
     // 上方放不下（<280px）且下方更宽裕时朝下弹，否则朝上（composer 常态）
@@ -2162,7 +2188,7 @@ export function ComposerChip({ t, locale, navigate, sessionId }: {
       t('sidebarTabTitle'),
     ),
     open ? createElement('div', {
-      style: { position: 'fixed', inset: 0, zIndex: 9998 },
+      style: { position: 'fixed', inset: 0, zIndex: 9998, background: 'rgba(0,0,0,.32)' },
       onClick: () => setOpen(false),
     }) : null,
     open ? createElement('div', {
@@ -2174,13 +2200,14 @@ export function ComposerChip({ t, locale, navigate, sessionId }: {
         '--border': 'var(--dsw-alias-border-l2, rgba(127,127,127,.25))',
         position: 'fixed', zIndex: 9999,
         boxSizing: 'border-box', // maxHeight 必须含 padding+border，否则矮窗仍溢出视口（实测 583>568）
+        display: 'flex', flexDirection: 'column', overflow: 'hidden',
         ...(pos !== null
           ? { left: pos.left, width: pos.width, maxHeight: pos.maxH, ...(pos.top !== undefined ? { top: pos.top } : { bottom: pos.bottom }) }
           : { right: 8, bottom: 72, width: 'min(1040px, calc(100vw - 16px))', maxHeight: '70vh' }),
         overflowY: 'auto',
         background: 'var(--bg)',
-        border: '1px solid var(--border)', borderRadius: 12,
-        boxShadow: '0 10px 32px rgba(0,0,0,.28)', padding: 8,
+        border: '1px solid var(--border)', borderRadius: 16,
+        boxShadow: '0 16px 48px rgba(0,0,0,.5)', padding: '10px 14px 12px',
       },
     },
       createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, padding: '2px 4px 6px' } },
@@ -2330,11 +2357,9 @@ export function apply(ctx: Context): void {
         },
       ), 'dsh-takeover: takeover composer chip')
       chipReady = true
-      try { (globalThis as { localStorage?: { setItem: (k: string, v: string) => void } }).localStorage?.setItem("dsh-takeover-dock-debug", "ok") } catch { /* 隐私模式等 */ }
     } catch (e) {
       const msg = e instanceof Error ? (e.stack ?? e.message) : String(e)
       console.warn('[dsh-takeover] takeover chip registration failed; settings card keeps the work zones', e)
-      try { (globalThis as { localStorage?: { setItem: (k: string, v: string) => void } }).localStorage?.setItem("dsh-takeover-dock-debug", msg) } catch { /* 同上 */ }
     }
   }
   const effectFn = (ctx as unknown as { effect?: (fn: () => void, label?: string) => void }).effect

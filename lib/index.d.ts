@@ -514,8 +514,9 @@ export declare const OUTBOUND_LABELS: Record<OutboundTarget, {
   en: string;
 }>;
 /** 投进当前会话的寄存指令（queue 模式打给本会话的 agent）。
- * 两行式（同 depositCommand 的换行纪律）：引用/命令行在前，指示行在后。 */
-export declare function outboundCommand(lang: Lang): string;
+ * 两行式（同 depositCommand 的换行纪律）：引用/命令行在前，指示行在后；
+ * 指定了接收方时第二行带上「接收方：xxx」——目标选择必须真实影响投出去的内容。 */
+export declare function outboundCommand(lang: Lang, targetLabel?: string): string;
 /** 对面取卡指引：在目标 agent 的输入框里粘贴这句话，它读完卡即接手。
  * CLI 系给可直接启动的一行命令；输入框系给同句。路径用 ~（POSIX/Windows 均按
  * 目标 agent 的 home 展开习惯），卡 id 恒在句中。 */
