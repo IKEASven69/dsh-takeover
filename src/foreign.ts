@@ -210,8 +210,17 @@ function extractPath(toolName: string, text: string): string {
 }
 
 /** 轮次流 → 结构化摘要 + 骨架素材（纯函数，可单测） */
+/** 宿主 shell 回声条目前缀（claude-code 把本地命令的 stdout 以 user 角色写进转录，
+ * 它们不是用户请求——混进 goal 会让「最后一条用户请求」变成命令噪音。实测发现。） */
+const SHELL_ECHO_PREFIXES = ['<local-command', '<command-name>', '<command-message>']
+
+function isUserRequestText(text: string): boolean {
+  const t = text.trim()
+  return t !== '' && !SHELL_ECHO_PREFIXES.some((p) => t.startsWith(p))
+}
+
 export function summarizeTurns(ref: SessionRef, turns: Turn[]): { summary: ForeignSummary; skeleton: ForeignSkeleton } {
-  const userTexts = turns.filter((t) => t.role === 'user' && t.text.trim() !== '').map((t) => t.text.trim())
+  const userTexts = turns.filter((t) => t.role === 'user' && isUserRequestText(t.text)).map((t) => t.text.trim())
   const firstUser = userTexts[0] ?? ''
   const lastUser = userTexts.at(-1) ?? ''
 

@@ -336,7 +336,6 @@ type ForeignListRow = {
   updatedAt: string;
   kind: string;
 };
-/** 轮次流 → 结构化摘要 + 骨架素材（纯函数，可单测） */
 export declare function summarizeTurns(ref: SessionRef, turns: Turn[]): {
   summary: ForeignSummary;
   skeleton: ForeignSkeleton;
