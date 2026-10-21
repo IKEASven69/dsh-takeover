@@ -53,9 +53,16 @@ const PATTERNS: Array<{ rule: string; re: RegExp }> = [
   { rule: '连接串口令（db://user:pass@）', re: /\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp|mssql):\/\/[^\s:@/]+:([^\s:@/]{6,})@/g },
 ]
 
-/** 关键词上下文里的赋值/声明：password = "…"、token: '…' 等，值高熵即报 */
+/** 关键词上下文里的赋值/声明：password = "…"、token: '…' 等。
+ * 值下限 8（红队语料 SuperSecret99=13 字符曾漏网）但短值（<20，熵判据不适用）
+ * 必须字母数字混合——纯数字串（端口/计数）不误报。 */
 const ASSIGNMENT =
-  /(?:[\w.-]{0,40}(?:password|passwd|secret|token|api[_-]?key|apikey|access[_-]?key|private[_-]?key)[\w.-]{0,40})\s*[:=]\s*["']?([A-Za-z0-9_+/=.:-]{14,})["']?/gi
+  /(?:[\w.-]{0,40}(?:password|passwd|secret|token|api[_-]?key|apikey|access[_-]?key|private[_-]?key)[\w.-]{0,40})\s*[:=]\s*["']?([A-Za-z0-9_+/=.:-]{8,})["']?/gi
+
+function assignmentValueSuspicious(value: string): boolean {
+  if (value.length >= 20) return isHighEntropyToken(value)
+  return /[A-Za-z]/.test(value) && /[0-9]/.test(value)
+}
 
 const SECTION_KEYS = ['goal', 'files', 'done', 'remaining', 'stopped', 'warnings', 'suggested'] as const
 
@@ -93,7 +100,7 @@ export function scanSecrets(sections: Record<string, string | undefined>): Secre
     while ((am = ASSIGNMENT.exec(text)) !== null) {
       const value = am[1]
       if (value === undefined) continue
-      if (!isHighEntropyToken(value)) continue
+      if (!assignmentValueSuspicious(value)) continue
       // 键名从整段匹配里回提（键名自身是非捕获组，允许任意前后缀——）
       const kw = /password|passwd|secret|token|api[_-]?key|apikey|access[_-]?key|private[_-]?key/i.exec(am[0])?.[0] ?? 'key'
       const sig = `assignment:${key}:${value}`

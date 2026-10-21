@@ -550,13 +550,17 @@ ${honest}`
     // 密钥闸（先例：gitleaks/Push Protection——阻断为默认 + 留痕旁路）：卡随同步盘跨机传播
     // 并进入下游会话上下文，比 git 更宽的泄漏面；命中即拒，理由回喂调用方
     // title/to/project 标量也进扫描——密钥从 title 侧门出盘等于没闸
-    const secretHits = scanSecrets({
-      ...sections,
-      suggested: sections.suggested,
-      title: args.title,
-      to: args.to,
-      project: args.project,
-    })
+    // 补丁 diff 同扫（T2-P，红队驱动）：diff 全是源码行，密钥走补丁走私等于没闸
+    const secretHits = [
+      ...scanSecrets({
+        ...sections,
+        suggested: sections.suggested,
+        title: args.title,
+        to: args.to,
+        project: args.project,
+      }),
+      ...(patchBundle !== null && patchBundle.patch !== '' ? scanSecrets({ patch: patchBundle.patch }) : []),
+    ]
     if (secretHits.length > 0 && args.allowSecrets !== true) {
       const detail = secretHits.map((h) => `${h.rule}@${h.section}（${h.masked}）`).join('；')
       return {
