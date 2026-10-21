@@ -17,7 +17,7 @@ import type { Context } from '@deepseek-ai/cordis'
 // Type-only: pulls the Context.webServer merge（宿主由 web bundle 提供，不打进产物）。
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { defaultForeignReaders, foreignResolveOne, foreignSessionPreview, foreignSessionsList, type ForeignProvider } from './foreign.ts'
-import { depositCommand, outboundCommand, takeoverCommand, type SessionRowLike } from './browser-view.ts'
+import { depositCommand, outboundCommand, OUTBOUND_LABELS, takeoverCommand, type Lang, type SessionRowLike } from './browser-view.ts'
 import { writeRelayProvenance } from './relay-records.ts'
 import { pushMemoryCard, scanMemorySources } from './memory.ts'
 import { buildState, clearArchived, isProviderEnabled, setProviderEnabled } from './settings.ts'
@@ -476,29 +476,33 @@ export function registerTakeoverRoutes(
           void readJsonBody(request).then(
             (body) => {
               try {
+                const lang: 'zh' | 'en' = body['lang'] === 'en' ? 'en' : 'zh'
+                // target 是 chips 键（claude/any/…），换算成展示名进指令
+                const targetKey = String(body['target'] ?? 'any')
+                const targetLabel = (OUTBOUND_LABELS as Record<string, { zh: string; en: string }>)[targetKey]?.[lang] ?? targetKey
                 const sessionId = String(body['sessionId'] ?? '').trim()
                 if (sessionId === '') {
-                  sendJson(response, 200, { ok: false, error: '缺少当前会话 id（老宿主座位不带 sessionId 时走复制路径）', instruction: outboundCommand(body['lang'] === 'en' ? 'en' : 'zh') })
+                  sendJson(response, 200, { ok: false, error: '缺少当前会话 id（老宿主座位不带 sessionId 时走复制路径）', instruction: outboundCommand(lang, targetLabel) })
                   return
                 }
                 const controller = sessionControllerOf(ctx)
                 if (controller === undefined) {
                   // 规范降级：带指令回包，面板自动退回复制路径
-                  sendJson(response, 200, { ok: false, error: '宿主缺会话控制器，一键交接不可用——请复制指令粘进输入框', instruction: outboundCommand(body['lang'] === 'en' ? 'en' : 'zh') })
+                  sendJson(response, 200, { ok: false, error: '宿主缺会话控制器，一键交接不可用——请复制指令粘进输入框', instruction: outboundCommand(lang, targetLabel) })
                   return
                 }
                 void controller.prompt({
                   requestId: randomUUID(),
                   sessionId,
                   mode: 'queue',
-                  content: [{ type: 'text', text: outboundCommand(body['lang'] === 'en' ? 'en' : 'zh') }],
+                  content: [{ type: 'text', text: outboundCommand(lang, targetLabel) }],
                 }, new AbortController().signal).then(
                   () => { sendJson(response, 200, { ok: true }) },
                   (e: unknown) => {
                     sendJson(response, 200, {
                       ok: false,
                       error: e instanceof Error ? e.message : String(e),
-                      instruction: outboundCommand(body['lang'] === 'en' ? 'en' : 'zh'),
+                      instruction: outboundCommand(lang, targetLabel),
                     })
                   },
                 )

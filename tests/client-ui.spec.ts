@@ -281,7 +281,7 @@ test('WorkspaceBody：帮助默认隐藏（[?] 切换）；交接出去/记忆�
   assert.ok(has('交接出去'), '出站卡应渲染')
   assert.ok(has('记忆快照'), '记忆卡应渲染')
   assert.ok(has('可查证'), '覆盖率徽标应改为「可查证」')
-  assert.ok(has('机器信封 7.4K'), '信封字数应人性化（7426→7.4K）')
+  assert.ok(has('信封附件 7.4K'), '信封字数应人性化（7426→7.4K，0.4.0 改称信封附件）')
   // 外部会话浏览器 pills（state.providers 两家）：应带品牌 svg 图标
   const icons = container.querySelectorAll('.bt-chip svg')
   assert.ok(icons.length >= 2, `浏览器 pills 应有品牌图标，实得 ${icons.length}`)
@@ -306,7 +306,7 @@ test('SendCard：无 sessionId 复制降级不发请求；有 sessionId 一键 P
   resetCalls()
   await clickButton('交接出去')
   await flush()
-  assert.deepEqual(lastBody('/dsh-takeover/send'), { sessionId: 'sess-cur-9', lang: 'zh' })
+  assert.deepEqual(lastBody('/dsh-takeover/send'), { sessionId: 'sess-cur-9', lang: 'zh', target: 'any' })
 })
 
 test('MemoryCard：展开即扫描、不存在的来源不可选、出卡 POST memory-push 只带勾选项', async () => {

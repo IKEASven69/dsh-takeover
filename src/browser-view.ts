@@ -99,12 +99,17 @@ export const OUTBOUND_LABELS: Record<OutboundTarget, { zh: string; en: string }>
 }
 
 /** 投进当前会话的寄存指令（queue 模式打给本会话的 agent）。
- * 两行式（同 depositCommand 的换行纪律）：引用/命令行在前，指示行在后。 */
-export function outboundCommand(lang: Lang): string {
+ * 两行式（同 depositCommand 的换行纪律）：引用/命令行在前，指示行在后；
+ * 指定了接收方时第二行带上「接收方：xxx」——目标选择必须真实影响投出去的内容。 */
+export function outboundCommand(lang: Lang, targetLabel?: string): string {
   const head = '/handoff'
-  return lang === 'en'
-    ? `${head}\nWhen the deposit is done, tell me the card id.`
-    : `${head}\n寄存完成后，把卡片编号发给我。`
+  const receiver = targetLabel !== undefined && targetLabel !== '' && targetLabel !== 'any'
+    ? (lang === 'en' ? `Receiver: ${targetLabel}. ` : `接收方：${targetLabel}。`)
+    : ''
+  const tail = lang === 'en'
+    ? `${receiver}When the deposit is done, tell me the card id.`
+    : `${receiver}寄存完成后，把卡片编号发给我。`
+  return `${head}\n${tail}`
 }
 
 /** 对面取卡指引：在目标 agent 的输入框里粘贴这句话，它读完卡即接手。
