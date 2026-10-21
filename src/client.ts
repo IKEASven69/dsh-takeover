@@ -1705,6 +1705,7 @@ export function ForeignBrowser({ state, t, lang, onError, onNotice, navigate }: 
       createElement('span', { className: 'bt-title', style: { fontSize: 13 } }, t('browserTitle')),
     ),
     createElement('div', { className: 'bt-sub' }, t('browserHint')),
+    createElement('div', { className: 'bt-sub', style: { marginTop: 8, fontWeight: 600 } }, t('browserGroupLabel')),
     createElement('div', { className: 'bt-chips', role: 'group', 'aria-label': t('browserChipAria'), style: { marginTop: 8 } },
       ...providers.map((p) => {
         const usable = p.supported && p.enabled
