@@ -94,7 +94,7 @@ test('并发取件 · 顺序等价证明：第二次取已消费的卡必败（r
   }
 })
 
-test('并发取件 · 平台语义发现：Windows 并发 rename 同一源文件双双成功（冻结——这是认领文件存在的理由）', async () => {
+test('并发取件 · 平台语义发现：Windows 并发 rename 同一源文件双双成功（冻结——这是认领文件存在的理由）', { skip: process.platform !== 'win32' ? 'Windows 专属 fs 语义（POSIX 上第二发 ENOENT，单胜者天然成立）' : false }, async () => {
   // 实测（libuv/Windows）：两个线程同时对同一 pending 文件 rename，双 fulfilled、
   // 目标仅一份——rename 在 Windows 上不提供互斥。依赖「rename 原子性=单胜者」的
   // 设计在 Windows 并发下会双重消费（两个 agent 都拿到 ok）。core 的 loadCard
