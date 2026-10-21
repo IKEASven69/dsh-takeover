@@ -24,6 +24,16 @@ dsh-takeover is a DeepSeek Harness (DSH) plugin implementing the full takeover l
 
 The filesystem is the bus: dropping a card into `pending/` is delivery; picking it up moves it to `archived/` (consume-and-archive; a second pickup of the same id errors). A card = Markdown + YAML frontmatter + six Chinese body sections (目标 / 涉及文件 / 做到哪 / 还差什么 / 停在哪 / 读者警告). See the protocol repo's SPEC for the full format and semantics.
 
+## Quality & evidence (0.4.0)
+
+Relay quality is not vibes — it is numbers, tests, and third-party-checkable proof:
+
+- **Quality baseline**: backtest of 50 real consumed cards — continuation rate 34.7%; cards whose done-section carries ledger marks were continued 50% of the time vs 0% for unmarked ones (`scripts/backtest-archived.mjs`). End-to-end two-card relay against a real host and model: PASS (`scripts/eval-e2e.mjs`).
+- **Parse regression**: structurally-cloned anonymized real-session corpus + 13 golden files frozen byte-for-byte (`scripts/corpus-build.mjs` → `tests/corpus-golden.spec.ts`) — upstream storage drift turns red before merge.
+- **Security**: threat model in [THREAT-MODEL.md](THREAT-MODEL.md); 8 red-team suites in CI (`tests/redteam.spec.ts`) — the secret gate covers all six sections, every scalar, and the card's patch diff.
+- **Protocol conformance**: `conformance/` executable suite (9 MUST requirements derived from the SPEC); both the reference implementation and an independent second implementation (written from the SPEC alone) conform — an open protocol earns that title via its second implementation.
+- **Interop**: INTERCHANGE v1 (dsh-chat-import) ↔ handoff: 1 bidirectional conversion (`scripts/interop-interchange.mjs`), verified by a real import through their plugin v0.26.2.
+
 ## How it differs from one-way exporters
 
 [dsh-handoff](https://www.npmjs.com/package/dsh-handoff) (v0.1.0) is a **one-way exporter**: it deterministically renders the session event stream into a HANDOFF.md document in the workspace — no inbox, no shared directory, no cross-agent pickup.
