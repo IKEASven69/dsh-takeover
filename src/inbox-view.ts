@@ -240,3 +240,17 @@ export function pendingListMarkdown(rows: PendingRow[], notes: ExportNotes): str
   if (rows.length === 0) return ''
   return rows.map((p) => cardMarkdown(p, notes).trimEnd()).join('\n\n---\n\n') + '\n'
 }
+
+/** 行标题回退：卡无人类标题（或标题就是编号）时，用「目标」段预览的首个非空行
+ * 当展示标题——列表不再是一墙 ho-xxx 编号；悬浮 title 与次行仍给完整编号。
+ * 纯函数：HTML 报告与工作台行渲染共用同一口径。 */
+export function displayTitleOf(p: { title: string; id: string; preview: string }): string {
+  const t = p.title.trim()
+  const idStem = p.id.replace(/\.md$/, '')
+  if (t !== '' && t !== idStem) return t
+  const lines = p.preview.split('\n').map((l) => l.trim())
+  const line = lines.find((l) => l !== '' && !l.startsWith('#')) ?? ''
+  const cleaned = line.replace(/^[-*\d.、\s]+/, '').trim()
+  if (cleaned === '') return idStem
+  return cleaned.length > 48 ? `${cleaned.slice(0, 48)}…` : cleaned
+}

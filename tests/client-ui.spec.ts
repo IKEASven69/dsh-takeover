@@ -275,16 +275,19 @@ test('静态词典回退：缺宿主 locale 时 t 输出 zh 文案', () => {
 
 // ---------------------------------------------------------------- 0.3.0 新三卡（交接出去 / 记忆快照 / 帮助）
 
-test('WorkspaceBody：帮助/交接出去/记忆快照齐渲染；统计条改版（可查证 + 信封 7.4K）；pills 带品牌图标', async () => {
-  await render(createElement(client.WorkspaceBody, { t, locale: undefined, navigate, chrome: false, sessionId: 'sess-cur-1' }))
-  assert.ok(has('❓ 新手帮助 / FAQ'), '帮助卡应渲染')
+test('WorkspaceBody：帮助默认隐藏（[?] 切换）；交接出去/记忆快照齐渲染；统计条改版；pills 带图标', async () => {
+  await render(createElement(client.WorkspaceBody, { t, locale: undefined, navigate, chrome: false, sessionId: 'sess-cur-1', showHelp: true }))
+  assert.ok(has('新手帮助 / FAQ'), '帮助卡应渲染（showHelp=true）')
   assert.ok(has('交接出去'), '出站卡应渲染')
-  assert.ok(has('🧠 记忆快照'), '记忆卡应渲染')
+  assert.ok(has('记忆快照'), '记忆卡应渲染')
   assert.ok(has('可查证'), '覆盖率徽标应改为「可查证」')
   assert.ok(has('机器信封 7.4K'), '信封字数应人性化（7426→7.4K）')
   // 外部会话浏览器 pills（state.providers 两家）：应带品牌 svg 图标
   const icons = container.querySelectorAll('.bt-chip svg')
   assert.ok(icons.length >= 2, `浏览器 pills 应有品牌图标，实得 ${icons.length}`)
+  // 默认隐藏：不带 showHelp 时帮助卡不占行
+  await render(createElement(client.WorkspaceBody, { t, locale: undefined, navigate, chrome: false }))
+  assert.ok(!has('新手帮助 / FAQ'), '帮助默认隐藏，不占行')
 })
 
 test('SendCard：无 sessionId 复制降级不发请求；有 sessionId 一键 POST send', async () => {

@@ -30,6 +30,7 @@ import type { BrandMark } from './brand-icons.ts'
 import { DICTS, NS, interpolate } from './locales.ts'
 import {
   cardMarkdown,
+  displayTitleOf,
   filterPending,
   groupAdjacent,
   loadSeenSet,
@@ -771,9 +772,8 @@ export function buildReportHtml(
       : '')
 
   const pendingCards = state.pending.map((p) => {
-    const hasTitle = p.title !== ''
-    const title = hasTitle ? p.title : p.id
-    const idChip = hasTitle ? `<span class="rt-pid">${esc(p.id)}</span>` : ''
+    const title = displayTitleOf(p)
+    const idChip = `<span class="rt-pid">${esc(p.id)}</span>`
     const project = p.project !== ''
       ? `<span><span class="rt-plabel">${esc(words.labelProject)}</span>${esc(p.project)}</span>`
       : ''
@@ -998,7 +998,7 @@ export function PendingList({ rows, query, home, t, lang, onExport, onChainFilte
       createElement('span', { className: 'bt-pend-icon' }, createElement(ProviderIcon, { name: p.agent, size: 22 })),
       createElement('span', { className: 'bt-pend-main' },
         createElement('span', { className: 'bt-pend-line1' },
-          createElement('span', { className: 'bt-pending-title' }, p.title !== '' ? p.title : p.id),
+          createElement('span', { className: 'bt-pending-title', title: p.id }, displayTitleOf(p)),
           isNew ? createElement('span', { className: 'bt-tag bt-tag-new' }, t('newBadge')) : null,
           p.lowInfo === true ? createElement('span', { className: 'bt-tag bt-tag-lowinfo' }, t('lowInfoBadge')) : null,
           // 接力链徽标（展示位；过滤入口在展开态「只看此链」——行内不嵌交互，ARIA 禁则同前）
@@ -1348,7 +1348,12 @@ export function MemoryCard({ t, lang, onError, onNotice, onPushed, defaultOpen }
     },
   },
     createElement('summary', { className: 'bt-pending', style: { listStyle: 'none', cursor: 'pointer' } },
-      createElement('span', { className: 'bt-title', style: { fontSize: 13 } }, `🧠 ${t('memoryTitle')}`),
+      createElement('span', {
+        className: 'bt-logo',
+        style: { width: 13, height: 13, display: 'inline-block', opacity: 0.9 },
+        dangerouslySetInnerHTML: { __html: MEMORY_SVG },
+      }),
+      createElement('span', { className: 'bt-title', style: { fontSize: 13 } }, `${t('memoryTitle')}`),
       createElement('span', { className: 'bt-spacer' }),
       createElement('span', { className: 'bt-pending-chev', 'aria-hidden': true }, '▸'),
     ),
@@ -1394,15 +1399,27 @@ export function MemoryCard({ t, lang, onError, onNotice, onPushed, defaultOpen }
   )
 }
 
-/** 新手帮助 / FAQ：折叠卡（工作台左栏顶部与设置卡各一份，纯词典文案） */
+/** 帮助/记忆小图标（13px 线条风，与品牌图标同语言；替代系统 emoji） */
+export const HELP_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>'
+export const MEMORY_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>'
+
+/** 新手帮助 / FAQ：问答列表本体（显隐由挂载方的按钮控制——工作台在浮层标题栏，
+ * 设置卡在头卡按钮；不再各占一整行） */
 export function HelpCard({ t }: { t: Translate }): ReturnType<typeof createElement> {
   const entries = [1, 2, 3, 4, 5, 6, 7, 8].map((i) => ({
     q: t(`qa${i}q`),
     a: t(`qa${i}a`),
   }))
-  return createElement('details', { className: 'bt-note' },
-    createElement('summary', null, t('helpTitle')),
-    createElement('div', { className: 'bt-note-body' },
+  return createElement('div', { className: 'bt-card' },
+    createElement('div', { className: 'bt-head' },
+      createElement('span', {
+        className: 'bt-logo',
+        style: { width: 13, height: 13, display: 'inline-block', opacity: 0.9 },
+        dangerouslySetInnerHTML: { __html: HELP_SVG },
+      }),
+      createElement('span', { className: 'bt-title', style: { fontSize: 13 } }, t('helpTitle')),
+    ),
+    createElement('div', { style: { display: 'grid', gap: 8 } },
       ...entries.map((e, i) => createElement('div', { key: i, style: { marginBottom: 8 } },
         createElement('div', { style: { fontWeight: 600, marginBottom: 2 } }, e.q),
         createElement('div', { style: { opacity: 0.85 } }, e.a),
@@ -1866,13 +1883,15 @@ function useTakeoverPolling(): {
  * 出站交接/记忆打包全在这里）。挂载面有两个——宿主 0.2 右侧栏「接管」tab
  * （chrome=true，自带 slim 头卡）与老宿主降级时的设置卡内嵌（chrome=false，
  * 头卡由设置卡提供）。sessionId 由宿主座位注入（交接出去用）；缺席只降级该卡。 */
-export function WorkspaceBody({ t, locale, navigate, chrome, sessionId }: {
+export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp }: {
   t: Translate
   locale: LocaleRuntime | undefined
   navigate: (sessionId: string) => boolean
   chrome: boolean
   /** 当前会话 id（宿主 conversation 座位注入；设置卡/老宿主缺席 → 交接出去卡走复制路径） */
   sessionId?: string
+  /** 新手 FAQ 显隐（由浮层标题栏的 [?] 按钮切换；默认隐藏不占行） */
+  showHelp?: boolean
 }): ReturnType<typeof createElement> {
   useLocaleSync(locale)
   const { state, error, setError, reload } = useTakeoverPolling()
@@ -1979,9 +1998,9 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId }: {
 
     // 工作台双栏栅格：宽容器（浮层 ≥920px）下收件箱与浏览器并排，窄容器 auto-fit 收单列
     createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(440px, 1fr))', gap: 10, alignItems: 'start' } },
-    // 左栏：新手帮助（默认收起）+ 收件箱概览
+    // 左栏：新手帮助（[?] 按钮切换，默认隐藏）+ 收件箱概览
     createElement('div', { style: { display: 'grid', gap: 10, alignItems: 'start' } },
-      createElement(HelpCard, { t }),
+      showHelp === true ? createElement(HelpCard, { t }) : null,
       // 收件箱概览
       createElement('div', { className: 'bt-card' },
       createElement('div', { className: 'bt-head' },
@@ -2085,6 +2104,7 @@ export function ComposerChip({ t, locale, navigate, sessionId }: {
 }): ReturnType<typeof createElement> {
   useLocaleSync(locale)
   const [open, setOpen] = useState(false)
+  const [showHelp, setShowHelp] = useState(false)
   const chipRef = useRef<HTMLButtonElement | null>(null)
   // 浮层定位（打开瞬间与视口变化时现算；CSS 无法知道 chip 在哪，必须量）
   const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number; maxH: number; width: number } | null>(null)
@@ -2168,12 +2188,22 @@ export function ComposerChip({ t, locale, navigate, sessionId }: {
         createElement('span', { className: 'bt-title', style: { fontSize: 13 } }, t('popoverTitle')),
         createElement('span', { style: { flex: 1 } }),
         createElement('button', {
-          className: 'bt-btn bt-btn-xs', onClick: () => setOpen(false), 'aria-label': 'close',
+          className: 'bt-btn bt-btn-xs',
+          onClick: () => setShowHelp((v) => !v),
+          'aria-label': 'help',
+          title: t('helpTitle'),
+          style: showHelp ? { color: 'var(--bt-a)', borderColor: 'var(--bt-a)' } : undefined,
+        }, '?'),
+        createElement('button', {
+          className: 'bt-btn bt-btn-xs', onClick: () => { setOpen(false); setShowHelp(false) }, 'aria-label': 'close',
         }, '✕'),
       ),
       createElement(PanelBoundary, {
         t,
-        children: createElement(WorkspaceBody, { t, locale, navigate, chrome: false, sessionId }),
+        children: createElement('div', { style: { display: 'grid', gap: 8 } },
+          showHelp ? createElement(HelpCard, { t }) : null,
+          createElement(WorkspaceBody, { t, locale, navigate, chrome: false, sessionId, showHelp }),
+        ),
       }),
     ) : null,
   )
@@ -2184,6 +2214,8 @@ export function Panel({ t, locale, navigate, slim }: { t: Translate; locale: Loc
   const { state, setState, error, setError, reload, generationRef } = useTakeoverPolling()
   // 每家开关的操作中态（矩阵行级禁用）
   const [busy, setBusy] = useState<string | null>(null)
+  // 新手 FAQ 显隐（头卡 [?] 按钮切换，默认隐藏不占行）
+  const [showHelp, setShowHelp] = useState(false)
 
   const toggle = (name: string, enabled: boolean): void => {
     setBusy(name)
@@ -2212,6 +2244,13 @@ export function Panel({ t, locale, navigate, slim }: { t: Translate; locale: Loc
           createElement('div', { className: 'bt-sub' }, t('appSubtitle')),
         ),
         createElement('span', { className: 'bt-spacer' }),
+        createElement('button', {
+          className: `bt-btn bt-btn-xs${showHelp ? ' bt-chip-on' : ''}`,
+          onClick: () => setShowHelp((v) => !v),
+          'aria-label': 'help',
+          title: t('helpTitle'),
+          style: { minWidth: 26 },
+        }, '?'),
         createElement('button', { className: 'bt-btn', onClick: reload, disabled: busy !== null }, t('refresh')),
       ),
       error !== null ? createElement('div', { className: 'bt-banner bt-banner-err' }, error) : null,
@@ -2241,8 +2280,8 @@ export function Panel({ t, locale, navigate, slim }: { t: Translate; locale: Loc
         createElement('div', { className: 'bt-note-body' }, t('noteBody'))),
     ),
 
-    // 新手帮助 / FAQ（设置卡同款，工作台左栏顶部另有一份）
-    createElement(HelpCard, { t }),
+    // 新手帮助 / FAQ（头卡 [?] 按钮切换，默认隐藏不占行）
+    showHelp ? createElement(HelpCard, { t }) : null,
   )
 }
 
