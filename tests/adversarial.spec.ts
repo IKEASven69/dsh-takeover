@@ -787,3 +787,21 @@ test('连接级回环闸：socket.remoteAddress 非回环一律 403（头部再�
   })
   assert.equal(lan.status, 403)
 })
+
+// ---------------------------------------------------------------------------
+// 0.4.1 真机验收回归（三处 UI 重复/失焦缺陷）
+// ---------------------------------------------------------------------------
+test('记忆卡折叠栏：图标与 hint 各渲染一次（真机实测曾双图标+双文案）', () => {
+  const client = readRepoFile('src/client.ts')
+  assert.equal((client.match(/t\('memoryHint'\)/g) ?? []).length, 1,
+    'memoryHint 只允许出现一次——summary 里再放一遍会与正文重复')
+  assert.equal((client.match(/MEMORY_SVG/g) ?? []).length, 2,
+    'MEMORY_SVG = 定义 + 单次使用；出现第三次即折叠栏双图标回归')
+})
+
+test('两处 [?] 帮助按钮：打开即把帮助卡滚进视口（否则长列表里像没反应）', () => {
+  const client = readRepoFile('src/client.ts')
+  assert.ok(client.includes("'data-help-card': '1'"), 'HelpCard 根元素缺 data-help-card 挂点')
+  assert.equal((client.match(/scrollIntoView\(\{ block: 'start' \}\)/g) ?? []).length, 2,
+    '浮层与设置卡两处 [?] 都要在打开时 scrollIntoView')
+})

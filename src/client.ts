@@ -1379,9 +1379,7 @@ export function MemoryCard({ t, lang, onError, onNotice, onPushed, defaultOpen }
         style: { width: 13, height: 13, display: 'inline-block', opacity: 0.9 },
         dangerouslySetInnerHTML: { __html: MEMORY_SVG },
       }),
-      createElement('span', { className: 'bt-logo', style: { width: 13, height: 13, display: 'inline-block', opacity: 0.9 }, dangerouslySetInnerHTML: { __html: MEMORY_SVG } }),
       createElement('span', { className: 'bt-title', style: { fontSize: 13 } }, `${t('memoryTitle')}`),
-      createElement('span', { className: 'bt-sub' }, t('memoryHint')),
       createElement('span', { className: 'bt-spacer' }),
       createElement('span', { className: 'bt-pending-chev', 'aria-hidden': true }, '▸'),
     ),
@@ -1435,7 +1433,7 @@ export function HelpCard({ t }: { t: Translate }): ReturnType<typeof createEleme
     q: t(`qa${i}q`),
     a: t(`qa${i}a`),
   }))
-  return createElement('div', { className: 'bt-card' },
+  return createElement('div', { className: 'bt-card', 'data-help-card': '1' },
     createElement('div', { className: 'bt-head' },
       createElement('span', {
         className: 'bt-logo',
@@ -2155,6 +2153,7 @@ export function ComposerChip({ t, locale, navigate, sessionId }: {
   const [open, setOpen] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
   const chipRef = useRef<HTMLButtonElement | null>(null)
+  const panelRef = useRef<HTMLDivElement | null>(null)
   // 浮层定位（打开瞬间与视口变化时现算；CSS 无法知道 chip 在哪，必须量）
   const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number; maxH: number; width: number } | null>(null)
   const measure = (): void => {
@@ -2217,6 +2216,7 @@ export function ComposerChip({ t, locale, navigate, sessionId }: {
       onClick: () => setOpen(false),
     }) : null,
     open ? createElement('div', {
+      ref: panelRef,
       style: {
         // 就地定义面板用的 --bg/--border：composer 作用域没有这两个变量（设置卡
         // 作用域才有），不吃宿主输入卡实色的话整层近乎透明（实测）。底色直接对齐
@@ -2241,7 +2241,17 @@ export function ComposerChip({ t, locale, navigate, sessionId }: {
         createElement('span', { style: { flex: 1 } }),
         createElement('button', {
           className: 'bt-btn bt-btn-xs',
-          onClick: () => setShowHelp((v) => !v),
+          // 打开（而非收起）时把帮助卡滚进视口——帮助卡插在滚动容器顶部，
+          // 长列表滚动位置不动的话用户会以为按钮没反应（真机验收实测）
+          onClick: () => {
+            const next = !showHelp
+            setShowHelp(next)
+            if (next) {
+              window.setTimeout(() => {
+                panelRef.current?.querySelector('[data-help-card]')?.scrollIntoView({ block: 'start' })
+              }, 0)
+            }
+          },
           'aria-label': 'help',
           title: t('helpTitle'),
           style: showHelp ? { color: 'var(--bt-a)', borderColor: 'var(--bt-a)' } : undefined,
@@ -2268,6 +2278,7 @@ export function Panel({ t, locale, navigate, slim }: { t: Translate; locale: Loc
   const [busy, setBusy] = useState<string | null>(null)
   // 新手 FAQ 显隐（头卡 [?] 按钮切换，默认隐藏不占行）
   const [showHelp, setShowHelp] = useState(false)
+  const panelRef = useRef<HTMLDivElement | null>(null)
 
   const toggle = (name: string, enabled: boolean): void => {
     setBusy(name)
@@ -2284,7 +2295,7 @@ export function Panel({ t, locale, navigate, slim }: { t: Translate; locale: Loc
       .finally(() => { setBusy(null) })
   }
 
-  return createElement('div', { className: 'bt-panel', style: themeVars() },
+  return createElement('div', { className: 'bt-panel', ref: panelRef, style: themeVars() },
     createElement('style', null, CSS),
 
     // 头卡：标识 + 刷新
@@ -2298,7 +2309,16 @@ export function Panel({ t, locale, navigate, slim }: { t: Translate; locale: Loc
         createElement('span', { className: 'bt-spacer' }),
         createElement('button', {
           className: `bt-btn bt-btn-xs${showHelp ? ' bt-chip-on' : ''}`,
-          onClick: () => setShowHelp((v) => !v),
+          // 同浮层 [?]：打开时把帮助卡滚进视口，长页面里否则看不见变化
+          onClick: () => {
+            const next = !showHelp
+            setShowHelp(next)
+            if (next) {
+              window.setTimeout(() => {
+                panelRef.current?.querySelector('[data-help-card]')?.scrollIntoView({ block: 'start' })
+              }, 0)
+            }
+          },
           'aria-label': 'help',
           title: t('helpTitle'),
           style: { minWidth: 26 },
