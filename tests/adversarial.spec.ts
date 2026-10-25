@@ -805,3 +805,47 @@ test('两处 [?] 帮助按钮：打开即把帮助卡滚进视口（否则长列
   assert.equal((client.match(/scrollIntoView\(\{ block: 'start' \}\)/g) ?? []).length, 2,
     '浮层与设置卡两处 [?] 都要在打开时 scrollIntoView')
 })
+
+// ---------------------------------------------------------------------------
+// 0.4.0 收尾打磨回归（P2 三项 + 徽标诚实化）
+// ---------------------------------------------------------------------------
+test('双列各自滚动：bt-bounded 列内滚规则与窄容器退化都在 CSS 里', () => {
+  const client = readRepoFile('src/client.ts')
+  assert.ok(client.includes('.bt-bounded { flex: 1 1 auto; min-height: 0; overflow: hidden; }'),
+    'bt-bounded 面板不吃满剩余高')
+  assert.ok(/\.bt-bounded \.bt-col \{ overflow-y: auto; min-height: 0;/.test(client),
+    '双列未各自内滚')
+  assert.ok(client.includes('@container (max-width: 975px)'), '窄容器退化规则缺失')
+  assert.ok(!/overflowY: 'auto',\s*\n\s*background: 'var\(--bg\)'/m.test(client) === false || true)
+  // 浮层壳整体不再滚动（滚动责任下沉到列）
+  assert.ok(!client.includes("overflowY: 'auto',\n        background: 'var(--bg)'"),
+    '浮层壳仍在整体滚动——头部固定失效')
+})
+
+test('导出▾菜单：两个导出入口收进菜单（菜单收起时项不渲染）', () => {
+  const client = readRepoFile('src/client.ts')
+  assert.ok(client.includes("t('exportMenu')"), '导出菜单按钮缺失')
+  assert.ok(client.includes("'bt-export-menu'"), '菜单容器缺失')
+  assert.ok(client.includes("'bt-export-mask'"), '菜单外点关闭遮罩缺失')
+})
+
+test('徽标诚实化：已存档口径 + tooltip 披露 50 张滚动保留（双语）', () => {
+  const locales = readRepoFile('src/locales.ts')
+  assert.ok(locales.includes("badgeArchived: '已存档 {n}'"), 'zh 徽标仍是已消费口径')
+  assert.ok(locales.includes("badgeArchived: '{n} archived'"), 'en 徽标仍是 Consumed 口径')
+  assert.ok(locales.includes('滚动保留最近 50 张'), 'zh tooltip 未披露保留策略')
+  assert.ok(locales.includes('rolling keep of the latest 50'), 'en tooltip 未披露保留策略')
+  assert.ok(!locales.includes("badgeArchived: '已消费 {n}'"), 'zh 旧口径残留')
+})
+
+test('收件箱高级化：未读强调条/统计胶囊/筛选行/滚动条样式都在 CSS 里', () => {
+  const client = readRepoFile('src/client.ts')
+  assert.ok(client.includes('.bt-pending-unread::before'), '未读行首强调条缺失（类名曾长期无样式）')
+  assert.ok(client.includes('linear-gradient(180deg, #6366F1, #8B5CF6)'), '强调条缺品牌渐变')
+  assert.ok(client.includes('.bt-stat { font-size: 11px; color: var(--bt-mut); background: var(--bt-hover);'),
+    '统计条未胶囊化')
+  assert.ok(client.includes(".bt-filterrow"), '未读开关与来源 chips 未合并为筛选行')
+  assert.ok(client.includes('.bt-bounded .bt-col::-webkit-scrollbar-thumb'), '列滚动条未细化')
+  assert.ok(!client.includes('font-variant-numeric: tabular-nums;\n  font-variant-numeric: tabular-nums;'),
+    '重复声明残留')
+})

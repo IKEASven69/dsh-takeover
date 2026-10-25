@@ -161,11 +161,11 @@ test('WorkspaceBody：统计条 / 接力链徽标 / 低信息折叠组全渲染'
   await render(createElement(client.WorkspaceBody, { t, locale: undefined, navigate, chrome: false }))
   await waitText('待取件 3')
   assert.ok(has('待取件 3'), '待取件徽标缺失')
-  assert.ok(has('已消费 5'), '已消费徽标缺失')
+  assert.ok(has('已存档 5'), '已存档徽标缺失（0.4.0 起口径改为存档数——保留策略封顶 50，不再叫已消费）')
   assert.ok(has('可查证 10/12'), '覆盖率徽标缺失（0.3.0 改版：覆盖率→可查证）')
   assert.ok(has('← 接力自 ho-test-0001'), '接力链徽标缺失')
-  assert.ok(has('导出全部'), '导出按钮缺失')
-  assert.ok(has('导出 HTML 报告'))
+  assert.ok(has('导出 ▾'), '导出菜单按钮缺失')
+  assert.ok(has('只看新卡'), '未读开关缺失')
 })
 
 test('WorkspaceBody：展开卡行点「一键取件」——POST takeover 带卡 id，成功出确认横幅', async () => {
@@ -196,12 +196,45 @@ test('WorkspaceBody：清空已消费二次确认后发起 clear-archived', asyn
   assert.ok(calls.some((c) => c.url === '/dsh-takeover/clear-archived'), 'clear POST 未发起')
 })
 
-test('WorkspaceBody：导出全部与 HTML 报告点击不抛错（blob 下载路径）', async () => {
+test('WorkspaceBody：导出▾菜单开合与两个导出项点击不抛错（blob 下载路径）', async () => {
   await render(createElement(client.WorkspaceBody, { t, locale: undefined, navigate, chrome: false }))
   await waitText('待取件 3')
+  // 菜单收起时两个导出项不在 DOM——先点开菜单
+  assert.ok(!has('导出全部'), '菜单未开时导出项不应渲染')
+  await clickButton('导出 ▾')
+  assert.ok(has('导出全部'), '菜单打开后缺「导出全部」项')
+  assert.ok(has('导出 HTML 报告'), '菜单打开后缺「导出 HTML 报告」项')
   await clickButton('导出全部')
+  await clickButton('导出 ▾')
   await clickButton('导出 HTML 报告')
   assert.ok(true)
+})
+
+test('WorkspaceBody：只看新卡是独立复选框开关——展开看过 A 后勾选即只留未读卡', async () => {
+  await render(createElement(client.WorkspaceBody, { t, locale: undefined, navigate, chrome: false }))
+  await waitText('待取件 3')
+  // 展开看 A → 记已见
+  const title = [...container.querySelectorAll('.bt-pending-title')]
+    .find((e) => (e.textContent ?? '').includes('交接卡 A'))
+  assert.ok(title, '目标行标题不存在')
+  await act(async () => { fireClick(title) })
+  await flush()
+  // 勾选只看新卡（React 的 checkbox onChange 由 click 合成触发——原生 change 不够）
+  const box = container.querySelector('.bt-newonly input') as HTMLInputElement | null
+  assert.ok(box, '只看新卡复选框不存在')
+  await act(async () => { fireClick(box) })
+  await flush()
+  assert.ok(box.checked, '点击后复选框未勾上')
+  assert.ok(!has('交接卡 A'), '已看过的 A 仍显示——未读过滤未生效')
+  assert.ok(has('接力卡 B'), '未读的接力卡 B 不应被滤掉')
+  // 取消勾选恢复
+  await act(async () => { fireClick(box) })
+  await flush()
+  assert.ok(has('交接卡 A'), '取消勾选后 A 未恢复')
+  // 来源 chips 里不再混「只看新卡」按钮（它现在是复选框）
+  const chipsGroup = container.querySelector('[aria-label="按来源筛选待取件"]')
+  assert.ok(chipsGroup, '来源筛选组不存在')
+  assert.ok(!chipsGroup!.textContent!.includes('只看新卡'), '只看新卡不应混进来源 chips 组')
 })
 
 test('WorkspaceBody：过滤框输入即筛（接力卡 B 命中后只留其行）', async () => {

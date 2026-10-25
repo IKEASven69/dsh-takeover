@@ -255,6 +255,40 @@ const CSS = `
   --bt-line: var(--border, rgba(127,127,127,.2)); --bt-mut: rgba(30,41,59,.72);
   --bt-card: var(--bg, rgba(127,127,127,.05)); --bt-hover: rgba(127,127,127,.07);
   --bt-shadow: 0 1px 2px rgba(16,24,40,.05), 0 12px 32px -18px rgba(16,24,40,.16); }
+/* 浮层挂载（bt-bounded）：面板吃满浮层剩余高，横幅/引导条固定；宽容器双列各自内滚。
+   窄容器（auto-fit 退化为单列，<976px）整体退回 .bt-cols 内滚——@container 只能
+   作用于容器后代，故退化规则挂在 .bt-cols 上而非 .bt-bounded 本身 */
+.bt-bounded { flex: 1 1 auto; min-height: 0; overflow: hidden; }
+.bt-bounded .bt-col { overflow-y: auto; min-height: 0;
+  scrollbar-width: thin; scrollbar-color: var(--bt-line) transparent; }
+.bt-bounded .bt-col::-webkit-scrollbar { width: 8px; }
+.bt-bounded .bt-col::-webkit-scrollbar-thumb { background: var(--bt-line); border-radius: 999px; }
+.bt-bounded .bt-col::-webkit-scrollbar-track { background: transparent; }
+@container (max-width: 975px) {
+  .bt-bounded .bt-col { overflow: visible; }
+  .bt-bounded .bt-cols { overflow-y: auto; min-height: 0; }
+}
+/* 筛选行：未读开关居左、来源 chips 靠右随折行 */
+.bt-filterrow { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; justify-content: space-between; }
+.bt-filterrow .bt-chips { margin: 0; }
+/* 只看新卡：独立复选框开关（未读数随显） */
+.bt-newonly { display: inline-flex; align-items: center; gap: 6px; width: fit-content;
+  font-size: 12px; color: var(--bt-mut); cursor: pointer; user-select: none; margin: 0; }
+.bt-newonly:hover { color: var(--bt-a); }
+.bt-newonly input { accent-color: var(--bt-a); cursor: pointer; margin: 0; }
+/* 导出▾菜单：工具行右侧锚定的小浮层 */
+.bt-export-wrap { position: relative; display: inline-flex; }
+.bt-export-mask { position: fixed; inset: 0; z-index: 30; background: transparent; }
+.bt-export-menu { position: absolute; top: calc(100% + 4px); right: 0; z-index: 31;
+  display: flex; flex-direction: column; min-width: 168px; padding: 4px;
+  background: var(--dsw-specific-input-major, var(--bt-card, #171717));
+  border: 1px solid var(--bt-line); border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0,0,0,.4); }
+.bt-export-item { display: block; width: 100%; text-align: left; border: none; background: transparent;
+  color: inherit; font-size: 12.5px; font-family: inherit; padding: 7px 10px; border-radius: 7px;
+  cursor: pointer; white-space: nowrap; }
+.bt-export-item:hover { background: var(--bt-hover); }
+.bt-export-item:disabled { opacity: .45; cursor: default; }
 .bt-card { background: var(--bt-card); border: 1px solid var(--bt-line); border-radius: 12px;
   padding: 16px 18px; display: flex; flex-direction: column; gap: 12px;
   box-shadow: var(--bt-shadow); }
@@ -269,13 +303,13 @@ const CSS = `
   color: var(--bt-mut); background: rgba(127,127,127,.1); border: 1px solid var(--bt-line);
   font-variant-numeric: tabular-nums; }
 .bt-badge-hot { color: var(--bt-a); background: rgba(99,102,241,.1); border-color: rgba(99,102,241,.3); }
-/* 收件箱统计条：待取件/已消费/覆盖率/信封 四格，label+数字同 chip */
+/* 收件箱统计条：待取件/已存档/可查证/信封 四枚软胶囊（数字对齐，热态品牌渐变描边） */
 .bt-statstrip { display: flex; gap: 6px; flex-wrap: wrap; }
-.bt-stat { font-size: 11px; color: var(--bt-mut); background: none;
-  border: none; border-radius: 0; padding: 0;
-  font-variant-numeric: tabular-nums;
-  font-variant-numeric: tabular-nums; }
-.bt-stat-hot { color: var(--bt-a); background: rgba(99,102,241,.1); border-color: rgba(99,102,241,.3); }
+.bt-stat { font-size: 11px; color: var(--bt-mut); background: var(--bt-hover);
+  border: 1px solid transparent; border-radius: 999px; padding: 3px 10px;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+  transition: background .12s ease, border-color .12s ease; }
+.bt-stat-hot { color: var(--bt-a); background: rgba(99,102,241,.12); border-color: rgba(99,102,241,.35); font-weight: 600; }
 .bt-stat-warn { color: var(--bt-warn); background: rgba(251,191,36,.12); border-color: rgba(251,191,36,.4); }
 .bt-btn { cursor: pointer; border-radius: 10px; font-size: 12.5px; font-weight: 500; padding: 6px 16px;
   border: 1px solid var(--bt-line); background: transparent; color: inherit; white-space: nowrap;
@@ -289,14 +323,21 @@ const CSS = `
 .bt-banner { font-size: 12px; line-height: 1.6; border-radius: 10px; padding: 8px 12px; }
 .bt-banner-info { color: var(--bt-mut); background: rgba(127,127,127,.08); }
 .bt-banner-err { color: var(--bt-err); background: rgba(211,47,47,.08); }
-.bt-rows { display: flex; flex-direction: column; gap: 2px; }
+/* 卡行：卡片化列表项——圆角软底、hover 描边浮现、未读行首品牌强调条 */
+.bt-rows { display: flex; flex-direction: column; gap: 4px; }
 .bt-pending { display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: flex-start;
-  border-radius: 10px; padding: 9px 10px; font-size: 12.5px;
-  cursor: pointer; transition: background .12s ease; }
-.bt-pending:hover { background: var(--bt-hover); }
+  border-radius: 12px; padding: 10px 12px; font-size: 12.5px;
+  border: 1px solid transparent; position: relative;
+  cursor: pointer; transition: background .12s ease, border-color .12s ease; }
+.bt-pending:hover { background: var(--bt-hover); border-color: var(--bt-line); }
 .bt-pending:focus-visible { outline: 2px solid var(--bt-a); outline-offset: -2px; }
-.bt-pending-open { background: var(--bt-hover); }
-.bt-pend-icon { flex: none; margin-top: 2px; }
+.bt-pending-open { background: var(--bt-hover); border-color: var(--bt-line); }
+.bt-pending-unread { background: rgba(99,102,241,.07); }
+.bt-pending-unread:hover { background: rgba(99,102,241,.11); }
+.bt-pending-unread::before { content: ''; position: absolute; left: 0; top: 10px; bottom: 10px;
+  width: 3px; border-radius: 999px; background: linear-gradient(180deg, #6366F1, #8B5CF6); }
+.bt-pending-unread.bt-pending-open::before { top: 10px; }
+.bt-pend-icon { flex: none; margin-top: 1px; }
 .bt-pend-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .bt-pend-line1 { display: flex; align-items: baseline; gap: 8px; }
 .bt-pending-title { flex: 1; min-width: 0; font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -308,9 +349,11 @@ const CSS = `
 .bt-pend-src { font-weight: 500; }
 .bt-pend-dot { opacity: .45; }
 .bt-pend-id { font-family: ui-monospace, monospace; font-size: 11px; color: var(--bt-id); }
+/* 展开预览：内嵌软面板（圆角 + 描边 + 品牌左缘），与行体有明确从属关系 */
 .bt-preview { flex-basis: 100%; font-size: 12px; line-height: 1.65; color: inherit;
-  background: var(--bt-card); border-left: 2px solid var(--bt-a); border-radius: 0 10px 10px 0;
-  padding: 8px 12px; margin: 4px 0 2px 0; white-space: pre-wrap;
+  background: var(--bt-card); border: 1px solid var(--bt-line); border-left: 2px solid var(--bt-a);
+  border-radius: 10px;
+  padding: 9px 12px; margin: 6px 0 2px 2px; white-space: pre-wrap;
   word-break: break-word; display: flex; flex-direction: column; gap: 4px; }
 .bt-preview-hint { font-size: 10.5px; color: var(--bt-mut); }
 /* 展开态动作行：预览提示 + 单卡导出按钮 */
@@ -944,7 +987,8 @@ export function PendingList({ rows, query, home, t, lang, onExport, onChainFilte
   const groups = groupAdjacent(mainRows)
   const facets = sourceFacets(rows)
 
-  // 来源筛选 chips：全部 + 各家（带计数）+ 只看新卡
+  // 来源筛选 chips：全部 + 各家（带计数）。「只看新卡」不混进来源组——它是未读开关，
+  // 独立成复选框行（aria 语义干净：来源组只管来源）
   const chip = (label: string, count: number, on: boolean, onClick: () => void, key: string): ReturnType<typeof createElement> =>
     createElement('button', {
       key,
@@ -967,7 +1011,6 @@ export function PendingList({ rows, query, home, t, lang, onExport, onChainFilte
       () => setSourceSel(sourceSel === f.agent ? null : f.agent),
       'chip-' + f.agent,
     )),
-    chip(t('newOnlyChip'), newIds.size, newOnly, () => setNewOnly(!newOnly), 'chip-new'),
   )
 
   // 低信息次级组：可展开（与普通组同一 openIds 机制），组头带数量与「低信息」语义
@@ -1119,7 +1162,20 @@ export function PendingList({ rows, query, home, t, lang, onExport, onChainFilte
   }
 
   return createElement('div', { className: 'bt-rows' },
-    chipBar,
+    // 筛选行：未读开关（复选框，独立语义）与来源 chips 同行排布——省一行竖向空间
+    createElement('div', { className: 'bt-filterrow' },
+      createElement('label', { className: 'bt-newonly' },
+        createElement('input', {
+          type: 'checkbox',
+          checked: newOnly,
+          'aria-label': t('newOnlyAria'),
+          onChange: () => setNewOnly((v) => !v),
+        }),
+        createElement('span', null, t('newOnlyChip')),
+        createElement('span', { className: 'bt-chip-count' }, String(newIds.size)),
+      ),
+      chipBar,
+    ),
     rows.length === 0
       ? createElement('div', { className: 'bt-banner bt-banner-info' }, t('emptyInbox'))
       : visible.length === 0
@@ -1927,6 +1983,8 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
   // 收件箱即时过滤词：空串 = 不过滤（纯前端，输入即滤，清空恢复全部）
   const [query, setQuery] = useState('')
   const [confirmClear, setConfirmClear] = useState(false)
+  // 导出▾菜单显隐：两个导出入口（全部 .md / HTML 报告）收进一个菜单，工具行不再摆两个长按钮
+  const [exportMenu, setExportMenu] = useState(false)
   // 取件投递态（记正在投的卡 id，按行显示投递中）+ 操作回执横幅
   const [takeBusyId, setTakeBusyId] = useState<string | null>(null)
   const [clearBusy, setClearBusy] = useState(false)
@@ -2043,10 +2101,11 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
         )
       : null,
 
-    // 工作台双栏栅格：宽容器（浮层 ≥920px）下收件箱与浏览器并排，窄容器 auto-fit 收单列
-    createElement('div', { className: 'bt-cols', style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(480px, 1fr))', gap: 16, alignItems: 'start', ...(bounded === true ? { flex: '1 1 auto', minHeight: 0 } : {}) } },
+    // 工作台双栏栅格：宽容器（浮层 ≥920px）下收件箱与浏览器并排，窄容器 auto-fit 收单列。
+    // bounded（浮层挂载）时双列各自内滚（.bt-bounded .bt-col），横幅/引导条固定不随滚
+    createElement('div', { className: 'bt-cols', style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(480px, 1fr))', gap: 16, alignItems: bounded === true ? 'stretch' : 'start', ...(bounded === true ? { flex: '1 1 auto', minHeight: 0 } : {}) } },
     // 左栏：新手帮助（[?] 按钮切换，默认隐藏）+ 收件箱概览
-    createElement('div', { style: { display: 'grid', gap: 10, alignItems: 'start' } },
+    createElement('div', { className: 'bt-col', style: { display: 'grid', gap: 10, alignItems: 'start' } },
       showHelp === true ? createElement(HelpCard, { t }) : null,
       // 收件箱概览
       createElement('div', { className: 'bt-card' },
@@ -2097,17 +2156,35 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
               title: t('filterAria'),
               onChange: (e: { target: { value: string } }) => { setQuery(e.target.value) },
             }),
-            createElement('button', {
-              className: 'bt-btn',
-              disabled: state.pending.length === 0,
-              onClick: exportAll,
-              title: t('exportAllTitle'),
-            }, t('exportAll')),
-            createElement('button', {
-              className: 'bt-btn',
-              onClick: exportHtmlReport,
-              title: t('exportHtmlTitle'),
-            }, t('exportHtml')),
+            createElement('div', { className: 'bt-export-wrap' },
+              createElement('button', {
+                className: 'bt-btn',
+                disabled: state.pending.length === 0,
+                'aria-haspopup': 'menu',
+                'aria-expanded': exportMenu,
+                onClick: () => setExportMenu((v) => !v),
+                title: t('exportMenuAria'),
+              }, t('exportMenu')),
+              exportMenu ? createElement('div', {
+                className: 'bt-export-mask',
+                onClick: () => setExportMenu(false),
+              }) : null,
+              exportMenu ? createElement('div', { className: 'bt-export-menu', role: 'menu' },
+                createElement('button', {
+                  className: 'bt-export-item',
+                  role: 'menuitem',
+                  disabled: state.pending.length === 0,
+                  onClick: () => { setExportMenu(false); exportAll() },
+                  title: t('exportAllTitle'),
+                }, t('exportAll')),
+                createElement('button', {
+                  className: 'bt-export-item',
+                  role: 'menuitem',
+                  onClick: () => { setExportMenu(false); exportHtmlReport() },
+                  title: t('exportHtmlTitle'),
+                }, t('exportHtml')),
+              ) : null,
+            ),
           )
         : null,
       state !== null
@@ -2127,7 +2204,7 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
     ), // 左栏收尾（帮助 + 收件箱）
 
     // 右栏（按三步上手顺序）：① 浏览外部会话（接进来）② 交接出去（寄存出站）③ 记忆快照（低频）
-    createElement('div', { style: { display: 'grid', gap: 16, alignItems: 'start' } },
+    createElement('div', { className: 'bt-col', style: { display: 'grid', gap: 16, alignItems: 'start' } },
       // 外部会话浏览器（浏览 + 一键接管 + 投递后自动切会话；卡片蒸馏仍在会话里由模型完成）
       createElement(ForeignBrowser, { state, t, lang, onError: (msg) => setError(msg), onNotice: showNotice, navigate }),
       createElement(SendCard, { sessionId, t, lang, onError: (msg) => setError(msg), onNotice: showNotice }),
@@ -2225,11 +2302,12 @@ export function ComposerChip({ t, locale, navigate, sessionId }: {
         '--border': 'var(--dsw-alias-border-l2, rgba(127,127,127,.25))',
         position: 'fixed', zIndex: 9999,
         boxSizing: 'border-box', // maxHeight 必须含 padding+border，否则矮窗仍溢出视口（实测 583>568）
+        // 整体不滚（overflow hidden）：滚动责任下沉到 .bt-bounded/.bt-col——
+        // 标题栏与横幅固定，双列各自内滚（窄容器退化为 .bt-cols 整体内滚）
         display: 'flex', flexDirection: 'column', overflow: 'hidden',
         ...(pos !== null
           ? { left: pos.left, width: pos.width, maxHeight: pos.maxH, ...(pos.top !== undefined ? { top: pos.top } : { bottom: pos.bottom }) }
           : { right: 8, bottom: 72, width: 'min(1040px, calc(100vw - 16px))', maxHeight: '70vh' }),
-        overflowY: 'auto',
         background: 'var(--bg)',
         border: '1px solid var(--border)', borderRadius: 16,
         boxShadow: '0 16px 48px rgba(0,0,0,.5)', padding: '10px 14px 12px',
@@ -2262,7 +2340,9 @@ export function ComposerChip({ t, locale, navigate, sessionId }: {
       ),
       createElement(PanelBoundary, {
         t,
-        children: createElement('div', { style: { display: 'grid', gap: 8 } },
+        // 这层包装是壳与 bt-bounded 之间的 flex 中继：不给 flex:1/minHeight:0 的话
+        // 默认 min-height:auto 挡住收缩链，bt-bounded 撑到内容高，双列内滚失效（真机实测）
+        children: createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 8, flex: '1 1 auto', minHeight: 0, overflow: 'hidden' } },
           showHelp ? createElement(HelpCard, { t }) : null,
           createElement(WorkspaceBody, { t, locale, navigate, chrome: false, sessionId, showHelp, bounded: true }),
         ),

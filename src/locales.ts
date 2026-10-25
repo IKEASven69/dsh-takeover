@@ -28,11 +28,11 @@ export const zh: Record<string, string> = {
   cmdOffTitle: '{label} 已在支持矩阵停用，命令会返回「已停用」',
   inboxTitle: '收件箱概览',
   badgePending: '待取件 {n}',
-  badgeArchived: '已消费 {n}',
+  badgeArchived: '已存档 {n}',
   pendingDupChip: '重复 {n}',
   pendingDupTitle: '同 id 重复文件已按首见去重——多方可写收件箱的防御计数',
   pendingDirHint: '对应目录 ~/.handoff/pending/',
-  archivedDirHint: '对应目录 ~/.handoff/archived/',
+  archivedDirHint: '已消费卡的存档目录 ~/.handoff/archived/（滚动保留最近 50 张，更早的自动清理）',
   clearArchived: '清空已消费',
   clearConfirm: '确认清空 {n} 张？不可恢复',
   clearArchivedTitle: '删除 archived/ 目录下全部已消费卡片（不可恢复）',
@@ -46,6 +46,7 @@ export const zh: Record<string, string> = {
   filterAria: '收件箱即时过滤（匹配标题、来源名或编号，清空即恢复全部）',
   chipAll: '全部',
   newOnlyChip: '只看新卡',
+  newOnlyAria: '只显示没展开看过的卡',
   chipSourceAria: '按来源筛选待取件',
   filterEmpty: '没有匹配的卡片——清空过滤框可恢复全部',
   newBadge: '新',
@@ -58,6 +59,8 @@ export const zh: Record<string, string> = {
   exportCardTitle: '下载该卡片为 .md（frontmatter + 六段；state 未含的段全文就地注明，不臆造）',
   exportAll: '导出全部',
   exportAllTitle: '把全部待取件卡片拼成一个 .md 下载（零依赖，纯前端生成）',
+  exportMenu: '导出 ▾',
+  exportMenuAria: '导出菜单：全部卡片 .md 或 HTML 报告',
   exportNoteTop: '> 本文件由 dsh-takeover 导出，仅含收件箱 state 提供的字段：' +
     '编号 / 来源 / 标题 / 项目 / 推送时间，以及「目标」段预览（服务端截 240 字；目标段为空时回退「做到哪」段）。' +
     '来源会话、cwd、git 快照、tasks 与其余五段全文不在 state 内，未作臆造——' +
@@ -147,7 +150,7 @@ export const zh: Record<string, string> = {
     '待取件卡片（编号 / 来源 / 标题 / 项目 / 推送时间与「目标」段预览）、八家支持矩阵与已消费计数。' +
     '卡片其余五段全文、来源会话与 git 快照不在 state 内，未作臆造——完整卡片请回会话用 /inbox 取件。',
   reportStatPending: '待取件',
-  reportStatArchived: '已消费',
+  reportStatArchived: '已存档',
   reportStatProviders: '读取器（已启用/总数）',
   reportPendingEmpty: '收件箱为空——当前没有待取件卡片。',
   reportSkipped: '另有 {n} 张无法解析的卡片被跳过（不计入下方列表）',
@@ -212,11 +215,11 @@ export const en: Record<string, string> = {
   cmdOffTitle: '{label} is off in the matrix; the command returns "disabled"',
   inboxTitle: 'Inbox overview',
   badgePending: 'Pending {n}',
-  badgeArchived: 'Consumed {n}',
+  badgeArchived: '{n} archived',
   pendingDupChip: 'Dup {n}',
   pendingDupTitle: 'Same-id duplicates deduped to first seen — multi-writer defensive count',
   pendingDirHint: 'maps to ~/.handoff/pending/',
-  archivedDirHint: 'maps to ~/.handoff/archived/',
+  archivedDirHint: 'consumed cards archive to ~/.handoff/archived/ (rolling keep of the latest 50; older ones are pruned automatically)',
   clearArchived: 'Clear consumed',
   clearConfirm: 'Clear {n}?',
   clearArchivedTitle: 'Delete every consumed card under archived/ (irreversible)',
@@ -230,6 +233,7 @@ export const en: Record<string, string> = {
   filterAria: 'Instant inbox filter (matches title, source name, or id; clear to restore)',
   chipAll: 'All',
   newOnlyChip: 'New only',
+  newOnlyAria: 'Show only cards never opened',
   chipSourceAria: 'Filter pending cards by source',
   filterEmpty: 'No matching cards — clear the filter to restore the full list',
   newBadge: 'NEW',
@@ -242,6 +246,8 @@ export const en: Record<string, string> = {
   exportCardTitle: 'Download this card as .md (frontmatter + 6 sections; sections not in state are noted in place, never invented)',
   exportAll: 'Export all',
   exportAllTitle: 'Download every pending card as one .md (zero-dependency, generated in the browser)',
+  exportMenu: 'Export ▾',
+  exportMenuAria: 'Export menu: all cards as .md, or the HTML report',
   exportNoteTop: '> Exported by the dsh-takeover settings card. Contains only the fields provided by the inbox state: ' +
     'id / source / title / project / push time, plus the "goal" section preview (server-truncated to 240 chars; falls back to the "done" section when the goal is empty). ' +
     'The source session, cwd, git snapshot, tasks and the other five sections are not in state and are not invented — ' +
@@ -332,7 +338,7 @@ export const en: Record<string, string> = {
     'pending cards (id / source / title / project / push time and the "goal" section preview), the 8-reader support matrix and the consumed count. ' +
     'The other five card sections, the source session and git snapshots are not in state and are not invented — pick up full cards with /inbox in a session.',
   reportStatPending: 'Pending',
-  reportStatArchived: 'Consumed',
+  reportStatArchived: 'Archived',
   reportStatProviders: 'Readers (enabled/total)',
   reportPendingEmpty: 'Inbox is empty — no pending cards right now.',
   reportSkipped: '{n} unparseable cards were skipped (not listed below)',

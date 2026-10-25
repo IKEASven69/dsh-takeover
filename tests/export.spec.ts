@@ -108,7 +108,7 @@ test('buildReportHtml：自包含单文件全区块——渐变头/统计三卡/
   assert.ok(html.includes(`<h1>${WORDS.zh.title}</h1>`))
   // 生成时刻（{n} 占位已代入）
   assert.ok(html.includes('生成于 2026-10-04 13:22'))
-  // 统计三卡：待取件 2 / 已消费 3 / 读取器 7/8（grok 停用）
+  // 统计三卡：待取件 2 / 已存档 3 / 读取器 7/8（grok 停用）
   assert.ok(html.includes('<span class="rt-stat-n">2</span>'))
   assert.ok(html.includes('<span class="rt-stat-n">3</span>'))
   assert.ok(html.includes('<span class="rt-stat-n">7/8</span>'))
@@ -154,7 +154,7 @@ test('buildReportHtml：zh/en 文案注入——两套词典各出各的文案�
   assert.ok(zh.includes('生成于 2026-10-04 13:22'))
   assert.ok(en.includes('Generated at 2026-10-04 13:22'))
   assert.ok(zh.includes('另有') === false && zh.includes(WORDS.zh.pendingEmpty) === false) // 满卡无空态/跳过行
-  assert.ok(en.includes('Pending') && en.includes('Consumed'))
+  assert.ok(en.includes('Pending') && en.includes('Archived'))
   assert.ok(en.includes('<span class="rt-plabel">Source</span>Claude Code'))
   // 语言不串：zh 文案不得漏进 en 报告，反之亦然
   assert.equal(en.includes('交接报告'), false)
