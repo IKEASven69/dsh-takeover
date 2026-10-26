@@ -1,6 +1,7 @@
 /** 0.4.1 死亡地图 · attributeCard 闭集归因纯函数测试 */
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
+// @ts-expect-error .mjs 无声明文件
 import { attributeCard } from '../scripts/attribution.mjs'
 
 const base = { lifecycleEvents: [], relayPickups: [], backtest: null }

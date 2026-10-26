@@ -15,6 +15,35 @@
  *
  * @module dsh-takeover/section-utility
  */
+import { parseCard } from '@agent-handoff/core'
+
+/** 卡的六段键（与 core 的 SECTION_KEYS 同序；只用于卡文自检比对） */
+const CARD_SECTION_KEYS = ['goal', 'files', 'done', 'remaining', 'stopped', 'warnings']
+
+/**
+ * 卡文自检：交付前证明「接手方真能读到六段」。
+ *
+ * 实测教训（2026-10-26，三臂实验第 1 臂静默作废）：评测脚本曾把段标题写成
+ * 「## 目标（goal）」形态，而 core 的 parseSections 只认「## 目标」——六段正文
+ * 全被解析成空字符串且**不报错**：接手方收到的是一张六段全空的卡，
+ * 而卡里 gamma / [TX-77] 这类事实全在仓库里找不到，实验测了个寂寞。
+ * 这里用 core 的 parseCard 回读卡文，逐段与作者意图比对：任何漂移立刻炸，
+ * 不再拿真模型会话去换一张空卡。
+ */
+export function assertCardCarries(cardText, sections) {
+  const parsed = parseCard(cardText)
+  for (const key of CARD_SECTION_KEYS) {
+    const want = String(sections[key] ?? '').trim()
+    const got = String(parsed.sections[key] ?? '').trim()
+    if (want !== got) {
+      throw new Error(
+        `卡文解析漂移：${key} 段作者写「${want.slice(0, 60)}」，core 解析出「${got.slice(0, 60)}」——` +
+        '段标题必须用规范形态（## 目标 / ## 涉及文件 / …），core 的 parseSections 不认「## 目标（goal）」',
+      )
+    }
+  }
+  return parsed
+}
 
 /** 三臂共用的事实常量（内容在 A/B 两臂完全一致，只有结构不同） */
 export const FACTS = {

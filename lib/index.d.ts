@@ -483,6 +483,25 @@ interface TakeoverState {
   /** 待取件机器信封字符总量（*.envelope.json 文件字节数求和）；无信封缺省 */
   envelopeChars?: number;
   providers: ProviderRow[];
+  /** 0.4.1 死亡地图：卡片生命周期拒收证据（结构化闭集理由）。
+   * live = 读侧当前跳过（state 现算，修好即消失）；persisted = 写侧/取侧持久事件
+   * （lifecycle.jsonl 尾 50 条，多写方排障用）；persistedTotal = 日志总条数。
+   * 全空（无坏卡且无日志）时缺省。 */
+  rejections?: {
+    live: Array<{
+      file: string;
+      reason: string;
+      detail: string;
+    }>;
+    persisted: Array<{
+      at: string;
+      stage: string;
+      reason: string;
+      target: string;
+      detail: string;
+    }>;
+    persistedTotal: number;
+  };
 }
 /**
  * 组装设置卡状态（纯函数核心，读取层与目录都可注入）：

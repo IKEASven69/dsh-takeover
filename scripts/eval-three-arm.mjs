@@ -26,7 +26,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { FACTS, armCardSections, probesOf, armSuccess } from './section-utility.mjs'
+import { FACTS, armCardSections, probesOf, armSuccess, assertCardCarries } from './section-utility.mjs'
 
 const arg = (name, dflt) => {
   const i = process.argv.indexOf(`--${name}`)
@@ -59,6 +59,14 @@ async function takeoverInbox(id) {
   return res.json()
 }
 
+/**
+ * 卡片正文：段标题必须是规范形态（## 目标 / ## 涉及文件 / …）。
+ *
+ * 实测教训（2026-10-26）：此处曾写成「## 目标（goal）」形态——core 的
+ * parseSections 只认「## 目标」，六段全被解析成空字符串且不报错，接手方收到
+ * 一张空卡（事实 gamma / [TX-77] 全在仓库里找不到），三臂实验静默作废。
+ * 交付前有 assertCardCarries 回读自检兜底（见下方投递处）。
+ */
 function cardMarkdown(id, sections) {
   return [
     '---',
@@ -78,17 +86,17 @@ function cardMarkdown(id, sections) {
     'tasks: []',
     '---',
     '',
-    '## 目标（goal）', '',
+    '## 目标', '',
     sections.goal, '',
-    '## 涉及文件（files）', '',
+    '## 涉及文件', '',
     sections.files, '',
-    '## 做到哪（done）', '',
+    '## 做到哪', '',
     sections.done, '',
-    '## 还差什么（remaining）', '',
+    '## 还差什么', '',
     sections.remaining, '',
-    '## 停在哪（stopped）', '',
+    '## 停在哪', '',
     sections.stopped, '',
-    '## 读者警告（warnings）', '',
+    '## 读者警告', '',
     sections.warnings, '',
   ].join('\n')
 }
@@ -132,8 +140,15 @@ for (const arm of ARMS) {
   const armResult = { rounds: [] }
   for (let round = 1; round <= ROUNDS; round++) {
     WS = makeWorkspace(round, arm)
-    const id = `ho-ta${String(round).padStart(2, '0')}-${arm.slice(0, 4)}-${Math.random().toString(36).slice(2, 6)}`
-    writeFileSync(join(PENDING, `${id}.md`), cardMarkdown(id, armCardSections(arm, FACTS)), 'utf-8')
+    // SAFE_ID = ho-<8位小写字母数字>-<4位>。曾生成四段式 id（ho-ta01-stru-xxxx）
+    // 被收件箱工具整批拒收——模型只能绕路直接读文件，消费即弃被架空（实测教训）
+    const rnd = Math.random().toString(36).slice(2, 10).padEnd(8, '0')
+    const id = `ho-ta${round}${arm[0]}${rnd.slice(0, 4)}-${rnd.slice(4, 8)}`
+    const sections = armCardSections(arm, FACTS)
+    const cardText = cardMarkdown(id, sections)
+    // 交付前自检：卡文必须能被 core 解析出六段内容（否则接手方拿到空卡，实验作废）
+    assertCardCarries(cardText, sections)
+    writeFileSync(join(PENDING, `${id}.md`), cardText, 'utf-8')
     log(`[${arm}#${round}] 卡已投递 ${id}`)
     const r = await takeoverInbox(id)
     if (!r.ok) {

@@ -15,6 +15,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { assertCardCarries } from './section-utility.mjs'
 
 const arg = (name, dflt) => {
   const i = process.argv.indexOf(`--${name}`)
@@ -46,7 +47,23 @@ async function takeoverInbox(id) {
   return res.json()
 }
 
-function cardMarkdown(id, sections) {
+/**
+ * 卡六段：files/done/warnings 由脚本确定性给定，其余由调用方给。
+ * 段标题用规范形态（## 目标 …）——core 的 parseSections 不认「## 目标（goal）」，
+ * 写成后者会让六段全被解析成空且不报错（实测：接手方收到空卡，实验静默作废）。
+ */
+function cardSections(partial) {
+  return {
+    goal: partial.goal,
+    files: `- ${workspace}（工作区，全部操作在此目录）`,
+    done: '- CURRENT_OBSERVED 本卡由评测脚本确定性构造',
+    remaining: partial.remaining,
+    stopped: partial.stopped,
+    warnings: '- HISTORY_REPORTED 本卡即任务书，按卡执行即可。',
+  }
+}
+
+function cardMarkdown(id, title, sections) {
   return [
     '---',
     'handoff: 1',
@@ -54,7 +71,7 @@ function cardMarkdown(id, sections) {
     'from:',
     '  agent: eval',
     '  session: ""',
-    `  title: ${sections.title}`,
+    `  title: ${title}`,
     'to: any',
     'project: eval-e2e',
     `cwd: ${JSON.stringify(workspace)}`,
@@ -65,29 +82,29 @@ function cardMarkdown(id, sections) {
     'tasks: []',
     '---',
     '',
-    `## 目标（goal）`,
+    '## 目标',
     '',
     sections.goal,
     '',
-    `## 涉及文件（files）`,
+    '## 涉及文件',
     '',
-    `- ${workspace}（工作区，全部操作在此目录）`,
+    sections.files,
     '',
-    `## 做到哪（done）`,
+    '## 做到哪',
     '',
-    '- CURRENT_OBSERVED 本卡由评测脚本确定性构造',
+    sections.done,
     '',
-    `## 还差什么（remaining）`,
+    '## 还差什么',
     '',
     sections.remaining,
     '',
-    `## 停在哪（stopped）`,
+    '## 停在哪',
     '',
     sections.stopped,
     '',
-    `## 读者警告（warnings）`,
+    '## 读者警告',
     '',
-    '- HISTORY_REPORTED 本卡即任务书，按卡执行即可。',
+    sections.warnings,
     '',
   ].join('\n')
 }
@@ -111,9 +128,10 @@ const result = {
 
 try {
   // 1) 卡1 进 pending
-  const id1 = 'ho-eval-a1'
-  writeFileSync(join(PENDING, `${id1}.md`), cardMarkdown(id1, {
-    title: 'eval-e2e 步1',
+  //    卡 id 必须是 core 的 SAFE_ID 形态（ho-<小写字母数字>-<4位>）——「ho-eval-a1」
+  //    这类写法会被 id 闸整张拒收（实测教训，同三臂脚本那次）
+  const id1 = `ho-eval-${Math.random().toString(36).slice(2, 8).padEnd(4, '0').slice(0, 4)}`
+  const s1 = cardSections({
     goal: `步1（只做这一步）：在 ${workspace} 里创建 NOTES.md，内容恰好一行：step1 done by agent A`,
     remaining: [
       '1. 完成步1后，立即用 handoff_push 工具寄存一张新接力卡：',
@@ -123,7 +141,11 @@ try {
       '2. 寄存完成后报告新卡 id。',
     ].join('\n'),
     stopped: '你是本接力的第一棒。最安全的第一步：确认工作区目录存在。',
-  }), 'utf-8')
+  })
+  const card1Text = cardMarkdown(id1, 'eval-e2e 步1', s1)
+  // 交付前自检：卡文必须真能解析出六段（否则接手方拿到空卡，接力静默作废）
+  assertCardCarries(card1Text, s1)
+  writeFileSync(join(PENDING, `${id1}.md`), card1Text, 'utf-8')
   log(`卡1 已入 pending：${id1}`)
 
   // 2) 投递会话 A

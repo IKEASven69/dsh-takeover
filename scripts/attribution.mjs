@@ -42,7 +42,11 @@ const readJson = (p) => { try { return JSON.parse(readFileSync(p, 'utf-8')) } ca
 export function attributeCard(input) {
   const { id, inPending, lifecycleEvents, relayPickups, backtest } = input
   if (inPending) {
-    // 在册 ≠ 死亡：只有带读侧事件的才是 read_skipped，其余只是还没人取
+    // 在册 ≠ 死亡：先分「僵尸」与「没人取」两种。
+    // zombie_in_inbox = relay 里挂着取件记录、卡却还在 pending——取件会话绕过了
+    // 消费即弃（0.4.1 三臂实验实测发现：模型直接读文件不调用收件工具），
+    // 收件箱因此只进不出（真实部署 130+ 张积压的主因之一）
+    if (relayPickups.includes(id)) return { outcome: 'zombie_in_inbox', reason: 'relay-says-picked-but-card-not-consumed', stage: 'pickup' }
     const readEv = lifecycleEvents.find((e) => e.stage === 'read' && e.target === `${id}.md`)
     return readEv
       ? { outcome: 'read_skipped', reason: readEv.reason, stage: 'read' }
@@ -140,5 +144,5 @@ report.elapsedMs = Date.now() - t0
 mkdirSync(join(OUT, '..'), { recursive: true })
 writeFileSync(OUT, JSON.stringify(report, null, 2), 'utf-8')
 console.log(`死亡地图 → ${OUT}`)
-console.log(`  写侧拒收 ${report.map.write_rejected} | 读侧跳过 ${report.map.read_skipped ?? 0} | 存活 ${outcomes.survived ?? 0} | 执行死亡 ${outcomes.died_at_execution ?? 0} | 不可归因 ${outcomes.unmeasurable ?? 0} | 在册 ${outcomes.in_inbox ?? 0}`)
+console.log(`  写侧拒收 ${report.map.write_rejected} | 读侧跳过 ${report.map.read_skipped ?? 0} | 僵尸(取件记录在案未消费) ${outcomes.zombie_in_inbox ?? 0} | 存活 ${outcomes.survived ?? 0} | 执行死亡 ${outcomes.died_at_execution ?? 0} | 不可归因 ${outcomes.unmeasurable ?? 0} | 在册 ${outcomes.in_inbox ?? 0}`)
 console.log(`  可测延续率：${report.continuationRate ?? 'n/a'}（n=${measurable}）`)

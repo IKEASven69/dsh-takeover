@@ -24,9 +24,11 @@ dsh-takeover is a DeepSeek Harness (DSH) plugin implementing the full takeover l
 
 The filesystem is the bus: dropping a card into `pending/` is delivery; picking it up moves it to `archived/` (consume-and-archive; a second pickup of the same id errors). A card = Markdown + YAML frontmatter + six Chinese body sections (目标 / 涉及文件 / 做到哪 / 还差什么 / 停在哪 / 读者警告). See the protocol repo's SPEC for the full format and semantics.
 
-## Quality & evidence (0.4.0)
+## Quality & evidence (0.4.1)
 
 Relay quality is not vibes — it is numbers, tests, and third-party-checkable proof:
+
+- **Attribution release (0.4.1)**: a three-arm controlled experiment (structured card / plain prose / no card × real model, multiple rounds) — with a strong model on small tasks both formats complete equally (negative result recorded honestly); the discriminator is **unguessable run-state facts**: with a handoff (either form) 6/6 vs without 0/3. The death map (`scripts/attribution.mjs`) classifies every card's life in closed-set outcomes (write-gate rejected / read skipped / zombie / survived / died at execution); the first real run surfaced 10 zombie cards (relay says picked, card never consumed). Pre-registered methodology and reproduction steps in [eval/README.md](eval/README.md).
 
 - **Quality baseline**: backtest of 50 real consumed cards — continuation rate 34.7%; cards whose done-section carries ledger marks were continued 50% of the time vs 0% for unmarked ones (`scripts/backtest-archived.mjs`). End-to-end two-card relay against a real host and model: PASS (`scripts/eval-e2e.mjs`).
 - **Parse regression**: structurally-cloned anonymized real-session corpus + 13 golden files frozen byte-for-byte (`scripts/corpus-build.mjs` → `tests/corpus-golden.spec.ts`) — upstream storage drift turns red before merge.
@@ -62,7 +64,7 @@ Point `HANDOFF_HOME` at a synced-drive folder or a git repository and the inbox 
 
 ## Protocol adoption
 
-`handoff: 1` is an open protocol: a six-section Markdown card + YAML frontmatter + the `~/.handoff` shared directory — implementable, auditable and interoperable by any tool (the right to call it open is backed by an independent second implementation, see [Quality & evidence](#quality--evidence-040)). Already interoperating: [dsh-chat-import](https://github.com/Nwflower/dsh-chat-import) (bidirectional conversion verified via INTERCHANGE v1). If your tool reads or writes the same directory or card format, feel free to open an issue to register; we will assess interoperability and list it here once verified.
+`handoff: 1` is an open protocol: a six-section Markdown card + YAML frontmatter + the `~/.handoff` shared directory — implementable, auditable and interoperable by any tool (the right to call it open is backed by an independent second implementation, see [Quality & evidence](#quality--evidence-041)). Already interoperating: [dsh-chat-import](https://github.com/Nwflower/dsh-chat-import) (bidirectional conversion verified via INTERCHANGE v1). If your tool reads or writes the same directory or card format, feel free to open an issue to register; we will assess interoperability and list it here once verified.
 
 ## Install
 

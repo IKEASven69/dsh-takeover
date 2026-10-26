@@ -24,9 +24,11 @@ dsh-takeover 是 DeepSeek Harness（DSH）插件，实现 `handoff: 1` 开放协
 
 文件系统即总线：写入 `pending/` 就是投递，取件即移到 `archived/`（消费即弃，二次取件报错）。卡片 = Markdown + YAML frontmatter + 六段中文正文（目标 / 涉及文件 / 做到哪 / 还差什么 / 停在哪 / 读者警告），格式与语义见协议仓 SPEC。
 
-## 质量与证据（0.4.0）
+## 质量与证据（0.4.1）
 
 接力质量不是感觉，是数字、测试与第三方可复核的证明：
+
+- **归因版（0.4.1）**：三臂对照实验（结构化卡 / 纯文本散文 / 无卡 × 真模型多轮）——强模型小任务下两者完成率无差异（阴性结果如实入档），判别器是**不可猜测的运行态事实**：带交接（任意形态）6/6 vs 无交接 0/3；死亡地图 `scripts/attribution.mjs` 闭集分类卡片的一生（写侧拒收 / 读侧跳过 / 僵尸卡 / 存活 / 执行死亡），首轮实测抓出 10 张「relay 有取件记录但卡未被消费」的僵尸卡；评测预注册口径与复现步骤见 [eval/README.md](eval/README.md)。
 
 - **质量基线**：50 张真实交接卡回测延续率 34.7%；done 段带账本标注的卡延续率 50%、无标注 0%（`scripts/backtest-archived.mjs`，明细本地）。端到端双卡接力真 host 真模型评测 PASS（`scripts/eval-e2e.mjs`）。
 - **解析回归**：真实会话结构克隆脱敏语料 + 13 份 golden files 逐字节冻结（`scripts/corpus-build.mjs` → `tests/corpus-golden.spec.ts`），上游存储布局一变就红在提交前。
@@ -62,7 +64,7 @@ dsh-takeover 的生态位：**harness 内接管**（六段协议卡注入当轮�
 
 ## 协议采用
 
-`handoff: 1` 是开放协议：六段 Markdown 卡 + YAML frontmatter + `~/.handoff` 共享目录，任何工具可实现、可审计、可互操作（开放协议的资格由独立第二实现背书，见[质量与证据](#质量与证据040)）。已互通的工具：[dsh-chat-import](https://github.com/Nwflower/dsh-chat-import)（经 INTERCHANGE v1 双向转换互验）。你的工具若读写同一目录或卡片格式，欢迎开 issue 登记；我们会评估互通可行性，验证通过后列入本节。
+`handoff: 1` 是开放协议：六段 Markdown 卡 + YAML frontmatter + `~/.handoff` 共享目录，任何工具可实现、可审计、可互操作（开放协议的资格由独立第二实现背书，见[质量与证据](#质量与证据041)）。已互通的工具：[dsh-chat-import](https://github.com/Nwflower/dsh-chat-import)（经 INTERCHANGE v1 双向转换互验）。你的工具若读写同一目录或卡片格式，欢迎开 issue 登记；我们会评估互通可行性，验证通过后列入本节。
 
 ## 安装
 
