@@ -12,6 +12,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, s
 import { join } from 'node:path'
 import { archivedDir, listPendingReport, resolveHome } from '@agent-handoff/core'
 import { isLowInfoCardMarkdown } from './lowinfo.ts'
+import { readLifecycleEvents, reasonFromCoreSkip, LIFECYCLE_STATE_MAX } from './lifecycle.ts'
 import { FOREIGN_PROVIDERS, PROVIDER_TO_ADAPTER, type ForeignProvider, type ForeignReaders } from './foreign.ts'
 
 // 停用规范错误值文案在 foreign.ts（disabledError），本模块只管开关存取与状态组装
@@ -141,6 +142,15 @@ export interface TakeoverState {
   /** 待取件机器信封字符总量（*.envelope.json 文件字节数求和）；无信封缺省 */
   envelopeChars?: number
   providers: ProviderRow[]
+  /** 0.4.1 死亡地图：卡片生命周期拒收证据（结构化闭集理由）。
+   * live = 读侧当前跳过（state 现算，修好即消失）；persisted = 写侧/取侧持久事件
+   * （lifecycle.jsonl 尾 50 条，多写方排障用）；persistedTotal = 日志总条数。
+   * 全空（无坏卡且无日志）时缺省。 */
+  rejections?: {
+    live: Array<{ file: string; reason: string; detail: string }>
+    persisted: Array<{ at: string; stage: string; reason: string; target: string; detail: string }>
+    persistedTotal: number
+  }
 }
 /**
  * 组装设置卡状态（纯函数核心，读取层与目录都可注入）：
@@ -159,8 +169,11 @@ export function buildState(readers: ForeignReaders, dir?: string): TakeoverState
   // 聚合失败只影响这两个字段，不拖垮整体 state（settings 头注释契约同款）。
   let coverage: TakeoverState['coverage']
   let envelopeChars: number | undefined
+  // 死亡地图读侧活性跳过（report 在 try 内，外层变量带回 return）
+  let live: NonNullable<TakeoverState['rejections']>['live'] = []
   try {
     const report = listPendingReport(dir)
+    live = report.skipped.map((sk) => ({ file: sk.file, reason: reasonFromCoreSkip(sk.reason), detail: sk.reason }))
     // 同 frontmatter id 的重复文件只保留首次出现（core 宽松解析放行，重复会让
     // React key 冲突、覆盖率重复计数——0.4.0 审计 F1）
     const seenCardIds = new Set<string>()
@@ -287,7 +300,12 @@ export function buildState(readers: ForeignReaders, dir?: string): TakeoverState
     return { name, supported, sessions, enabled: !switches.disabledProviders.includes(name), note }
   })
 
-  return { home: resolveHome(dir), pending, pendingSkipped, pendingDuplicates, inboxError, archivedCount: countArchived(dir), coverage, envelopeChars, providers }
+  // 死亡地图（0.4.1）：读侧活性跳过 + 持久事件尾 50 条；全空时整个 rejections 缺省
+  const persistedAll = readLifecycleEvents(dir)
+  const rejections = live.length > 0 || persistedAll.length > 0
+    ? { live, persisted: persistedAll.slice(-LIFECYCLE_STATE_MAX), persistedTotal: persistedAll.length }
+    : undefined
+  return { home: resolveHome(dir), pending, pendingSkipped, pendingDuplicates, inboxError, archivedCount: countArchived(dir), coverage, envelopeChars, providers, ...(rejections !== undefined ? { rejections } : {}) }
 }
 
 

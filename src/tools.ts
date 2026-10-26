@@ -11,6 +11,7 @@ import { existsSync, readFileSync, renameSync, rmSync, statSync, writeFileSync }
 import { hostname } from 'node:os'
 import { isLowInfoCardMarkdown } from './lowinfo.ts'
 import { scanSecrets } from './secretscan.ts'
+import { recordLifecycleEvent } from './lifecycle.ts'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -563,6 +564,8 @@ ${honest}`
     ]
     if (secretHits.length > 0 && args.allowSecrets !== true) {
       const detail = secretHits.map((h) => `${h.rule}@${h.section}（${h.masked}）`).join('；')
+      // 死亡地图：写侧拒收进生命周期事件层（target 用标题，detail 不落密钥值只落规则名）
+      recordLifecycleEvent({ stage: 'write', reason: 'secret_gate', target: scalar(args.title, '') || 'untitled', detail: `${secretHits.length} hits：${secretHits.map((h) => `${h.rule}@${h.section}`).join('；')}` }, opts?.dir)
       return {
         ok: false,
         error: `密钥闸：发现 ${secretHits.length} 处疑似密钥——${detail}。请 redact 后重试；确要带密寄存，传 allowSecrets: true（旁路会留痕）。`,
@@ -580,6 +583,8 @@ ${honest}`
         .join('\n'),
     )
     if (skeleton && args.confirmSkeleton !== true) {
+      // 死亡地图：空壳拒收也是写侧事件（噪音治理的归因数据源）
+      recordLifecycleEvent({ stage: 'write', reason: 'skeleton_gate', target: scalar(args.title, '') || 'untitled', detail: '六段全兜底占位且未手写' }, opts?.dir)
       return {
         ok: false,
         error: '空壳卡守门：六段全是兜底占位文本（无会话环境且六段均未手写）。请按 /handoff 纪律亲手蒸馏六段后重试；确要寄存空壳卡（如「无在途工作」声明），传 confirmSkeleton: true。',
@@ -745,6 +750,12 @@ export function inboxLoad(id: string, opts?: { dir?: string }): InboxLoadResult 
       mismatches: check.mismatches,
     }
     if (check.unavailable !== undefined) out.unavailable = check.unavailable
+    // 死亡地图：取侧核验异常进生命周期事件层（MISMATCH 与 UNAVAILABLE 都算「卡面与仓库现实脱节」）
+    if (check.mismatches.length > 0) {
+      recordLifecycleEvent({ stage: 'pickup', reason: 'drift_mismatch', target: card.id, detail: `${check.mismatches.length} 处核验冲突` }, opts?.dir)
+    } else if (check.unavailable !== undefined && check.unavailable !== '') {
+      recordLifecycleEvent({ stage: 'pickup', reason: 'git_unavailable', target: card.id, detail: check.unavailable.slice(0, 120) }, opts?.dir)
+    }
     if (coverage !== undefined) out.coverage = coverage
     if (envelopeChars !== undefined) out.envelopeChars = envelopeChars
     if (patchArchived !== undefined) {

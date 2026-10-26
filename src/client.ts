@@ -619,6 +619,24 @@ function extrasOf(state: TakeoverState): Record<string, unknown> {
  * 未定稿前两处都探：extras.envelopeChars / envelopeChars，另容 envelope: { chars }
  * 对象形态。全不在 → null（「机器信封已随卡归档」整行不显示）。
  */
+/** 死亡地图事件总数：读侧活性跳过 + 持久事件总数（0.4.1 拒收徽标） */
+export function rejectionCount(state: TakeoverState | null): number {
+  const r = state?.rejections
+  if (!r) return 0
+  return r.live.length + (r.persistedTotal || 0)
+}
+
+/** 拒收徽标的悬浮明细：按阶段聚合（写/读/取），最多列 6 条，不落卡正文 */
+export function rejectionTitle(state: TakeoverState | null): string {
+  const r = state?.rejections
+  if (!r) return ''
+  const byStage = new Map<string, number>()
+  for (const e of r.persisted) byStage.set(`${e.stage}/${e.reason}`, (byStage.get(`${e.stage}/${e.reason}`) ?? 0) + 1)
+  for (const l of r.live) byStage.set(`read/${l.reason}`, (byStage.get(`read/${l.reason}`) ?? 0) + 1)
+  const parts = [...byStage.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([k, n]) => `${k}×${n}`)
+  return parts.join('、')
+}
+
 export function envelopeCharsOf(state: TakeoverState): number | null {
   const top = state as unknown as Record<string, unknown>
   const extra = extrasOf(state)
@@ -2141,6 +2159,12 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
             (state?.pendingDuplicates ?? 0) > 0
               ? createElement('span', { className: 'bt-stat bt-stat-warn', title: t('pendingDupTitle') },
                   t('pendingDupChip', { n: state.pendingDuplicates }))
+              : null,
+            rejectionCount(state) > 0
+              ? createElement('span', {
+                  className: 'bt-stat bt-stat-warn',
+                  title: `${t('rejectionsTitle')}；${rejectionTitle(state)}`,
+                }, t('rejectionsBadge', { n: rejectionCount(state) }))
               : null,
           )
         : null,
