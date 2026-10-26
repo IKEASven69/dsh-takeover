@@ -152,19 +152,23 @@ function themeVars(): Record<string, string> {
         '--bt-ok': '#4ade80',
         '--bt-warn': '#fbbf24',
         '--bt-err': '#f87171',
-        // 暗色分层（视觉审查 P0-3）：卡面比壳抬一档、卡线更轻，内容才浮得起
+        // 三级表面：canvas（浮层壳/面板自身，不另铺色）→ 卡（透明/极淡底+描边）
+        // → 嵌套面（--bt-card，比卡再抬一档，预览块/输入框/会话行用）
         '--bt-card': 'rgba(255,255,255,.035)',
         '--bt-line': 'rgba(255,255,255,.08)',
         '--bt-id': 'rgba(255,255,255,.48)',
+        // 顶部 1px 内发光（描边浮现卡的内高光，随明暗轴换色）
+        '--bt-inset': 'inset 0 1px 0 rgba(255,255,255,.06)',
       }
     : {
         '--bt-mut': 'rgba(30,41,59,.72)',
         '--bt-ok': '#15803d',
         '--bt-warn': '#b45309',
         '--bt-err': '#d93025',
-        '--bt-card': '#ffffff',
+        '--bt-card': 'rgba(15,23,42,.04)',
         '--bt-line': 'rgba(15,23,42,.12)',
         '--bt-id': 'rgba(30,41,59,.55)',
+        '--bt-inset': 'inset 0 1px 0 rgba(255,255,255,.7)',
       }
 }
 
@@ -254,7 +258,11 @@ const CSS = `
   --bt-a: var(--accent, #6366f1); --bt-ok: #15803d; --bt-warn: #b45309; --bt-err: #d93025;
   --bt-line: var(--border, rgba(127,127,127,.2)); --bt-mut: rgba(30,41,59,.72);
   --bt-card: var(--bg, rgba(127,127,127,.05)); --bt-hover: rgba(127,127,127,.07);
-  --bt-shadow: 0 1px 2px rgba(16,24,40,.05), 0 12px 32px -18px rgba(16,24,40,.16); }
+  --bt-shadow: 0 1px 2px rgba(16,24,40,.05), 0 12px 32px -18px rgba(16,24,40,.16);
+  /* 动效 token：全套 transition/animation 只吃这两个值（D 批收敛，不再零散调参） */
+  --bt-ease: cubic-bezier(.4,0,.2,1); --bt-dur: 160ms;
+  /* 顶部 1px 内发光（明轴默认；暗轴由 themeVars 按 body 亮度覆写） */
+  --bt-inset: inset 0 1px 0 rgba(255,255,255,.7); }
 /* 浮层挂载（bt-bounded）：面板吃满浮层剩余高，横幅/引导条固定；宽容器双列各自内滚。
    窄容器（auto-fit 退化为单列，<976px）整体退回 .bt-cols 内滚——@container 只能
    作用于容器后代，故退化规则挂在 .bt-cols 上而非 .bt-bounded 本身 */
@@ -285,21 +293,26 @@ const CSS = `
   border: 1px solid var(--bt-line); border-radius: 10px;
   box-shadow: 0 8px 28px rgba(0,0,0,.4); }
 .bt-export-item { display: block; width: 100%; text-align: left; border: none; background: transparent;
-  color: inherit; font-size: 12.5px; font-family: inherit; padding: 7px 10px; border-radius: 7px;
+  color: inherit; font-size: 12px; font-family: inherit; padding: 7px 10px; border-radius: 7px;
   cursor: pointer; white-space: nowrap; }
 .bt-export-item:hover { background: var(--bt-hover); }
 .bt-export-item:disabled { opacity: .45; cursor: default; }
-.bt-card { background: var(--bt-card); border: 1px solid var(--bt-line); border-radius: 12px;
+/* 浮现卡（A 批）：canvas 上不铺实色底——极淡底 + 1px 描边 + 顶部 1px 内发光，
+   层级靠描边与内浮现表达，替换灰底块观感 */
+.bt-card { background: rgba(127,127,127,.03); border: 1px solid var(--bt-line); border-radius: 12px;
   padding: 16px 18px; display: flex; flex-direction: column; gap: 12px;
-  box-shadow: var(--bt-shadow); }
+  box-shadow: var(--bt-inset), var(--bt-shadow); }
 .bt-head { display: flex; align-items: center; gap: 12px; }
 .bt-logo { width: 40px; height: 40px; border-radius: 11px; flex: none; overflow: hidden;
   box-shadow: 0 2px 8px rgba(99,102,241,.35), inset 0 0 0 1px rgba(255,255,255,.18); }
 .bt-logo svg { display: block; }
-.bt-title { font-weight: 700; font-size: 14px; letter-spacing: .01em; }
+/* 两级标题阶梯（字体纪律）：.bt-title 14px 卡主标题（最高一级），.bt-title-sec
+   13px 卡内节标题——节标题一律走后者，禁止行内 fontSize 覆写 */
+.bt-title { font-weight: 700; font-size: 14px; letter-spacing: -.01em; }
+.bt-title-sec { font-weight: 700; font-size: 13px; letter-spacing: -.01em; }
 .bt-sub { font-size: 12px; color: var(--bt-mut); line-height: 1.55; }
 .bt-spacer { flex: 1; }
-.bt-badge { font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 999px;
+.bt-badge { font-size: 10px; font-weight: 600; padding: 3px 10px; border-radius: 999px;
   color: var(--bt-mut); background: rgba(127,127,127,.1); border: 1px solid var(--bt-line);
   font-variant-numeric: tabular-nums; }
 .bt-badge-hot { color: var(--bt-a); background: rgba(99,102,241,.1); border-color: rgba(99,102,241,.3); }
@@ -308,12 +321,12 @@ const CSS = `
 .bt-stat { font-size: 11px; color: var(--bt-mut); background: var(--bt-hover);
   border: 1px solid transparent; border-radius: 999px; padding: 3px 10px;
   font-variant-numeric: tabular-nums; white-space: nowrap;
-  transition: background .12s ease, border-color .12s ease; }
+  transition: background var(--bt-dur) var(--bt-ease), border-color var(--bt-dur) var(--bt-ease); }
 .bt-stat-hot { color: var(--bt-a); background: rgba(99,102,241,.12); border-color: rgba(99,102,241,.35); font-weight: 600; }
 .bt-stat-warn { color: var(--bt-warn); background: rgba(251,191,36,.12); border-color: rgba(251,191,36,.4); }
-.bt-btn { cursor: pointer; border-radius: 10px; font-size: 12.5px; font-weight: 500; padding: 6px 16px;
+.bt-btn { cursor: pointer; border-radius: 10px; font-size: 12px; font-weight: 500; padding: 6px 16px;
   border: 1px solid var(--bt-line); background: transparent; color: inherit; white-space: nowrap;
-  transition: border-color .15s ease, color .15s ease, background .15s ease, transform .12s ease; }
+  transition: border-color var(--bt-dur) var(--bt-ease), color var(--bt-dur) var(--bt-ease), background var(--bt-dur) var(--bt-ease), transform var(--bt-dur) var(--bt-ease); }
 .bt-btn:disabled { opacity: .5; cursor: default; }
 .bt-btn:not(:disabled):hover { border-color: var(--bt-a); color: var(--bt-a); transform: translateY(-1px); }
 .bt-btn:not(:disabled):active { transform: translateY(0); }
@@ -323,26 +336,31 @@ const CSS = `
 .bt-banner { font-size: 12px; line-height: 1.6; border-radius: 10px; padding: 8px 12px; }
 .bt-banner-info { color: var(--bt-mut); background: rgba(127,127,127,.08); }
 .bt-banner-err { color: var(--bt-err); background: rgba(211,47,47,.08); }
-/* 卡行：卡片化列表项——圆角软底、hover 描边浮现、未读行首品牌强调条 */
+/* 卡行：描边浮现行——行层描边默认透明（占位不画框），hover 才浮现 1px 描边；
+   未读行常驻品牌描边，长列表里不 hover 也能一眼分辨。常驻描边只留给卡与嵌套
+   预览两级，行层不参与——30s 轮询整表刷新的长列表不成卡海。行入场无动画
+   （刷新不闪），动效只挂在 hover/状态变化上（token：--bt-ease/--bt-dur） */
 .bt-rows { display: flex; flex-direction: column; gap: 4px; }
 .bt-pending { display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: flex-start;
-  border-radius: 12px; padding: 10px 12px; font-size: 12.5px;
-  border: 1px solid transparent; position: relative;
-  cursor: pointer; transition: background .12s ease, border-color .12s ease; }
+  border-radius: 12px; padding: 10px 12px; font-size: 12px;
+  border: 1px solid transparent; position: relative; box-shadow: var(--bt-inset);
+  cursor: pointer; transition: background var(--bt-dur) var(--bt-ease), border-color var(--bt-dur) var(--bt-ease); }
 .bt-pending:hover { background: var(--bt-hover); border-color: var(--bt-line); }
 .bt-pending:focus-visible { outline: 2px solid var(--bt-a); outline-offset: -2px; }
-.bt-pending-open { background: var(--bt-hover); border-color: var(--bt-line); }
-.bt-pending-unread { background: rgba(99,102,241,.07); }
-.bt-pending-unread:hover { background: rgba(99,102,241,.11); }
+.bt-pending-open { background: var(--bt-hover); }
+.bt-pending-unread { background: rgba(99,102,241,.07); border-color: rgba(99,102,241,.3); }
+.bt-pending-unread:hover { background: rgba(99,102,241,.11); border-color: rgba(99,102,241,.45); }
 .bt-pending-unread::before { content: ''; position: absolute; left: 0; top: 10px; bottom: 10px;
-  width: 3px; border-radius: 999px; background: linear-gradient(180deg, #6366F1, #8B5CF6); }
+  width: 3px; border-radius: 999px; background: linear-gradient(180deg, #6366F1, #8B5CF6);
+  transform-origin: top; animation: bt-bar-in var(--bt-dur) var(--bt-ease); }
+@keyframes bt-bar-in { from { transform: scaleY(0); } to { transform: scaleY(1); } }
 .bt-pending-unread.bt-pending-open::before { top: 10px; }
 .bt-pend-icon { flex: none; margin-top: 1px; }
 .bt-pend-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .bt-pend-line1 { display: flex; align-items: baseline; gap: 8px; }
 .bt-pending-title { flex: 1; min-width: 0; font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bt-pend-time { flex: none; font-size: 11px; color: var(--bt-mut); font-variant-numeric: tabular-nums; }
-.bt-pending-chev { flex: none; font-size: 10px; color: var(--bt-mut); align-self: flex-start; margin-top: 3px; transition: transform .15s ease; }
+.bt-pending-chev { flex: none; font-size: 10px; color: var(--bt-mut); align-self: flex-start; margin-top: 3px; transition: transform var(--bt-dur) var(--bt-ease); }
 .bt-pending-open .bt-pending-chev { transform: rotate(90deg); }
 .bt-pend-meta { display: flex; gap: 6px; align-items: baseline; font-size: 11px; color: var(--bt-mut);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
@@ -355,7 +373,7 @@ const CSS = `
   border-radius: 10px;
   padding: 9px 12px; margin: 6px 0 2px 2px; white-space: pre-wrap;
   word-break: break-word; display: flex; flex-direction: column; gap: 4px; }
-.bt-preview-hint { font-size: 10.5px; color: var(--bt-mut); }
+.bt-preview-hint { font-size: 11px; color: var(--bt-mut); }
 /* 展开态动作行：预览提示 + 单卡导出按钮 */
 .bt-preview-actions { display: flex; align-items: center; gap: 8px; justify-content: space-between;
   white-space: normal; }
@@ -364,16 +382,17 @@ const CSS = `
 .bt-inbox-toolbar .bt-filter { flex: 1 1 180px; }
 .bt-filter { flex: 1; min-width: 0; height: 32px; box-sizing: border-box;
   border: 1px solid var(--bt-line); border-radius: 10px; background: var(--bt-card);
-  color: inherit; font-size: 12.5px; padding: 0 10px; outline: none;
-  transition: border-color .15s ease, box-shadow .15s ease; }
+  color: inherit; font-size: 12px; padding: 0 10px; outline: none;
+  transition: border-color var(--bt-dur) var(--bt-ease), box-shadow var(--bt-dur) var(--bt-ease); }
 .bt-filter:focus { border-color: var(--bt-a); box-shadow: 0 0 0 3px rgba(99,102,241,.15); }
 .bt-filter::placeholder { color: var(--bt-mut); opacity: .75; }
-/* 行内小徽标：「新」（未展开过的卡）与分组计数，同一基座 */
-.bt-tag { font-size: 10px; font-weight: 700; line-height: 1.5; padding: 1px 8px;
+/* 行内小徽标：「新」（未展开过的卡）与分组计数，同一基座。
+   C 批降饱和：低饱和底 + 1px 同色描边，视觉权重降一档（10px/600） */
+.bt-tag { font-size: 10px; font-weight: 600; line-height: 1.5; padding: 1px 8px;
   border-radius: 999px; flex: none; white-space: nowrap; box-sizing: border-box; letter-spacing: .02em; }
-.bt-tag-new { color: var(--bt-warn); background: rgba(251,191,36,.16); border: 1px solid rgba(251,191,36,.4); }
-.bt-tag-lowinfo { color: var(--bt-mut); background: rgba(127,127,127,.12); border: 1px solid var(--bt-line); }
-.bt-tag-group { color: var(--bt-a); background: rgba(99,102,241,.12); border: 1px solid transparent; }
+.bt-tag-new { color: var(--bt-warn); background: rgba(251,191,36,.08); border: 1px solid rgba(251,191,36,.32); }
+.bt-tag-lowinfo { color: var(--bt-mut); background: rgba(127,127,127,.06); border: 1px solid var(--bt-line); }
+.bt-tag-group { color: var(--bt-a); background: rgba(99,102,241,.08); border: 1px solid rgba(99,102,241,.3); }
 /* 组内成员行：整体右缩进，视觉上挂在组头下 */
 .bt-pending-member { margin-left: 20px; }
 /* 行外壳（中性容器，内含 role=button 行 + 兄弟预览块）：延续原先行内 flex-wrap 布局 */
@@ -381,9 +400,9 @@ const CSS = `
 .bt-cmds { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 10px; }
 .bt-cmd { display: flex; align-items: center; gap: 8px; min-width: 0; border: 1px solid var(--bt-line);
   border-radius: 10px; padding: 7px 12px; font-size: 12px; background: transparent;
-  transition: opacity .15s ease, border-color .15s ease, background .15s ease; }
+  transition: opacity var(--bt-dur) var(--bt-ease), border-color var(--bt-dur) var(--bt-ease), background var(--bt-dur) var(--bt-ease); }
 .bt-cmd:hover { border-color: var(--bt-line); background: var(--bt-hover); }
-.bt-cmd-key { font-family: ui-monospace, monospace; font-size: 11.5px; font-weight: 600; flex: none; }
+.bt-cmd-key { font-family: ui-monospace, monospace; font-size: 11px; font-weight: 600; flex: none; }
 .bt-cmd-key-primary { color: var(--bt-a); }
 .bt-cmd-desc { color: var(--bt-mut); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bt-cmd .bt-icon { width: 16px; height: 16px; flex: none; border-radius: 5px; }
@@ -396,45 +415,45 @@ const CSS = `
 .bt-icon-letter { color: #fff; font-weight: 700; font-size: 11px; line-height: 1; letter-spacing: -.02em; user-select: none; }
 .bt-matrix { display: flex; flex-direction: column; }
 .bt-mrow { display: grid; grid-template-columns: minmax(170px, auto) 1fr auto auto; gap: 10px; align-items: center;
-  padding: 8px 6px; font-size: 12.5px; border-bottom: 1px solid var(--bt-line); border-radius: 8px;
-  transition: opacity .15s ease, background .15s ease; }
+  padding: 8px 6px; font-size: 12px; border-bottom: 1px solid var(--bt-line); border-radius: 8px;
+  transition: opacity var(--bt-dur) var(--bt-ease), background var(--bt-dur) var(--bt-ease); }
 .bt-mrow:hover { background: var(--bt-hover); }
 .bt-mrow:last-child { border-bottom: none; }
 .bt-mrow-idle { opacity: .48; }
 .bt-mrow-idle:hover { opacity: .8; }
 .bt-mname-col { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .bt-mname-wrap { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.bt-mname { font-weight: 600; font-size: 12.5px; white-space: nowrap; }
-.bt-mid { font-family: ui-monospace, monospace; font-size: 10.5px; color: var(--bt-mut); opacity: .75; }
+.bt-mname { font-weight: 600; font-size: 13px; white-space: nowrap; }
+.bt-mid { font-family: ui-monospace, monospace; font-size: 11px; color: var(--bt-mut); opacity: .75; }
 /* 假 0 哨兵浮出：supported 且 note 非空时行内橙色小字（不只放 title），与 --bt-warn 同轴 */
-.bt-mnote { font-size: 10.5px; line-height: 1.5; color: var(--bt-warn); max-width: 360px; overflow-wrap: anywhere; }
-.bt-mstat { font-size: 11.5px; color: var(--bt-mut); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.bt-pill { font-size: 10.5px; font-weight: 600; padding: 2px 9px; border-radius: 999px; flex: none;
+.bt-mnote { font-size: 11px; line-height: 1.5; color: var(--bt-warn); max-width: 360px; overflow-wrap: anywhere; }
+.bt-mstat { font-size: 11px; color: var(--bt-mut); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.bt-pill { font-size: 10px; font-weight: 600; padding: 2px 9px; border-radius: 999px; flex: none;
   min-width: 34px; text-align: center; box-sizing: border-box; letter-spacing: .02em; }
 .bt-pill-ok { color: var(--bt-ok); background: rgba(21,128,61,.1); border: 1px solid rgba(21,128,61,.35); }
 .bt-pill-no { color: var(--bt-warn); background: rgba(180,83,9,.1); border: 1px solid rgba(180,83,9,.35); }
 .bt-toggle { cursor: pointer; width: 38px; height: 22px; border-radius: 999px; border: none;
   background: rgba(127,127,127,.25); position: relative; padding: 0; justify-self: end;
-  transition: background .18s cubic-bezier(.4,0,.2,1); box-shadow: inset 0 1px 2px rgba(0,0,0,.12); }
+  transition: background var(--bt-dur) var(--bt-ease); box-shadow: inset 0 1px 2px rgba(0,0,0,.12); }
 .bt-toggle:disabled { opacity: .45; cursor: default; }
 .bt-toggle::after { content: ''; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px;
-  border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.25); transition: left .18s cubic-bezier(.4,0,.2,1); }
-.bt-toggle-on { background: linear-gradient(135deg, #6366F1, #8B5CF6); }
+  border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.25); transition: left var(--bt-dur) var(--bt-ease); }
+.bt-toggle-on { background: var(--bt-a); }
 .bt-toggle-on::after { left: 19px; }
-.bt-note { font-size: 11.5px; color: var(--bt-mut); line-height: 1.6; border-left: 2px solid var(--bt-line);
+.bt-note { font-size: 12px; color: var(--bt-mut); line-height: 1.6; border-left: 2px solid var(--bt-line);
   padding-left: 10px; }
 .bt-note summary { cursor: pointer; user-select: none; list-style: none; display: flex; align-items: center; gap: 6px; }
 .bt-note summary::-webkit-details-marker { display: none; }
-.bt-note summary::before { content: '▸'; font-size: 10px; transition: transform .15s ease; }
+.bt-note summary::before { content: '▸'; font-size: 10px; transition: transform var(--bt-dur) var(--bt-ease); }
 .bt-note[open] summary::before { transform: rotate(90deg); }
 .bt-note-body { margin-top: 6px; }
 /* 窄容器（侧栏收窄）：命令单列、矩阵行收掉会话数列，避免挤压换行 */
 /* 来源筛选 chips：全部/各家/只看新卡，pill 基座 + 选中态品牌描边 */
 .bt-chips { display: flex; flex-wrap: wrap; gap: 6px 8px; margin: 2px 0 8px; }
 .bt-chip { display: inline-flex; align-items: center; gap: 6px; cursor: pointer;  border: 1px solid var(--bt-line); border-radius: 999px; padding: 3px 12px;
-  background: transparent; color: var(--bt-mut); font-size: 11.5px; font-weight: 500;
+  background: transparent; color: var(--bt-mut); font-size: 11px; font-weight: 500;
   font-variant-numeric: tabular-nums;
-  transition: border-color .15s ease, color .15s ease, background .15s ease; }
+  transition: border-color var(--bt-dur) var(--bt-ease), color var(--bt-dur) var(--bt-ease), background var(--bt-dur) var(--bt-ease); }
 .bt-chip:hover { border-color: var(--bt-a); color: var(--bt-a); }
 .bt-chip-on { color: var(--bt-a); background: rgba(99,102,241,.12);
   border-color: rgba(99,102,241,.45); font-weight: 600; }
@@ -454,7 +473,7 @@ const CSS = `
 .bt-btn-xs { font-size: 11px; padding: 2px 8px; border-radius: 8px; }
 .bt-fsess { border: 1px solid var(--bt-line); border-radius: 10px; padding: 7px 10px; margin-bottom: 6px; background: var(--bt-card); }
 .bt-fsess-line1 { display: flex; gap: 8px; align-items: baseline; }
-.bt-fsess-title { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 600; overflow: hidden;
+.bt-fsess-title { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; cursor: pointer; border-radius: 4px; }
 .bt-fsess-title:hover { color: var(--bt-a); }
 .bt-fsess-title:focus-visible { outline: 2px solid var(--bt-a); outline-offset: 2px; }
@@ -468,7 +487,7 @@ const CSS = `
 .bt-fsess-id:focus-visible { outline: 2px solid var(--bt-a); outline-offset: 2px; }
 .bt-fsess-act { flex: none; display: flex; gap: 4px; }
 .bt-fsprev { margin-top: 7px; padding-top: 7px; border-top: 1px dashed var(--bt-line); display: grid;
-  gap: 3px; font-size: 11.5px; }
+  gap: 3px; font-size: 11px; }
 .bt-fsprev-line { display: flex; gap: 6px; min-width: 0; }
 .bt-fsprev-label { flex: none; color: var(--bt-mut); }
 .bt-fsprev-text { min-width: 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3;
@@ -476,6 +495,11 @@ const CSS = `
 .bt-fsprev-warn { color: var(--bt-warn); }
 .bt-fs-empty { padding: 8px 2px; }
 .bt-fs-count { margin: 8px 0 6px; }
+/* 骨架屏（E 批）：state 未到位时收件箱概览的占位——3 条脉冲条替代「加载」纯文字，
+   脉冲只动 opacity（不触发布局），宽差 100/70/45% 由行内样式给 */
+.bt-skeleton { height: 12px; border-radius: 6px; background: var(--bt-hover);
+  animation: bt-pulse 1.2s var(--bt-ease) infinite; }
+@keyframes bt-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
 @container (max-width: 430px) {
   .bt-fsess-act { flex-wrap: wrap; }
 }
@@ -1349,7 +1373,7 @@ export function SendCard({ sessionId, t, lang, onError, onNotice }: {
 
   return createElement('div', { className: 'bt-card' },
     createElement('div', { className: 'bt-head' },
-      createElement('span', { className: 'bt-title', style: { fontSize: 13 } }, t('sendTitle')),
+      createElement('span', { className: 'bt-title-sec' }, t('sendTitle')),
     ),
     createElement('div', { className: 'bt-sub' }, sessionId !== undefined && sessionId !== '' ? t('sendHint') : t('sendHintCopy')),
     createElement('div', { className: 'bt-sub', style: { marginTop: 6, fontWeight: 600 } }, t('targetGroupLabel')),
@@ -1453,7 +1477,7 @@ export function MemoryCard({ t, lang, onError, onNotice, onPushed, defaultOpen }
         style: { width: 13, height: 13, display: 'inline-block', opacity: 0.9 },
         dangerouslySetInnerHTML: { __html: MEMORY_SVG },
       }),
-      createElement('span', { className: 'bt-title', style: { fontSize: 13 } }, `${t('memoryTitle')}`),
+      createElement('span', { className: 'bt-title-sec' }, `${t('memoryTitle')}`),
       createElement('span', { className: 'bt-spacer' }),
       createElement('span', { className: 'bt-pending-chev', 'aria-hidden': true }, '▸'),
     ),
@@ -1514,7 +1538,7 @@ export function HelpCard({ t }: { t: Translate }): ReturnType<typeof createEleme
         style: { width: 13, height: 13, display: 'inline-block', opacity: 0.9 },
         dangerouslySetInnerHTML: { __html: HELP_SVG },
       }),
-      createElement('span', { className: 'bt-title', style: { fontSize: 13 } }, t('helpTitle')),
+      createElement('span', { className: 'bt-title-sec' }, t('helpTitle')),
     ),
     createElement('div', { style: { display: 'grid', gap: 8 } },
       ...entries.map((e, i) => createElement('div', { key: i, style: { marginBottom: 8 } },
@@ -1774,7 +1798,7 @@ export function ForeignBrowser({ state, t, lang, onError, onNotice, navigate }: 
 
   return createElement('div', { className: 'bt-card' },
     createElement('div', { className: 'bt-head' },
-      createElement('span', { className: 'bt-title', style: { fontSize: 13 } }, t('browserTitle')),
+      createElement('span', { className: 'bt-title-sec' }, t('browserTitle')),
     ),
     createElement('div', { className: 'bt-sub' }, t('browserHint')),
     createElement('div', { className: 'bt-sub', style: { marginTop: 8, fontWeight: 600 } }, t('browserGroupLabel')),
@@ -1881,7 +1905,7 @@ export function CommandsCard({ state, t }: { state: TakeoverState | null; t: Tra
   }
   return createElement('div', { className: 'bt-card' },
     createElement('div', { className: 'bt-head' },
-      createElement('span', { className: 'bt-title', style: { fontSize: 13 } }, t('cmdTitle')),
+      createElement('span', { className: 'bt-title-sec' }, t('cmdTitle')),
       createElement('span', { className: 'bt-badge' }, t('cmdBadge')),
     ),
     createElement('div', { className: 'bt-cmds' },
@@ -2091,7 +2115,7 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
       ? createElement('div', { className: 'bt-card' },
           createElement('div', { className: 'bt-head' },
             createElement('span', { className: 'bt-logo', dangerouslySetInnerHTML: { __html: ICON_SVG } }),
-            createElement('span', { className: 'bt-title', style: { fontSize: 13 } }, t('sidebarTabTitle')),
+            createElement('span', { className: 'bt-title-sec' }, t('sidebarTabTitle')),
             createElement('span', { className: 'bt-spacer' }),
             createElement('button', { className: 'bt-btn', onClick: reload }, t('refresh')),
           ),
@@ -2103,7 +2127,7 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
     // 新手三步引导条（仅浮层挂载；「知道了」后 localStorage 记住不再出现）
     bounded === true && onboardGone === false
       ? createElement('div', { className: 'bt-card', style: { borderColor: 'var(--bt-a)' } },
-          createElement('div', { style: { display: 'grid', gap: 4, fontSize: 12.5 } },
+          createElement('div', { style: { display: 'grid', gap: 4, fontSize: 12 } },
             createElement('span', { style: { fontWeight: 600 } }, t('popoverSubtitle')),
             createElement('span', null, `① ${t('onboard1')} → ② ${t('onboard2')} → ③ ${t('onboard3')}`),
           ),
@@ -2128,7 +2152,7 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
       // 收件箱概览
       createElement('div', { className: 'bt-card' },
       createElement('div', { className: 'bt-head' },
-        createElement('span', { className: 'bt-title', style: { fontSize: 13 } }, t('inboxTitle')),
+        createElement('span', { className: 'bt-title-sec' }, t('inboxTitle')),
         createElement('span', { className: 'bt-spacer' }),
         createElement('button', {
           className: `bt-btn bt-btn-danger${confirmClear ? ' bt-btn-confirm' : ''}`,
@@ -2223,7 +2247,12 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
             onTakeInbox: takeInbox,
             takeBusyId,
           })
-        : createElement('div', { className: 'bt-sub' }, t('loading')),
+        // state 未到位：3 条骨架条占位（E 批）——比「加载」纯文字更接近成卡后的版面
+        : createElement('div', { style: { display: 'grid', gap: 8, padding: '4px 0' } },
+            createElement('div', { className: 'bt-skeleton', style: { width: '100%' } }),
+            createElement('div', { className: 'bt-skeleton', style: { width: '70%' } }),
+            createElement('div', { className: 'bt-skeleton', style: { width: '45%' } }),
+          ),
     ),
     ), // 左栏收尾（帮助 + 收件箱）
 
@@ -2339,7 +2368,9 @@ export function ComposerChip({ t, locale, navigate, sessionId }: {
     },
       createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, padding: '2px 4px 6px' } },
         createElement('span', { className: 'bt-logo', style: { width: 14, height: 14, display: 'inline-block' }, dangerouslySetInnerHTML: { __html: ICON_SVG } }),
-        createElement('span', { className: 'bt-title', style: { fontSize: 13 } }, t('popoverTitle')),
+        // 「接力工作台」标题走 .bt-title 基准（14px + letter-spacing -.01em，B 批字体阶梯），
+        // 不再行内压到 13px——浮层主标题是全页面最高一级
+        createElement('span', { className: 'bt-title' }, t('popoverTitle')),
         createElement('span', { style: { flex: 1 } }),
         createElement('button', {
           className: 'bt-btn bt-btn-xs',
@@ -2446,7 +2477,7 @@ export function Panel({ t, locale, navigate, slim }: { t: Translate; locale: Loc
     // 支持矩阵
     createElement('div', { className: 'bt-card' },
       createElement('div', { className: 'bt-head' },
-        createElement('span', { className: 'bt-title', style: { fontSize: 13 } }, t('matrixTitle')),
+        createElement('span', { className: 'bt-title-sec' }, t('matrixTitle')),
       ),
       state !== null
         ? createElement(ProviderMatrix, { rows: state.providers, busy, onToggle: toggle, t })
