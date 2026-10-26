@@ -42,19 +42,27 @@ dsh-takeover 是**完整的接管环**：拉取外部会话、寄存当前会话
 
 ## 竞品与差异化
 
-2026-09 以来同类项目集中出现。机制上的一句话区分：**他们做「转换后换一家 CLI 原生续跑」「跨设备同步」或「导航搜索」，我们做 harness 内接管**——
+**先说定位。** AI 编码的「延续上下文」需求由三层各管一段：spec 工具（spec-kit / OpenSpec 一类）管**设计态**——要做什么、验收是什么；记忆层（mem0 / Letta / dsh-hippo 一类）管**偏好态**——项目约定与对话事实的沉淀。dsh-takeover 管**运行态**——实际跑到哪、停在哪、哪些陈述是当下观察、哪些只是历史转述、卡出自哪台机器。spec 与记忆都不标注陈述的来源与验证状态，这份蒸馏损失由交接卡补上；三层互补，不互相替代。
+
+2026-09 以来同类项目集中出现。机制上的一句话区分：**他们做「转换后换一家 CLI 原生续跑」「跨设备同步」「导航搜索」「运行时编排」或「任务状态搬运」，我们做 harness 内接管**——
 
 - vs [casr](https://github.com/Dicklesworthstone/cross_agent_session_resumer)：casr 把会话转成规范模型后交给别家 CLI 原生 `resume`，转换层一旦跟不上上游存储布局变化就会整体失效（其 #26 即 opencode 迁 SQLite 中招）；我们把外来会话**只读拉进当前会话**蒸馏成卡，不写对方会话、不依赖对方 CLI 的 resume 能力，天然免疫转换产物损坏一类事故（其 #10）。
 - vs [harness-remote](https://github.com/giuliastro/harness-remote)：语义上最接近的对手——它的 cross-agent continuation 同样携带「有界可检上下文」并记录 lineage，但在目标家**创建原生会话**（写对方存储），lineage 记在它自家控制面、第三方工具读不到，无审计语义与安全闸；我们的六段卡 + `handoff: 1` 版本化协议 + `~/.handoff` 开放文件总线，任何工具可实现、可审计。
 - vs [agent-sessions](https://github.com/jazzyalex/agent-sessions)：跨家浏览器的头部（连 DeepSeek Harness 都只读收录）——但它明确只读不交接，resume 是复制原生命令开自家 CLI。我们同样提供浏览（会话内的「接力」工作台），但浏览只是入口：**看到即可一键接管**。同类工具的用户也提出过同样的需求：「交接按钮 + 生成提示词发给另一家」。
 - vs [agentctxsync](https://github.com/westsource/agentctxsync)：它做跨设备上下文同步；跨机器接力我们一句配置即得（见下节），核心差异仍在接管的审计语义。
 - vs [aisle](https://github.com/mashkovd/aisle)：它做跨 agent 会话的发现、规范化与全文搜索（导航定位）；我们不做搜索，做接管后的工作连续性。
+- vs 运行时编排与契约总线类（[AHP](https://github.com/Mohaned178/agent-handoff-protocol)、[FerryCat](https://github.com/GuoBug/FerryCat)）：AHP 自带工作流运行时——派步骤、验结果、崩溃恢复，交接发生在其运行时内部；FerryCat 以 MCP 契约总线派发任务契约（job-queue 语义）。两者搬运的都是「运行中的任务」，我们搬运的是「会话与记忆」——不做运行时、不派任务，只做交接前（蒸馏成可校验的交接卡）与交接后（取件核验签收），无需验证 worktree 与调度器，也执行不到你的代码。
+- vs 任务护照类（[task-passport](https://github.com/dongsheng123132/task-passport)）：同为基于共享文件的交接协议，它 pack/land 显式搬运任务状态；我们走被动收件箱（写入即投递、取件即消费）。它提出的原则与我们同源：**「安全属性必须长在文件里，不能长在接收方身上」**——我们的密钥闸正是这样设计的（写入端把关，而非指望读取方）。
 
 dsh-takeover 的生态位：**harness 内接管**（六段协议卡注入当轮，模型直接接着干）+ **四态审计**（CURRENT_OBSERVED / HISTORY_REPORTED / MISMATCH / UNAVAILABLE 证据账本，历史陈述不冒充当下事实）+ **收件箱异步接力**（`~/.handoff/pending/` 文件系统即总线）。且全程**只读不写对方会话**。
 
 ## 跨机器接力
 
 `HANDOFF_HOME` 指向同步盘目录或 git 仓库，收件箱即多机共享：A 机器 `handoff_push` 寄存，B 机器开局 `/inbox` 取件接力。一句环境变量配置，零代码。同步盘里的卡片在手机文件查看器里同样可读——出门也能看卡，手机上开个 agent 会话即可取件接力。
+
+## 协议采用
+
+`handoff: 1` 是开放协议：六段 Markdown 卡 + YAML frontmatter + `~/.handoff` 共享目录，任何工具可实现、可审计、可互操作（开放协议的资格由独立第二实现背书，见[质量与证据](#质量与证据040)）。已互通的工具：[dsh-chat-import](https://github.com/Nwflower/dsh-chat-import)（经 INTERCHANGE v1 双向转换互验）。你的工具若读写同一目录或卡片格式，欢迎开 issue 登记；我们会评估互通可行性，验证通过后列入本节。
 
 ## 安装
 
