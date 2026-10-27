@@ -157,6 +157,7 @@ function themeVars(): Record<string, string> {
         '--bt-card': 'rgba(255,255,255,.035)',
         '--bt-line': 'rgba(255,255,255,.08)',
         '--bt-id': 'rgba(255,255,255,.48)',
+        '--bt-hover': 'rgba(255,255,255,.10)',
         // 顶部 1px 内发光（描边浮现卡的内高光，随明暗轴换色）
         '--bt-inset': 'inset 0 1px 0 rgba(255,255,255,.06)',
       }
@@ -256,7 +257,7 @@ const CSS = `
 .bt-panel { display: flex; flex-direction: column; gap: 16px; padding: 4px 0 10px;
   container-type: inline-size;
   --bt-a: var(--accent, #6366f1); --bt-ok: #15803d; --bt-warn: #b45309; --bt-err: #d93025;
-  --bt-line: var(--border, rgba(127,127,127,.2)); --bt-mut: rgba(30,41,59,.72);
+  --bt-line: var(--border, rgba(127,127,127,.2)); --bt-mut: rgba(30,41,59,.72); --bt-pulse-dur: 1.2s;
   --bt-card: var(--bg, rgba(127,127,127,.05)); --bt-hover: rgba(127,127,127,.07);
   --bt-shadow: 0 1px 2px rgba(16,24,40,.05), 0 12px 32px -18px rgba(16,24,40,.16);
   /* 动效 token：全套 transition/animation 只吃这两个值（D 批收敛，不再零散调参） */
@@ -498,8 +499,13 @@ const CSS = `
 /* 骨架屏（E 批）：state 未到位时收件箱概览的占位——3 条脉冲条替代「加载」纯文字，
    脉冲只动 opacity（不触发布局），宽差 100/70/45% 由行内样式给 */
 .bt-skeleton { height: 12px; border-radius: 6px; background: var(--bt-hover);
-  animation: bt-pulse 1.2s var(--bt-ease) infinite; }
+  animation: bt-pulse var(--bt-pulse-dur) var(--bt-ease) infinite; }
 @keyframes bt-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
+/* 动效降级：系统声明减少动效时，脉冲/强调条展开全部停用（全仓首批 @keyframes 的守卫） */
+@media (prefers-reduced-motion: reduce) {
+  .bt-skeleton { animation: none; opacity: .55; }
+  .bt-pending-unread::before { animation: none; }
+}
 @container (max-width: 430px) {
   .bt-fsess-act { flex-wrap: wrap; }
 }
