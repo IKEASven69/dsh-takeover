@@ -1031,12 +1031,15 @@ export function PendingList({ rows, query, home, t, lang, onExport, onChainFilte
   // 先滤（来源 → 只看新卡 → 文本）后组：过滤改变可见序列，「相邻」在滤后的列表上判定。
   // 空壳卡分离成「低信息」次级组（默认折叠）——主列表只留实质工作卡（Linear/Gmail 范式）
   const newIds = new Set(newIdsOf(rows, seen))
+  // 「只看新卡」下展开的行不因记已见而消失：展开 = 正在分诊，收起才算分诊完成
+  // （否则行在点击瞬间蒸发，详情永远看不到——0.4.3 复验实测的交互回归）
+  const newOrOpen = new Set([...newIds, ...openIds])
   const visible = filterPending(
     rows,
     query,
     (a) => PROVIDER_LABEL[a] ?? (a === '' ? t('unknownSource') : a),
     sourceSel,
-    newOnly ? newIds : null,
+    newOnly ? newOrOpen : null,
   )
   const lowRows = visible.filter((r) => r.lowInfo === true)
   const mainRows = visible.filter((r) => r.lowInfo !== true)

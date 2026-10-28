@@ -3,7 +3,7 @@
 import './ui-dom-setup.ts'
 import test, { after } from 'node:test'
 import assert from 'node:assert/strict'
-import { createElement, type ReactElement } from 'react'
+import { cloneElement, createElement, type ReactElement } from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import * as client from '../src/client.ts'
@@ -91,9 +91,13 @@ let root: Root | null = null
 const container = doc.createElement('div')
 doc.body.appendChild(container)
 
+let renderSeq = 0
 async function render(el: ReactElement): Promise<void> {
   if (root === null) root = createRoot(container as never)
-  await act(async () => { root!.render(el) })
+  // 同类型组件在同一个 root 上 render 会保留 useState（newOnly/openIds 跨测试泄漏，
+  // 曾让 newOnly 系测试顺序依赖）——每次渲染换 key 强制全新挂载
+  const keyed = cloneElement(el, { key: `render-${++renderSeq}` })
+  await act(async () => { root!.render(keyed) })
   await act(async () => { await new Promise((r) => setTimeout(r, 30)) })
 }
 
@@ -210,23 +214,45 @@ test('WorkspaceBody：导出▾菜单开合与两个导出项点击不抛错（b
   assert.ok(true)
 })
 
-test('WorkspaceBody：只看新卡是独立复选框开关——展开看过 A 后勾选即只留未读卡', async () => {
+test('WorkspaceBody：只看新卡是独立复选框开关——看过且收起的卡被滤掉，展开中的卡保留', async () => {
+  const dbg = (tag: string): string => {
+    const rows = [...container.querySelectorAll('.bt-pending')].map((r) => {
+      const t = r.querySelector('.bt-pending-title')?.textContent?.slice(0, 8) ?? '?'
+      return (r.textContent?.includes('交接卡 A') ? 'A' : t) + (r.className.includes('bt-pending-open') ? '[开]' : '')
+    }).join(',')
+    return `${tag}: rows=[${rows}] newOnly-checked=${!!container.querySelector('.bt-newonly input:checked')}`
+  }
+  console.log(dbg('start'))
   await render(createElement(client.WorkspaceBody, { t, locale: undefined, navigate, chrome: false }))
   await waitText('待取件 3')
-  // 展开看 A → 记已见
+  // 展开看 A → 记已见 → 收起（分诊完成：seen + 非展开态）
   const title = [...container.querySelectorAll('.bt-pending-title')]
     .find((e) => (e.textContent ?? '').includes('交接卡 A'))
   assert.ok(title, '目标行标题不存在')
-  await act(async () => { fireClick(title) })
+  const rowA = title!.closest('[role="button"]') as HTMLElement | null
+  assert.ok(rowA, '行本体不存在')
+  await act(async () => { fireClick(rowA) })
   await flush()
+  console.log(dbg('after-expand'))
+  // 收起前必须重查节点：React 重渲染会替换行 DOM，旧引用已脱离文档（点击会落空）
+  const rowA2 = [...container.querySelectorAll('[role="button"]')]
+    .find((e) => (e.textContent ?? '').includes('交接卡 A')) as HTMLElement | null
+  assert.ok(rowA2, '收起前行节点不存在')
+  await act(async () => { fireClick(rowA2) })
+  await flush()
+  console.log(dbg('after-collapse'))
   // 勾选只看新卡（React 的 checkbox onChange 由 click 合成触发——原生 change 不够）
   const box = container.querySelector('.bt-newonly input') as HTMLInputElement | null
   assert.ok(box, '只看新卡复选框不存在')
   await act(async () => { fireClick(box) })
   await flush()
+  console.log(dbg('after-newonly'))
   assert.ok(box.checked, '点击后复选框未勾上')
-  assert.ok(!has('交接卡 A'), '已看过的 A 仍显示——未读过滤未生效')
+  // 已看过且已收起的 A 被滤掉（分诊完成）；B 未读保留
+  assert.ok(!has('交接卡 A'), '已分诊的 A 仍显示——未读过滤未生效')
   assert.ok(has('接力卡 B'), '未读的接力卡 B 不应被滤掉')
+  // 展开中的行不蒸发（0.4.3 语义：展开 = 正在分诊，收起才算完成）
+  const openId = 'ho-test-0001'
   // 取消勾选恢复
   await act(async () => { fireClick(box) })
   await flush()
@@ -235,6 +261,45 @@ test('WorkspaceBody：只看新卡是独立复选框开关——展开看过 A �
   const chipsGroup = container.querySelector('[aria-label="按来源筛选待取件"]')
   assert.ok(chipsGroup, '来源筛选组不存在')
   assert.ok(!chipsGroup!.textContent!.includes('只看新卡'), '只看新卡不应混进来源 chips 组')
+  void openId
+})
+
+test('WorkspaceBody：只看新卡下展开的行不消失（0.4.3 交互回归：展开即记已见会蒸发行）', async () => {
+  // 自建状态流程（不依赖 localStorage——测试环境无 localStorage，seen 走模块级内存 store，
+  // 该 store 跨测试共享，因此流程必须自洽：本测试展开+收起第一行 = 它进入「已分诊」态）
+  await render(createElement(client.WorkspaceBody, { t, locale: undefined, navigate, chrome: false }))
+  await waitText('待取件 3')
+  // 展开第一行再收起：进入「已分诊」（seen + 非展开态）
+  const row1 = container.querySelector('.bt-pending-title')?.closest('[role="button"]') as HTMLElement | null
+  const t1 = container.querySelector('.bt-pending-title')?.textContent ?? ''
+  assert.ok(row1 && t1 !== '', '首行不存在')
+  await act(async () => { fireClick(row1) })
+  await flush()
+  await act(async () => { fireClick(row1) })
+  await flush()
+  // 勾选只看新卡：已分诊的行被滤掉
+  const box = container.querySelector('.bt-newonly input') as HTMLInputElement | null
+  assert.ok(box, '只看新卡复选框不存在')
+  const dbgRows = () => [...container.querySelectorAll('.bt-pending')].map((r) => (r.className.includes('bt-pending-open') ? '[开]' : '') + (r.querySelector('.bt-pending-title')?.textContent?.slice(0, 6) ?? '?')).join(',')
+  console.log('DBG before-newonly:', dbgRows(), '| checked:', box.checked)
+  await act(async () => { fireClick(box) })
+  await flush()
+  console.log('DBG after-newonly:', dbgRows(), '| checked:', box.checked)
+  assert.ok(!has(t1), '已分诊的行未被过滤')
+  // 展开「另一张」未读卡（点击 = 记已见）——展开中的行不得蒸发（本轮修复的核心断言）
+  const row2 = [...container.querySelectorAll('.bt-pending-title')]
+    .find((e) => (e.textContent ?? '') !== t1)
+  assert.ok(row2, '未读行不存在')
+  const t2 = row2!.textContent ?? ''
+  await act(async () => { fireClick(row2!.closest('[role="button"]') as HTMLElement) })
+  await flush()
+  assert.ok(has(t2), '展开中的行在只看新卡下蒸发了（应保留至收起）')
+  const openRow = container.querySelector('.bt-pending-open')
+  assert.ok(openRow, '展开态丢失')
+  // 收尾：恢复未勾选（同 root 同类型组件的 useState 跨 render 保留——测试结尾必须复位）
+  await act(async () => { fireClick(box) })
+  await flush()
+  assert.ok(!box.checked, '收尾未恢复未勾选')
 })
 
 test('WorkspaceBody：过滤框输入即筛（接力卡 B 命中后只留其行）', async () => {
