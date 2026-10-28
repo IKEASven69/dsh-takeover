@@ -215,14 +215,6 @@ test('WorkspaceBody：导出▾菜单开合与两个导出项点击不抛错（b
 })
 
 test('WorkspaceBody：只看新卡是独立复选框开关——看过且收起的卡被滤掉，展开中的卡保留', async () => {
-  const dbg = (tag: string): string => {
-    const rows = [...container.querySelectorAll('.bt-pending')].map((r) => {
-      const t = r.querySelector('.bt-pending-title')?.textContent?.slice(0, 8) ?? '?'
-      return (r.textContent?.includes('交接卡 A') ? 'A' : t) + (r.className.includes('bt-pending-open') ? '[开]' : '')
-    }).join(',')
-    return `${tag}: rows=[${rows}] newOnly-checked=${!!container.querySelector('.bt-newonly input:checked')}`
-  }
-  console.log(dbg('start'))
   await render(createElement(client.WorkspaceBody, { t, locale: undefined, navigate, chrome: false }))
   await waitText('待取件 3')
   // 展开看 A → 记已见 → 收起（分诊完成：seen + 非展开态）
@@ -233,20 +225,17 @@ test('WorkspaceBody：只看新卡是独立复选框开关——看过且收起�
   assert.ok(rowA, '行本体不存在')
   await act(async () => { fireClick(rowA) })
   await flush()
-  console.log(dbg('after-expand'))
   // 收起前必须重查节点：React 重渲染会替换行 DOM，旧引用已脱离文档（点击会落空）
   const rowA2 = [...container.querySelectorAll('[role="button"]')]
-    .find((e) => (e.textContent ?? '').includes('交接卡 A')) as HTMLElement | null
+    .find((e) => (e.textContent ?? '').includes('交接卡 A')) as unknown as HTMLElement | null
   assert.ok(rowA2, '收起前行节点不存在')
   await act(async () => { fireClick(rowA2) })
   await flush()
-  console.log(dbg('after-collapse'))
   // 勾选只看新卡（React 的 checkbox onChange 由 click 合成触发——原生 change 不够）
   const box = container.querySelector('.bt-newonly input') as HTMLInputElement | null
   assert.ok(box, '只看新卡复选框不存在')
   await act(async () => { fireClick(box) })
   await flush()
-  console.log(dbg('after-newonly'))
   assert.ok(box.checked, '点击后复选框未勾上')
   // 已看过且已收起的 A 被滤掉（分诊完成）；B 未读保留
   assert.ok(!has('交接卡 A'), '已分诊的 A 仍显示——未读过滤未生效')
@@ -270,7 +259,7 @@ test('WorkspaceBody：只看新卡下展开的行不消失（0.4.3 交互回归�
   await render(createElement(client.WorkspaceBody, { t, locale: undefined, navigate, chrome: false }))
   await waitText('待取件 3')
   // 展开第一行再收起：进入「已分诊」（seen + 非展开态）
-  const row1 = container.querySelector('.bt-pending-title')?.closest('[role="button"]') as HTMLElement | null
+  const row1 = container.querySelector('.bt-pending-title')?.closest('[role="button"]') as unknown as HTMLElement | null
   const t1 = container.querySelector('.bt-pending-title')?.textContent ?? ''
   assert.ok(row1 && t1 !== '', '首行不存在')
   await act(async () => { fireClick(row1) })
@@ -291,7 +280,7 @@ test('WorkspaceBody：只看新卡下展开的行不消失（0.4.3 交互回归�
     .find((e) => (e.textContent ?? '') !== t1)
   assert.ok(row2, '未读行不存在')
   const t2 = row2!.textContent ?? ''
-  await act(async () => { fireClick(row2!.closest('[role="button"]') as HTMLElement) })
+  await act(async () => { fireClick(row2!.closest('[role="button"]') as unknown as HTMLElement) })
   await flush()
   assert.ok(has(t2), '展开中的行在只看新卡下蒸发了（应保留至收起）')
   const openRow = container.querySelector('.bt-pending-open')
