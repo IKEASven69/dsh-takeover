@@ -159,6 +159,10 @@ function themeVars(): Record<string, string> {
         '--bt-line': 'rgba(255,255,255,.08)',
         '--bt-id': 'rgba(255,255,255,.58)',
         '--bt-hover': 'rgba(255,255,255,.10)',
+        // 壳层（浮层模态本体）：近黑画布 + 发光描边——与宿主页立即拉开层次
+        '--bt-shell-bg': 'linear-gradient(180deg, #0e0f13, #08090a)',
+        '--bt-shell-border': 'rgba(255,255,255,.12)',
+        '--bt-shell-edge': 'linear-gradient(90deg, #6366F1, #8B5CF6, #6366F1)',
         // 顶部 1px 内发光（描边浮现卡的内高光，随明暗轴换色）
         '--bt-inset': 'inset 0 1px 0 rgba(255,255,255,.06)',
       }
@@ -172,6 +176,10 @@ function themeVars(): Record<string, string> {
         '--bt-line': 'rgba(15,23,42,.12)',
         '--bt-id': 'rgba(30,41,59,.55)',
         '--bt-inset': 'inset 0 1px 0 rgba(255,255,255,.7)',
+        // 壳层亮轴：白阶渐变
+        '--bt-shell-bg': 'linear-gradient(180deg, #ffffff, #f4f5f7)',
+        '--bt-shell-border': 'rgba(15,23,42,.12)',
+        '--bt-shell-edge': 'linear-gradient(90deg, #6366F1, #8B5CF6, #6366F1)',
       }
 }
 
@@ -2290,6 +2298,9 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
  * 浮层几何按按钮实际位置现算（fixed + 视口夹取）：矮窗限高到按钮上缘以上空间
  * （不够放就改朝下），窄窗左缘夹进视口——不再顶出屏幕外、不再钻进侧栏底下。
  * sessionId 由宿主座位注入（session 级座位的标准参数；交接出去一键用，缺席降级复制路径）。 */
+/** 面板版本徽标（发布时随版本号更新；显示在浮层标题旁，用于一眼核对部署版本） */
+const PANEL_VERSION = 'v0.4.3'
+
 export function ComposerChip({ t, locale, navigate, sessionId }: {
   t: Translate
   locale: LocaleRuntime | undefined
@@ -2375,16 +2386,25 @@ export function ComposerChip({ t, locale, navigate, sessionId }: {
         ...(pos !== null
           ? { width: pos.width, maxHeight: pos.maxH }
           : { width: 'min(1040px, calc(100vw - 16px))', maxHeight: '70vh' }),
-        background: 'var(--bg)',
-        border: '1px solid var(--border)', borderRadius: 16,
-        boxShadow: '0 16px 48px rgba(0,0,0,.5)', padding: '10px 14px 12px',
+        // 壳层近黑画布（暗轴）：与宿主页立即拉开层次；发光描边 + 品牌渐变顶边
+        background: 'var(--bt-shell-bg, var(--bg))',
+        border: '1px solid var(--bt-shell-border, var(--border))', borderRadius: 16,
+        boxShadow: '0 24px 64px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.06)',
+        padding: '0 14px 12px',
       },
     },
+      // 顶部品牌渐变边条（模态身份标识）
+      createElement('div', { style: { height: 3, margin: '0 -14px 10px', background: 'var(--bt-shell-edge, linear-gradient(90deg, #6366F1, #8B5CF6, #6366F1))', borderRadius: '16px 16px 0 0' } }),
       createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, padding: '2px 4px 6px' } },
         createElement('span', { className: 'bt-logo', style: { width: 14, height: 14, display: 'inline-block' }, dangerouslySetInnerHTML: { __html: ICON_SVG } }),
         // 「接力工作台」标题走 .bt-title 基准（14px + letter-spacing -.01em，B 批字体阶梯），
         // 不再行内压到 13px——浮层主标题是全页面最高一级
         createElement('span', { className: 'bt-title' }, t('popoverTitle')),
+        createElement('span', {
+          className: 'bt-ver',
+          title: 'dsh-takeover 插件版本',
+          style: { fontSize: 10, fontWeight: 600, color: 'var(--bt-mut)', border: '1px solid var(--bt-line)', borderRadius: 999, padding: '1px 7px', fontFamily: 'ui-monospace, monospace' },
+        }, PANEL_VERSION),
         createElement('span', { style: { flex: 1 } }),
         createElement('button', {
           className: 'bt-btn bt-btn-xs',
