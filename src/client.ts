@@ -2290,36 +2290,24 @@ export function ComposerChip({ t, locale, navigate, sessionId }: {
   const [showHelp, setShowHelp] = useState(false)
   const chipRef = useRef<HTMLButtonElement | null>(null)
   const panelRef = useRef<HTMLDivElement | null>(null)
-  // 浮层定位（打开瞬间与视口变化时现算；CSS 无法知道 chip 在哪，必须量）
-  const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number; maxH: number; width: number } | null>(null)
+  // 浮层定位（0.4.3 起为视口居中模态）：不再锚定 chip——用户明确要「居中」，
+  // 且居中定位与宿主滚动完全解耦（不再需要捕获阶段滚动监听）。
+  // 只量两个数：宽度分档 + 可用高度（视口 - 上下 16px 边距）。
+  const [pos, setPos] = useState<{ maxH: number; width: number } | null>(null)
   const measure = (): void => {
-    const el = chipRef.current
-    if (el === null || typeof window === 'undefined' || typeof window.innerHeight !== 'number') return
-    const r = el.getBoundingClientRect()
-    if (typeof r.top !== 'number') return
+    if (typeof window === 'undefined' || typeof window.innerHeight !== 'number') return
     const vw = window.innerWidth
+    const vh = window.innerHeight
     // 宽度分档（视觉审查 P0-1）：大屏放大、中屏定宽、小屏贴边，不再焊死 1040
     const width = vw >= 1600 ? Math.min(1240, vw - 48) : vw >= 1200 ? Math.min(1040, vw - 48) : Math.max(360, Math.min(720, vw - 16))
-    // 以 chip 中心对齐再夹取进视口——chip 在宿主页里不居中，浮层也不歪
-    const left = Math.max(16, Math.min(vw - width - 16, r.left + r.width / 2 - width / 2))
-    const spaceAbove = r.top - 12
-    const spaceBelow = window.innerHeight - r.bottom - 12
-    // 上方放不下（<280px）且下方更宽裕时朝下弹，否则朝上（composer 常态）
-    if (spaceAbove < 280 && spaceBelow > spaceAbove) {
-      setPos({ left, top: r.bottom + 8, maxH: Math.max(240, spaceBelow), width })
-    } else {
-      setPos({ left, bottom: window.innerHeight - r.top + 8, maxH: Math.max(240, spaceAbove), width })
-    }
+    setPos({ width, maxH: Math.max(240, vh - 32) })
   }
   useEffect(() => {
     if (!open) return
     const onRe = (): void => { measure() }
     window.addEventListener('resize', onRe)
-    // 捕获阶段听滚动：宿主页面任何容器滚动都改 chip 视口位置，浮层跟随重算
-    window.addEventListener('scroll', onRe, true)
     return () => {
       window.removeEventListener('resize', onRe)
-      window.removeEventListener('scroll', onRe, true)
     }
   }, [open])
   return createElement('div', { style: { position: 'relative', display: 'inline-flex' } },
@@ -2361,12 +2349,15 @@ export function ComposerChip({ t, locale, navigate, sessionId }: {
         '--border': 'var(--dsw-alias-border-l2, rgba(127,127,127,.25))',
         position: 'fixed', zIndex: 9999,
         boxSizing: 'border-box', // maxHeight 必须含 padding+border，否则矮窗仍溢出视口（实测 583>568）
+        // 视口居中模态（inset:0 + margin:auto + fit-content：双轴居中，maxHeight
+        // 受尊重且与宿主滚动完全解耦——不再锚定 chip 位置）
+        inset: 0, margin: 'auto', height: 'fit-content',
         // 整体不滚（overflow hidden）：滚动责任下沉到 .bt-bounded/.bt-col——
         // 标题栏与横幅固定，双列各自内滚（窄容器退化为 .bt-cols 整体内滚）
         display: 'flex', flexDirection: 'column', overflow: 'hidden',
         ...(pos !== null
-          ? { left: pos.left, width: pos.width, maxHeight: pos.maxH, ...(pos.top !== undefined ? { top: pos.top } : { bottom: pos.bottom }) }
-          : { right: 8, bottom: 72, width: 'min(1040px, calc(100vw - 16px))', maxHeight: '70vh' }),
+          ? { width: pos.width, maxHeight: pos.maxH }
+          : { width: 'min(1040px, calc(100vw - 16px))', maxHeight: '70vh' }),
         background: 'var(--bg)',
         border: '1px solid var(--border)', borderRadius: 16,
         boxShadow: '0 16px 48px rgba(0,0,0,.5)', padding: '10px 14px 12px',

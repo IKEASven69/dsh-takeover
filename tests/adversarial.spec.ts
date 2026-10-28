@@ -849,3 +849,9 @@ test('收件箱高级化：未读强调条/统计胶囊/筛选行/滚动条样�
   assert.ok(!client.includes('font-variant-numeric: tabular-nums;\n  font-variant-numeric: tabular-nums;'),
     '重复声明残留')
 })
+
+test('0.4.3 居中模态：浮层 inset:0+margin:auto 居中，不再锚定 chip（left/bottom 定位已移除）', () => {
+  const client = readRepoFile('src/client.ts')
+  assert.ok(client.includes("inset: 0, margin: 'auto', height: 'fit-content'"), '浮层未改为视口居中模态')
+  assert.ok(!client.includes("bottom: window.innerHeight - r.top + 8"), 'chip 锚定定位残留')
+})
