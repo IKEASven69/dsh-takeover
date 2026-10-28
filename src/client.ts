@@ -148,6 +148,7 @@ function themeVars(): Record<string, string> {
   }
   return dark
     ? {
+        '--bt-a-text': '#a5b4fc',
         '--bt-mut': 'rgba(255,255,255,.62)',
         '--bt-ok': '#4ade80',
         '--bt-warn': '#fbbf24',
@@ -156,12 +157,13 @@ function themeVars(): Record<string, string> {
         // → 嵌套面（--bt-card，比卡再抬一档，预览块/输入框/会话行用）
         '--bt-card': 'rgba(255,255,255,.035)',
         '--bt-line': 'rgba(255,255,255,.08)',
-        '--bt-id': 'rgba(255,255,255,.48)',
+        '--bt-id': 'rgba(255,255,255,.58)',
         '--bt-hover': 'rgba(255,255,255,.10)',
         // 顶部 1px 内发光（描边浮现卡的内高光，随明暗轴换色）
         '--bt-inset': 'inset 0 1px 0 rgba(255,255,255,.06)',
       }
     : {
+        '--bt-a-text': '#4f46e5',
         '--bt-mut': 'rgba(30,41,59,.72)',
         '--bt-ok': '#15803d',
         '--bt-warn': '#b45309',
@@ -269,7 +271,7 @@ const CSS = `
    作用于容器后代，故退化规则挂在 .bt-cols 上而非 .bt-bounded 本身 */
 .bt-bounded { flex: 1 1 auto; min-height: 0; overflow: hidden; }
 .bt-bounded .bt-col { overflow-y: auto; min-height: 0;
-  scrollbar-width: thin; scrollbar-color: var(--bt-line) transparent; }
+  scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.18) transparent; }
 .bt-bounded .bt-col::-webkit-scrollbar { width: 8px; }
 .bt-bounded .bt-col::-webkit-scrollbar-thumb { background: var(--bt-line); border-radius: 999px; }
 .bt-bounded .bt-col::-webkit-scrollbar-track { background: transparent; }
@@ -284,7 +286,13 @@ const CSS = `
 .bt-newonly { display: inline-flex; align-items: center; gap: 6px; width: fit-content;
   font-size: 12px; color: var(--bt-mut); cursor: pointer; user-select: none; margin: 0; }
 .bt-newonly:hover { color: var(--bt-a); }
-.bt-newonly input { accent-color: var(--bt-a); cursor: pointer; margin: 0; }
+.bt-newonly input { appearance: none; width: 14px; height: 14px; border-radius: 4px;
+  border: 1px solid var(--bt-line); background: var(--bt-card); cursor: pointer; margin: 0;
+  display: grid; place-content: center; transition: border-color var(--bt-dur) var(--bt-ease); }
+.bt-newonly input::after { content: ''; width: 8px; height: 8px; transform: scale(0);
+  background: var(--bt-a); border-radius: 2px; transition: transform var(--bt-dur) var(--bt-ease); }
+.bt-newonly input:checked { border-color: var(--bt-a); }
+.bt-newonly input:checked::after { transform: scale(1); }
 /* 导出▾菜单：工具行右侧锚定的小浮层 */
 .bt-export-wrap { position: relative; display: inline-flex; }
 .bt-export-mask { position: fixed; inset: 0; z-index: 30; background: transparent; }
@@ -323,7 +331,7 @@ const CSS = `
   border: 1px solid transparent; border-radius: 999px; padding: 3px 10px;
   font-variant-numeric: tabular-nums; white-space: nowrap;
   transition: background var(--bt-dur) var(--bt-ease), border-color var(--bt-dur) var(--bt-ease); }
-.bt-stat-hot { color: var(--bt-a); background: rgba(99,102,241,.12); border-color: rgba(99,102,241,.35); font-weight: 600; }
+.bt-stat-hot { color: var(--bt-a-text); background: rgba(99,102,241,.12); border-color: rgba(99,102,241,.35); font-weight: 600; }
 .bt-stat-warn { color: var(--bt-warn); background: rgba(251,191,36,.12); border-color: rgba(251,191,36,.4); }
 .bt-btn { cursor: pointer; border-radius: 10px; font-size: 12px; font-weight: 500; padding: 6px 16px;
   border: 1px solid var(--bt-line); background: transparent; color: inherit; white-space: nowrap;
@@ -342,7 +350,7 @@ const CSS = `
    预览两级，行层不参与——30s 轮询整表刷新的长列表不成卡海。行入场无动画
    （刷新不闪），动效只挂在 hover/状态变化上（token：--bt-ease/--bt-dur） */
 .bt-rows { display: flex; flex-direction: column; gap: 4px; }
-.bt-pending { display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: flex-start;
+.bt-pending { line-height: 1.45; display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: flex-start;
   border-radius: 12px; padding: 10px 12px; font-size: 12px;
   border: 1px solid transparent; position: relative; box-shadow: var(--bt-inset);
   cursor: pointer; transition: background var(--bt-dur) var(--bt-ease), border-color var(--bt-dur) var(--bt-ease); }
@@ -359,7 +367,7 @@ const CSS = `
 .bt-pend-icon { flex: none; margin-top: 1px; }
 .bt-pend-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .bt-pend-line1 { display: flex; align-items: baseline; gap: 8px; }
-.bt-pending-title { flex: 1; min-width: 0; font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bt-pending-title { flex: 1; min-width: 0; font-weight: 600; font-size: 13px; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bt-pend-time { flex: none; font-size: 11px; color: var(--bt-mut); font-variant-numeric: tabular-nums; }
 .bt-pending-chev { flex: none; font-size: 10px; color: var(--bt-mut); align-self: flex-start; margin-top: 3px; transition: transform var(--bt-dur) var(--bt-ease); }
 .bt-pending-open .bt-pending-chev { transform: rotate(90deg); }
@@ -404,7 +412,7 @@ const CSS = `
   transition: opacity var(--bt-dur) var(--bt-ease), border-color var(--bt-dur) var(--bt-ease), background var(--bt-dur) var(--bt-ease); }
 .bt-cmd:hover { border-color: var(--bt-line); background: var(--bt-hover); }
 .bt-cmd-key { font-family: ui-monospace, monospace; font-size: 11px; font-weight: 600; flex: none; }
-.bt-cmd-key-primary { color: var(--bt-a); }
+.bt-cmd-key-primary { color: var(--bt-a-text); }
 .bt-cmd-desc { color: var(--bt-mut); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bt-cmd .bt-icon { width: 16px; height: 16px; flex: none; border-radius: 5px; }
 .bt-cmd-off { opacity: .42; }
@@ -456,7 +464,7 @@ const CSS = `
   font-variant-numeric: tabular-nums;
   transition: border-color var(--bt-dur) var(--bt-ease), color var(--bt-dur) var(--bt-ease), background var(--bt-dur) var(--bt-ease); }
 .bt-chip:hover { border-color: var(--bt-a); color: var(--bt-a); }
-.bt-chip-on { color: var(--bt-a); background: rgba(99,102,241,.12);
+.bt-chip-on { color: var(--bt-a-text); background: rgba(99,102,241,.12);
   border-color: rgba(99,102,241,.45); font-weight: 600; }
 .bt-chip-count { font-size: 10px; opacity: .75; }
 /* chips 内品牌图标（来源筛选 / 接收方选择 / 外部会话浏览器 pills 同款） */
@@ -465,7 +473,7 @@ const CSS = `
  * 蒸馏都在会话里由模型完成（卡片质量跟模型能力走）。
  * 样式：主操作「接管」有主按钮权重；动作按钮定宽防状态文案切换跳动；
  * chips 与按钮补键盘焦点环。 */
-.bt-btn-primary { color: var(--bt-a); border-color: rgba(99,102,241,.45); background: rgba(99,102,241,.12); font-weight: 600; }
+.bt-btn-primary { color: var(--bt-a-text); border-color: rgba(99,102,241,.45); background: rgba(99,102,241,.12); font-weight: 600; }
 .bt-btn-primary:not(:disabled):hover { background: var(--bt-a); border-color: var(--bt-a); color: #fff; transform: translateY(-1px); }
 .bt-fsess-act .bt-btn-xs { min-width: 5.5em; }
 .bt-chip:focus-visible, .bt-btn:focus-visible { outline: 2px solid var(--bt-a); outline-offset: 2px; }
@@ -2347,6 +2355,12 @@ export function ComposerChip({ t, locale, navigate, sessionId }: {
         // 宿主输入卡变量，暗亮主题随宿主。
         '--bg': 'var(--dsw-specific-input-major, #171717)',
         '--border': 'var(--dsw-alias-border-l2, rgba(127,127,127,.25))',
+        // 壳层直接挂主题变量：顶栏按钮在 .bt-panel 的 <style> 作用域之外，
+        // 不挂的话 var(--bt-a/--bt-line/--bt-hover) 解析为空，hover 样式整条丢弃（实测）
+        '--bt-a': 'var(--accent, #6366f1)',
+        '--bt-line': 'var(--dsw-alias-border-l2, rgba(127,127,127,.25))',
+        '--bt-hover': 'rgba(255,255,255,.10)',
+        '--bt-inset': 'inset 0 1px 0 rgba(255,255,255,.06)',
         position: 'fixed', zIndex: 9999,
         boxSizing: 'border-box', // maxHeight 必须含 padding+border，否则矮窗仍溢出视口（实测 583>568）
         // 视口居中模态（inset:0 + margin:auto + fit-content：双轴居中，maxHeight
