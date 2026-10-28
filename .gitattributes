@@ -1,0 +1,4 @@
+# Byte-frozen corpora and goldens: golden tests compare byte-for-byte.
+# A CRLF checkout (core.autocrlf=true on Windows) breaks them — pin line endings.
+tests/fixtures/** text eol=lf
+tests/golden/** text eol=lf
