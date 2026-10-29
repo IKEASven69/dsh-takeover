@@ -1,6 +1,9 @@
 import { Context } from "@deepseek-ai/cordis";
 import { Agent } from "@deepseek-ai/dsh-agent";
 import { SkillRegistration } from "@deepseek-ai/dsh-skill";
+//#region src/signing.d.ts
+type SigVerdict = 'ok' | 'tampered' | 'unsigned' | 'no-key';
+//#endregion
 //#region node_modules/.pnpm/@agent-handoff+core@file+vendor+@agent-handoff+core/node_modules/@agent-handoff/core/dist/index.d.mts
 /** 六段正文 + 可选「建议加载」段 */
 interface CardSections {
@@ -174,6 +177,8 @@ type InboxLoadResult = {
     source: string;
     local: string;
   };
+  /** 信封验签结论：unsigned=无签名（旧卡/外写卡），no-key=有签名但本机无对应密钥 */
+  sig?: SigVerdict;
 } | {
   ok: false;
   error: string;
@@ -512,6 +517,14 @@ export declare function buildState(readers: ForeignReaders, dir?: string): Takeo
  * *.md 目录等异常项：跳过不删（应用层删不动，留给人工），单删失败也继续清其余——
  * 此前一个 *.md 目录就让整个清空操作抛 EISDIR，违背「绝不抛出」且永远 500。 */
 export declare function clearArchived(dir?: string): number;
+/** 忽略一张待取件卡：卡与信封原样移入 archived/（保留审计轨迹，不计为取件消费）。
+ *  pending 只能被消费、没有退出出口，共享总线用久必攒垃圾（2026-10-29 实测 6 张
+ *  测试残留卡无处可去）——这是那条出口。找不到/已被取走回规范错误值。 */
+export declare function dismissPending(id: string, dir?: string): {
+  ok: boolean;
+  moved?: number;
+  error?: string;
+};
 //#endregion
 //#region src/browser-view.d.ts
 /**

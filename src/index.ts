@@ -53,6 +53,7 @@ export type {
 export {
   buildState,
   clearArchived,
+  dismissPending,
   isProviderEnabled,
   loadSwitches,
   saveSwitches,

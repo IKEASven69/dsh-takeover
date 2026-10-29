@@ -986,7 +986,7 @@ ${matrixRows}
 // 展示件
 // ---------------------------------------------------------------------------
 
-export function PendingList({ rows, query, home, t, lang, onExport, onChainFilter, onTakeInbox, takeBusyId }: {
+export function PendingList({ rows, query, home, t, lang, onExport, onChainFilter, onTakeInbox, takeBusyId, onDismiss, dismissBusyId }: {
   rows: PendingRow[]
   query: string
   /** 解析后的 HANDOFF_HOME（state.home）：已见集合 localStorage 键的散列源 */
@@ -1001,6 +1001,10 @@ export function PendingList({ rows, query, home, t, lang, onExport, onChainFilte
   onTakeInbox: (p: PendingRow) => void
   /** 正在投递的卡 id（按行显示投递中，其余行仅 disabled） */
   takeBusyId: string | null
+  /** 忽略这张卡（原样移入 archived/，审计保留不计消费） */
+  onDismiss: (p: PendingRow) => void
+  /** 正在忽略的卡 id（按行显示忽略中） */
+  dismissBusyId: string | null
 }): ReturnType<typeof createElement> {
   // 已见集合：localStorage 按 HANDOFF_HOME 散列分键；打开过（展开过）即记为已见。
   // 存储不可写时退化为仅本会话记住（loadSeenSet/saveSeenSet 全程不抛）。
@@ -1193,6 +1197,12 @@ export function PendingList({ rows, query, home, t, lang, onExport, onChainFilte
             onClick: () => { onExport(p) },
             title: t('exportCardTitle'),
           }, t('exportCard')),
+          createElement('button', {
+            className: 'bt-btn',
+            disabled: dismissBusyId !== null,
+            onClick: () => { onDismiss(p) },
+            title: t('dismissTitle'),
+          }, dismissBusyId === p.id ? t('dismissingBtn') : t('dismissBtn')),
         ),
       ) : null,
     )
@@ -2190,6 +2200,21 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
       .catch((e: unknown) => { setError(e instanceof Error ? e.message : String(e)) })
       .finally(() => { setClearBusy(false) })
   }
+  // 忽略一张待取件卡：原样移入 archived/（审计保留，不计消费）——pending 唯一的退出出口
+  const [dismissBusyId, setDismissBusyId] = useState<string | null>(null)
+  const dismiss = (p: PendingRow): void => {
+    if (dismissBusyId !== null) return
+    setDismissBusyId(p.id)
+    void post<{ ok: true; moved: number } | { ok: false; error: string }>('/dsh-takeover/dismiss-pending', { id: p.id })
+      .then((r) => {
+        if (!r.ok) throw new Error(r.error)
+        showNotice(t('dismissedNotice', { id: p.id }))
+        reload()
+        return undefined
+      })
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setDismissBusyId(null))
+  }
   const archivedCount = state?.archivedCount ?? 0
   // host 侧并行字段（0.3.2 预留位）：state 缺席或字段未落地 → null，行/徽标整体不渲染
   const envelopeChars = state !== null ? envelopeCharsOf(state) : null
@@ -2371,6 +2396,8 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
             onChainFilter: (id: string) => { setQuery(id) },
             onTakeInbox: takeInbox,
             takeBusyId,
+            onDismiss: dismiss,
+            dismissBusyId,
           })
         // state 未到位：3 条骨架条占位（E 批）——比「加载」纯文字更接近成卡后的版面
         : createElement('div', { style: { display: 'grid', gap: 8, padding: '4px 0' } },

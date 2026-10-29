@@ -6,6 +6,7 @@
  *   POST /dsh-takeover/takeover        一键接管/取件 {mode, provider?, reference?}——宿主会话控制器建新会话并投递指令
  *   POST /dsh-takeover/provider        切 provider 开关 {provider, enabled}
  *   POST /dsh-takeover/clear-archived  清空 archived/
+ *   POST /dsh-takeover/dismiss-pending 忽略一张待取件卡 {id}——原样移入 archived/（审计轨迹保留，不计消费）
  * POST 一律过同源守卫；响应 { ok, ... } 规范值，失败不抛异常。
  * @module dsh-takeover/server
  */
@@ -20,7 +21,7 @@ import { defaultForeignReaders, foreignResolveOne, foreignSessionPreview, foreig
 import { depositCommand, outboundCommand, OUTBOUND_LABELS, takeoverCommand, type Lang, type SessionRowLike } from './browser-view.ts'
 import { writeRelayProvenance } from './relay-records.ts'
 import { pushMemoryCard, scanMemorySources } from './memory.ts'
-import { buildState, clearArchived, isProviderEnabled, setProviderEnabled } from './settings.ts'
+import { buildState, clearArchived, dismissPending, isProviderEnabled, setProviderEnabled } from './settings.ts'
 
 function sendJson(response: ServerResponse, code: number, body: unknown): void {
   response.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
@@ -603,7 +604,31 @@ export function registerTakeoverRoutes(
           return
         }
 
-        sendJson(response, 404, { error: `未知路由：/dsh-takeover/${sub}（支持 state / sessions / session-preview / takeover / provider / clear-archived）` })
+        if (sub === 'dismiss-pending') {
+          if (request.method !== 'POST') {
+            response.writeHead(405, { allow: 'POST' })
+            response.end()
+            return
+          }
+          if (!sameOrigin(request)) {
+            sendJson(response, 403, { error: '仅接受同源请求' })
+            return
+          }
+          void readJsonBody(request).then(
+            (body) => {
+              try {
+                const r = dismissPending(String(body['id'] ?? ''))
+                sendJson(response, r.ok ? 200 : 400, r)
+              } catch (e) {
+                sendJson(response, 500, { ok: false, error: e instanceof Error ? e.message : String(e) })
+              }
+            },
+            (error: unknown) => { sendJson(response, 400, { ok: false, error: error instanceof Error ? error.message : String(error) }) },
+          )
+          return
+        }
+
+        sendJson(response, 404, { error: `未知路由：/dsh-takeover/${sub}（支持 state / sessions / session-preview / takeover / provider / clear-archived / dismiss-pending）` })
       },
     }))
   })

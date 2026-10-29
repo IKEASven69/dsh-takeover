@@ -7,11 +7,13 @@
  * @module dsh-takeover/tools
  */
 
+import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { hostname } from 'node:os'
 import { isLowInfoCardMarkdown } from './lowinfo.ts'
 import { scanSecrets } from './secretscan.ts'
 import { recordLifecycleEvent } from './lifecycle.ts'
+import { loadOrCreateSigningKey, signEnvelope, verifyEnvelopeSig, type SigVerdict } from './signing.ts'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -170,6 +172,8 @@ export interface HandoffEnvelope {
   test?: { command: string }
   /** 本卡接替的前置卡 id */
   supersedes?: string
+  /** 卡片 .md 文件字节哈希（sha256 hex）——签名面覆盖到卡本体：取侧回读比对，非持钥篡改卡面可检出 */
+  cardSha256?: string
 }
 
 /**
@@ -219,6 +223,8 @@ export interface EnvelopeExtra {
   test?: { command: string }
   /** 本卡接替的前置卡 id（接力链） */
   supersedes?: string
+  /** 卡片 .md 文件字节哈希（sha256 hex，落卡后回读计算）——进签名面 */
+  cardSha256?: string
 }
 
 export interface EnvelopeSource {
@@ -258,12 +264,22 @@ export function buildEnvelope(card: EnvelopeSource, extra?: EnvelopeExtra): Hand
     ...(extra?.host ? { host: extra.host } : {}),
     ...(extra?.test ? { test: extra.test } : {}),
     ...(extra?.supersedes ? { supersedes: extra.supersedes } : {}),
+    ...(extra?.cardSha256 ? { cardSha256: extra.cardSha256 } : {}),
   }
 }
 
 /** 信封落盘路径（与卡片同屋 pending/，取件时同步消费） */
 export function envelopePath(id: string, dir?: string): string {
   return join(pendingDir(dir), `${id}.envelope.json`)
+}
+
+/** 卡片 .md 文件的 sha256（hex）；读不了回 undefined——签名是尽力而为，缺哈希不阻断 */
+function fileSha256(path: string): string | undefined {
+  try {
+    return createHash('sha256').update(readFileSync(path)).digest('hex')
+  } catch {
+    return undefined
+  }
 }
 
 /**
@@ -341,6 +357,7 @@ export function renderInbox(_args: unknown, value: unknown): Array<{ type: 'text
     unavailable?: string
     coverage?: unknown
     envelopeChars?: number
+    sig?: SigVerdict
     patchPath?: string
     patchBytes?: number
     testCommand?: string
@@ -380,6 +397,13 @@ export function renderInbox(_args: unknown, value: unknown): Array<{ type: 'text
   if (coverageLine !== null) lines.push('', coverageLine)
   if (typeof v.envelopeChars === 'number' && v.envelopeChars >= 0) {
     lines.push('', `机器信封已随卡归档（${v.envelopeChars} chars）`)
+  }
+  if (v.sig === 'ok') {
+    lines.push('🔐 信封签名校验通过（HMAC-SHA256）——六段内容与补丁元信息自写侧落卡后未被更动')
+  } else if (v.sig === 'tampered') {
+    lines.push('🚨 信封签名校验失败：信封内容与写侧签名不符——可能被越权改写或传输损坏。卡片按最高怀疑处理：关键陈述逐条对 git 当面核实后再动手。')
+  } else if (v.sig === 'no-key') {
+    lines.push('🔐 信封带签名但本机总线无对应密钥（跨信任域取件），未验签。')
   }
   if (v.mismatches !== undefined && v.mismatches.length > 0) {
     lines.push('', '⚠️ git 核验冲突（MISMATCH）：', ...v.mismatches.map((m) => `- ${m}`))
@@ -640,7 +664,14 @@ ${honest}`
         ...testHint(cwd),
         ...(typeof args.supersedes === 'string' && args.supersedes.trim() !== '' ? { supersedes: args.supersedes.trim() } : {}),
       }
-      writeFileSync(envelopePath(card.id, opts?.dir), JSON.stringify(buildEnvelope(card, extra)), 'utf-8')
+      // 尽力签名：密钥生成/读取失败回 null，信封照常落盘（无 sig 字段 = 旧卡兼容形态）。
+      // 签名面含卡本体：落卡回读算 sha256 一起签——取侧回读比对，非持钥改卡面也抓得到。
+      const key = loadOrCreateSigningKey(opts?.dir)
+      const env = buildEnvelope(card, {
+        ...extra,
+        cardSha256: fileSha256(join(pendingDir(opts?.dir), `${card.id}.md`)),
+      })
+      writeFileSync(envelopePath(card.id, opts?.dir), JSON.stringify(key === null ? env : signEnvelope(env as unknown as Record<string, unknown>, key)), 'utf-8')
     } catch (e) {
       envelopeNote = `机器信封落盘失败（卡片本体已寄存）：${readableError(e)}`
     }
@@ -721,6 +752,8 @@ export type InboxLoadResult =
       supersedes?: string
       /** 跨 OS 接手：源卡 OS 与本机不同（路径体系需人工映射） */
       crossOS?: { source: string; local: string }
+      /** 信封验签结论：unsigned=无签名（旧卡/外写卡），no-key=有签名但本机无对应密钥 */
+      sig?: SigVerdict
     }
   | { ok: false; error: string }
 
@@ -733,6 +766,8 @@ export function inboxLoad(id: string, opts?: { dir?: string }): InboxLoadResult 
     return { ok: false, error: `非法卡片 id（长度 ${trimmed.length} 超上限 ${MAX_ID_CHARS}）：${trimmed.slice(0, 48)}…` }
   }
   try {
+    // 卡面哈希要在 loadCard 搬走 .md 之前取（load 后文件在 archived/，内容相同但口径以取件瞬间为准）
+    const cardShaBeforeLoad = fileSha256(join(pendingDir(opts?.dir), `${trimmed}.md`))
     const card = loadCard(trimmed, opts?.dir)
     const check = verifyGit(card)
     // 机器信封随卡消费：core 的 loadCard 只搬 .md，信封生命周期归本插件管
@@ -742,12 +777,20 @@ export function inboxLoad(id: string, opts?: { dir?: string }): InboxLoadResult 
     // 物质层随卡：补丁 sidecar 与 .md 同步搬去 archived/
     const patchArchived = consumePatch(trimmed, opts?.dir)
     const coverage = coverageFromExtras(card.extras)
+    // 信封验签：sig 缺席（旧卡/外写卡）不算异常；mac 不合或卡面哈希与签名面不符 = 篡改/损坏，进警告 + 死亡地图
+    const sigVerdict: SigVerdict = envelope?.data !== undefined
+      ? verifyEnvelopeSig(envelope.data, opts?.dir, cardShaBeforeLoad)
+      : 'unsigned'
+    if (sigVerdict === 'tampered') {
+      recordLifecycleEvent({ stage: 'pickup', reason: 'sig_tampered', target: card.id, detail: '信封 HMAC 验签失败' }, opts?.dir)
+    }
     const out: InboxLoadResult = {
       ok: true,
       action: 'load',
       id: card.id,
       text: renderCard(card),
       mismatches: check.mismatches,
+      ...(sigVerdict !== 'unsigned' ? { sig: sigVerdict } : {}),
     }
     if (check.unavailable !== undefined) out.unavailable = check.unavailable
     // 死亡地图：取侧核验异常进生命周期事件层（MISMATCH 与 UNAVAILABLE 都算「卡面与仓库现实脱节」）

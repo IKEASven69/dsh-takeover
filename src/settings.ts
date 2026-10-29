@@ -345,3 +345,31 @@ export function clearArchived(dir?: string): number {
   }
   return cleared
 }
+
+/** 忽略一张待取件卡：卡与信封原样移入 archived/（保留审计轨迹，不计为取件消费）。
+ *  pending 只能被消费、没有退出出口，共享总线用久必攒垃圾（2026-10-29 实测 6 张
+ *  测试残留卡无处可去）——这是那条出口。找不到/已被取走回规范错误值。 */
+export function dismissPending(id: string, dir?: string): { ok: boolean; moved?: number; error?: string } {
+  const safe = String(id ?? '').trim().replace(/[\\/]/g, '')
+  if (safe === '') return { ok: false, error: 'id 不能为空' }
+  const home = resolveHome(dir)
+  // archived/ 可能尚不存在（全新总线只有 pending/——push 不建 archived）：先补目录
+  try {
+    mkdirSync(join(home, 'archived'), { recursive: true })
+  } catch (e) {
+    return { ok: false, error: `archived 目录创建失败（${e instanceof Error ? e.message : String(e)}）` }
+  }
+  let moved = 0
+  for (const ext of ['.md', '.envelope.json'] as const) {
+    const src = join(home, 'pending', safe + ext)
+    if (!existsSync(src)) continue
+    try {
+      renameSync(src, join(home, 'archived', safe + ext))
+      moved += 1
+    } catch (e) {
+      return { ok: false, error: `移动失败：${safe}${ext}（${e instanceof Error ? e.message : String(e)}）` }
+    }
+  }
+  if (moved === 0) return { ok: false, error: `pending 里没有这张卡：${safe}（可能已被取件）` }
+  return { ok: true, moved }
+}

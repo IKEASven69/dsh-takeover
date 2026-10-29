@@ -31,6 +31,7 @@ export const LIFECYCLE_REASONS = [
   'parse_error', // 读侧：frontmatter/正文解析失败
   'drift_mismatch', // 取侧：git 核验 MISMATCH
   'git_unavailable', // 取侧：git 核验不可用（非仓/无 git）
+  'sig_tampered', // 取侧：信封 HMAC 验签失败（内容与写侧签名不符）
   'unknown',
 ] as const
 export type LifecycleReason = (typeof LIFECYCLE_REASONS)[number]

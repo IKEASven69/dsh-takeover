@@ -230,7 +230,7 @@ test('push：envelope 文件存在、JSON 可解析、结构字段正确', () =>
 
     const env = JSON.parse(readFileSync(p, 'utf-8')) as Record<string, unknown>
     assert.deepEqual(Object.keys(env).sort(), [
-      'done', 'files', 'from', 'goal', 'handoff', 'host', 'id', 'kind', 'remaining', 'stopped', 'warnings',
+      'cardSha256', 'done', 'files', 'from', 'goal', 'handoff', 'host', 'id', 'kind', 'remaining', 'sig', 'stopped', 'warnings',
     ])
     const host = env.host as { hostname?: string; platform?: string }
     assert.equal(typeof host.hostname, 'string')

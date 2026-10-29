@@ -14,7 +14,8 @@
  *   第五幕  浏览器面：运行中宿主的 /dsh-takeover/state 收件箱概览可见新卡（不可达则跳过）
  *
  * 纪律：只用真实本机会话存储（opencode opencode.db / zcode db.sqlite）；
- *       收件箱用真实 ~/.handoff/，但只取件本脚本自己推的卡，绝不碰既有待取件。
+ *       收件箱默认隔离（HANDOFF_HOME，见下方总线隔离守卫）；--allow-real-bus
+ *       才落真实 ~/.handoff/，且只取件本脚本自己推的卡，绝不碰既有待取件。
  *
  * 用法：node scripts/smoke-userflow.mjs
  */
@@ -28,6 +29,20 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
+import { resolve } from 'node:path'
+
+// ── 总线隔离守卫 ──────────────────────────────────────────────────────────
+// 本脚本会真实寄存交接卡。落真实 ~/.handoff 的事故面（中途中断留下残留卡、
+// 与用户真实待取件混淆）2026-10-28 实测发生过——守卫强制二选一：
+// 设 HANDOFF_HOME 指向隔离目录，或 --allow-real-bus 明确接受真实总线。
+const allowRealBus = process.argv.includes('--allow-real-bus')
+const envHome = process.env.HANDOFF_HOME
+if (!allowRealBus && (!envHome || resolve(envHome) === resolve(join(homedir(), '.handoff')))) {
+  console.error('🛑 总线隔离守卫：本脚本会真实寄存交接卡，默认拒绝落真实 ~/.handoff。')
+  console.error('   二选一：HANDOFF_HOME=<隔离目录> node scripts/smoke-userflow.mjs')
+  console.error('   或明确接受真实总线（会留卡）：node scripts/smoke-userflow.mjs --allow-real-bus')
+  process.exit(1)
+}
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const takeover = await import(pathToFileURL(join(ROOT, 'lib', 'index.js')).href)
