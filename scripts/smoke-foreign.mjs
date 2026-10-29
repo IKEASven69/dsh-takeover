@@ -70,8 +70,10 @@ console.log(listText.slice(0, 600))
 
 // show 目标运行时发现：取 list 首条的真实 id 前 12 位做前缀引用。
 // 不把任何本机会话 id 写进仓库（仓库公开）——换机器跑照样成立。
+// id 形态随会话来源多样（sess_<hex>、session_<hex>、工作流子代理会话 sess_dwf-…-actor_1_1
+// 含下划线与非 hex 字符）——列表行以「｜id: <id>」收尾，捕获整段非空白 token 即可。
 const firstId = (() => {
-  const m = /id: (sess_[0-9a-f-]{8,})/.exec(listText)
+  const m = /｜id: (\S+)/.exec(listText)
   return m ? m[1].slice(0, 16) : null
 })()
 
