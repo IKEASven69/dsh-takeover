@@ -278,7 +278,17 @@ const CSS = `
    窄容器（auto-fit 退化为单列，<976px）整体退回 .bt-cols 内滚——@container 只能
    作用于容器后代，故退化规则挂在 .bt-cols 上而非 .bt-bounded 本身 */
 .bt-bounded { flex: 1 1 auto; min-height: 0; overflow: hidden; }
-.bt-bounded .bt-col { overflow-y: auto; min-height: 0;
+.bt-bounded .bt-col { overflow-y: auto; min-height: 0; min-width: 0;
+/* 右栏分段动作卡（0.4.3）：三窗格单卡 + 分段器——同维度控件不再三卡同屏 */
+.bt-seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: 10px;
+  background: rgba(127,127,127,.08); border: 1px solid var(--bt-line); }
+.bt-segbtn { border: none; background: transparent; border-radius: 8px;
+  padding: 4px 12px; font-size: 12px; font-weight: 500; color: var(--bt-mut);
+  cursor: pointer; font-family: inherit; }
+.bt-segbtn[aria-selected="true"] { background: var(--bt-card); color: var(--bt-a-text);
+  font-weight: 600; box-shadow: inset 0 0 0 1px var(--bt-line); }
+.bt-tabpane { min-width: 0; }
+.bt-bare { min-width: 0; }
   scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.18) transparent; }
 .bt-bounded .bt-col::-webkit-scrollbar { width: 8px; }
 .bt-bounded .bt-col::-webkit-scrollbar-thumb { background: var(--bt-line); border-radius: 999px; }
@@ -483,12 +493,12 @@ const CSS = `
  * chips 与按钮补键盘焦点环。 */
 .bt-btn-primary { color: var(--bt-a-text); border-color: rgba(99,102,241,.45); background: rgba(99,102,241,.12); font-weight: 600; }
 .bt-btn-primary:not(:disabled):hover { background: var(--bt-a); border-color: var(--bt-a); color: #fff; transform: translateY(-1px); }
-.bt-fsess-act .bt-btn-xs { min-width: 5.5em; }
+.bt-fsess-act .bt-btn-xs { min-width: 4.5em; }
 .bt-chip:focus-visible, .bt-btn:focus-visible { outline: 2px solid var(--bt-a); outline-offset: 2px; }
 .bt-chip-off { opacity: .4; }
 .bt-chip-off:hover { border-color: var(--bt-line); color: var(--bt-mut); }
 .bt-btn-xs { font-size: 11px; padding: 2px 8px; border-radius: 8px; }
-.bt-fsess { border: 1px solid var(--bt-line); border-radius: 10px; padding: 7px 10px; margin-bottom: 6px; background: var(--bt-card); }
+.bt-fsess { min-width: 0; border: 1px solid var(--bt-line); border-radius: 10px; padding: 7px 10px; margin-bottom: 6px; background: var(--bt-card); }
 .bt-fsess-line1 { display: flex; gap: 8px; align-items: baseline; }
 .bt-fsess-title { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; cursor: pointer; border-radius: 4px; }
@@ -1344,12 +1354,14 @@ export function PickupGuide({ target, lang, t }: { target: OutboundTarget; lang:
 /** 交接出去卡：当前会话 → 共享收件箱 → 对面接手。
  * 一键把寄存指令 queue 进本会话（sessionId 由宿主座位注入）；
  * 老宿主拿不到 sessionId 时自动退回复制路径（粘进输入框效果相同）。 */
-export function SendCard({ sessionId, t, lang, onError, onNotice }: {
+export function SendCard({ sessionId, t, lang, onError, onNotice, bare }: {
   sessionId?: string
   t: Translate
   lang: Lang
   onError: (msg: string) => void
   onNotice: (msg: string) => void
+  /** bare=true：无卡片壳/无标题/无说明——嵌入分段动作卡的窗格用 */
+  bare?: boolean
 }): ReturnType<typeof createElement> {
   const [target, setTarget] = useState<OutboundTarget>('any')
   const [busy, setBusy] = useState(false)
@@ -1396,11 +1408,11 @@ export function SendCard({ sessionId, t, lang, onError, onNotice }: {
       .finally(() => setBusy(false))
   }
 
-  return createElement('div', { className: 'bt-card' },
-    createElement('div', { className: 'bt-head' },
+  return createElement('div', { className: bare === true ? 'bt-bare' : 'bt-card' },
+    bare === true ? null : createElement('div', { className: 'bt-head' },
       createElement('span', { className: 'bt-title-sec' }, t('sendTitle')),
     ),
-    createElement('div', { className: 'bt-sub' }, sessionId !== undefined && sessionId !== '' ? t('sendHint') : t('sendHintCopy')),
+    bare === true ? null : createElement('div', { className: 'bt-sub' }, sessionId !== undefined && sessionId !== '' ? t('sendHint') : t('sendHintCopy')),
     createElement('div', { className: 'bt-sub', style: { marginTop: 6, fontWeight: 600 } }, t('targetGroupLabel')),
     createElement(TargetChips, { sel: target, lang, onSelect: setTarget, ariaLabel: t('targetGroupLabel') }),
     createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 } },
@@ -1425,7 +1437,7 @@ export function SendCard({ sessionId, t, lang, onError, onNotice }: {
 
 /** 记忆快照卡：扫描本机各 agent 的记忆文件，勾选打包成一张交接卡进收件箱。
  * 会话能交接，记忆也能——取件方按卡「建议加载」吸收进自己的记忆文件。 */
-export function MemoryCard({ t, lang, onError, onNotice, onPushed, defaultOpen }: {
+export function MemoryCard({ t, lang, onError, onNotice, onPushed, defaultOpen, active, bare }: {
   t: Translate
   lang: Lang
   onError: (msg: string) => void
@@ -1434,8 +1446,12 @@ export function MemoryCard({ t, lang, onError, onNotice, onPushed, defaultOpen }
   onPushed: () => void
   /** 初始展开（默认收起；展开即扫描一次） */
   defaultOpen?: boolean
+  /** 分段窗格激活（bare 模式下据此自动扫描） */
+  active?: boolean
+  /** bare=true：无折叠壳/标题/说明——嵌入分段动作卡窗格用 */
+  bare?: boolean
 }): ReturnType<typeof createElement> {
-  const [open, setOpen] = useState(defaultOpen === true)
+  const [open, setOpen] = useState(defaultOpen === true || bare === true)
   const [scanned, setScanned] = useState(false)
   const [rows, setRows] = useState<MemorySourceRow[] | null>(null)
   const [picked, setPicked] = useState<Set<string>>(new Set())
@@ -1453,9 +1469,9 @@ export function MemoryCard({ t, lang, onError, onNotice, onPushed, defaultOpen }
       .catch((e: unknown) => onError(e instanceof Error ? e.message : String(e)))
   }
 
-  // 展开即扫描（onToggle 与初始 defaultOpen 两条路都汇到这里；scanned 防重）
+  // 展开即扫描（onToggle / defaultOpen / 分段窗格激活三条路都汇到这里；scanned 防重）
   useEffect(() => {
-    if (open && !scanned) scan()
+    if ((open || (bare === true && active === true)) && !scanned) scan()
     // eslint-disable-next-line react-hooks/exhaustive-deps -- scan 只闭包 setState，挂载期稳定
   }, [open, scanned])
 
@@ -1487,6 +1503,51 @@ export function MemoryCard({ t, lang, onError, onNotice, onPushed, defaultOpen }
   // 只报个数保持「扫过哪些」的透明度
   const missing = rows?.filter((r) => !r.exists).length ?? 0
 
+  if (bare === true) {
+    // bare（分段窗格）：无折叠壳——标题/说明由窗格外的分段器承担，内容直出
+    return createElement('div', { className: 'bt-bare' },
+      createElement('div', { className: 'bt-sub', style: { margin: '2px 0 8px' } },
+        rows === null
+          ? createElement('span', { className: 'bt-sub bt-fs-empty' }, scanned ? t('memoryScanning') : '')
+          : null),
+      rows === null
+        ? null
+        : existing.length === 0
+          ? createElement('div', { className: 'bt-sub bt-fs-empty' }, t('memoryNone'))
+          : [
+              createElement('div', { key: 'rows', style: { display: 'grid', gap: 4, marginTop: 4 } },
+                ...existing.map((r) => createElement('label', {
+                  key: r.key,
+                  style: {
+                    display: 'flex', gap: 8, alignItems: 'center', fontSize: 12,
+                    cursor: 'pointer',
+                  },
+                  title: r.preview !== '' ? r.preview : r.path,
+                },
+                  createElement('input', {
+                    type: 'checkbox',
+                    checked: picked.has(r.key),
+                    onChange: () => { toggle(r.key) },
+                  }),
+                  createElement('span', { style: { flex: '0 0 auto', fontWeight: 600 } }, r.agent),
+                  createElement('span', { style: { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: 0.75 } }, r.path),
+                  createElement('span', { style: { flex: '0 0 auto', opacity: 0.6 } }, kb(r.bytes)),
+                )),
+              ),
+              missing > 0 ? createElement('div', { key: 'missing', className: 'bt-sub', style: { marginTop: 4, opacity: 0.6 } }, t('memoryMissingNote', { n: missing })) : null,
+              createElement(TargetChips, { key: 'targets', sel: target, lang, onSelect: setTarget, ariaLabel: t('targetGroupLabel') }),
+              createElement('div', { key: 'act', style: { display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 } },
+                createElement('button', {
+                  className: 'bt-btn bt-btn-primary',
+                  type: 'button',
+                  disabled: busy || picked.size === 0,
+                  onClick: push,
+                  title: t('memoryPushBtnTitle'),
+                }, busy ? t('memoryPushing') : t('memoryPushBtn', { n: picked.size })),
+              ),
+            ],
+    )
+  }
   return createElement('details', {
     className: 'bt-group',
     open,
@@ -1565,6 +1626,13 @@ export function HelpCard({ t }: { t: Translate }): ReturnType<typeof createEleme
       }),
       createElement('span', { className: 'bt-title-sec' }, t('helpTitle')),
     ),
+    // 三步上手（复用引导条文案——引导条消失后的唯一常驻指南）
+    createElement('div', { style: { display: 'grid', gap: 4, fontSize: 12, marginBottom: 10 } },
+      createElement('span', { style: { fontWeight: 600 } }, t('popoverSubtitle')),
+      createElement('span', { style: { opacity: .85 } }, `① ${t('onboard1')}`),
+      createElement('span', { style: { opacity: .85 } }, `② ${t('onboard2')}`),
+      createElement('span', { style: { opacity: .85 } }, `③ ${t('onboard3')}`),
+    ),
     createElement('div', { style: { display: 'grid', gap: 8 } },
       ...entries.map((e, i) => createElement('div', { key: i, style: { marginBottom: 8 } },
         createElement('div', { style: { fontWeight: 600, marginBottom: 2 } }, e.q),
@@ -1587,7 +1655,7 @@ interface PreviewEntry {
   error: string | null
 }
 
-export function ForeignBrowser({ state, t, lang, onError, onNotice, navigate }: {
+export function ForeignBrowser({ state, t, lang, onError, onNotice, navigate, bare, active }: {
   state: TakeoverState | null
   t: Translate
   lang: Lang
@@ -1596,9 +1664,14 @@ export function ForeignBrowser({ state, t, lang, onError, onNotice, navigate }: 
   onNotice: (msg: string) => void
   /** 投递成功后切换到新会话（宿主 uiWorkspace.openSession；缺席回 false 走树内提示） */
   navigate: (sessionId: string) => boolean
+  /** bare=true：无卡片壳/标题/说明——嵌入分段动作卡窗格用（内容自动前置） */
+  bare?: boolean
+  /** active=true：窗格激活（分段器选中）——bare 模式下据此自动载入首店 */
+  active?: boolean
 }): ReturnType<typeof createElement> {
   const providers = state?.providers ?? []
-  // 选中家：默认不选（面板打开不扫盘），点哪家读哪家；列表按家缓存
+  // 选中家：bare 模式自动前置会话最多的可用家（内容默认可见——「点谁读谁」的
+  // 成本纪律保持：一次只扫一家）；非 bare 保持点选语义
   const [sel, setSel] = useState<string | null>(null)
   const [lists, setLists] = useState<Record<string, SessionListBody>>({})
   // 按家记加载态（单字符串设计会在 A 加载中点 B 时把 B 永久卡在「加载中…」）
@@ -1632,6 +1705,18 @@ export function ForeignBrowser({ state, t, lang, onError, onNotice, navigate }: 
         return next
       }))
   }
+
+  // bare+active：自动前置会话最多的可用家（内容默认可见——空态从此不存在；
+  // 换家仍走 chip 过滤，一次只扫一家的成本纪律保持）
+  useEffect(() => {
+    if (bare !== true || active !== true || sel !== null) return
+    const best = [...providers].filter((p) => p.supported && p.enabled && p.sessions > 0)
+      .sort((a, b) => b.sessions - a.sessions)[0]
+    if (best !== undefined) {
+      setSel(best.name)
+      load(best.name)
+    }
+  }, [bare, active, providers, sel])
 
   const loadPreview = (provider: string, id: string): void => {
     setPreviews((prev) => ({ ...prev, [id]: { loading: true, data: prev[id]?.data ?? null, error: null } }))
@@ -1727,6 +1812,19 @@ export function ForeignBrowser({ state, t, lang, onError, onNotice, navigate }: 
     if (!open && previews[r.id] === undefined && sel !== null) loadPreview(sel, r.id)
   }
 
+  /** fsess 标题清洗：剥系统前缀（<local-command-*>）与应答模板行（"Reply only with…"），
+   * 取第一条用户可读行；全空回退 id（0.4.3——审查实测 12 条标题一半是系统噪声） */
+  const fsessDisplayTitle = (raw: string, idShown: string): string => {
+    const trimmed = raw.trim()
+    if (trimmed === '') return idShown
+    const cleaned = trimmed
+      .replace(/<local-command-[a-z-]+>[\s\S]*?<\/local-command-[a-z-]+>/gi, '')
+      .replace(/<local-command-[a-z-]+>/gi, '')
+      .replace(/^Reply only with[^\n]*\n?/i, '')
+      .trim()
+    return cleaned !== '' ? (cleaned.split('\n')[0] ?? idShown).slice(0, 200) : idShown
+  }
+
   const rowNode = (r: SessionRow): ReturnType<typeof createElement> => {
     const open = openId === r.id
     const idShown = shortId(r)
@@ -1738,12 +1836,12 @@ export function ForeignBrowser({ state, t, lang, onError, onNotice, navigate }: 
           role: 'button',
           tabIndex: 0,
           'aria-expanded': open,
-          title: r.title !== '' ? r.title : r.id,
+          title: fsessDisplayTitle(r.title, r.id),
           onClick: () => toggleRow(r, open),
           onKeyDown: (e: { key: string; preventDefault(): void }) => {
             if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleRow(r, open) }
           },
-        }, r.title !== '' ? r.title : idShown),
+        }, fsessDisplayTitle(r.title, idShown)),
         createElement('span', { className: 'bt-fsess-time' }, relTime(r.updatedAt, now, lang)),
       ),
       createElement('div', { className: 'bt-fsess-line2' },
@@ -1821,12 +1919,12 @@ export function ForeignBrowser({ state, t, lang, onError, onNotice, navigate }: 
       )
     : null
 
-  return createElement('div', { className: 'bt-card' },
-    createElement('div', { className: 'bt-head' },
+  return createElement('div', { className: bare === true ? 'bt-bare' : 'bt-card' },
+    bare === true ? null : createElement('div', { className: 'bt-head' },
       createElement('span', { className: 'bt-title-sec' }, t('browserTitle')),
     ),
-    createElement('div', { className: 'bt-sub' }, t('browserHint')),
-    createElement('div', { className: 'bt-sub', style: { marginTop: 8, fontWeight: 600 } }, t('browserGroupLabel')),
+    bare === true ? null : createElement('div', { className: 'bt-sub' }, t('browserHint')),
+    bare === true ? null : createElement('div', { className: 'bt-sub', style: { marginTop: 8, fontWeight: 600 } }, t('browserGroupLabel')),
     createElement('div', { className: 'bt-chips', role: 'group', 'aria-label': t('browserChipAria'), style: { marginTop: 8 } },
       ...providers.map((p) => {
         const usable = p.supported && p.enabled
@@ -2054,6 +2152,8 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
   const [exportMenu, setExportMenu] = useState(false)
   // 取件投递态（记正在投的卡 id，按行显示投递中）+ 操作回执横幅
   const [takeBusyId, setTakeBusyId] = useState<string | null>(null)
+  // 右栏分段动作卡：当前窗格（浏览/交接/记忆——三窗格常驻挂载，display 切换保状态）
+  const [actionPane, setActionPane] = useState<'browse' | 'send' | 'memory'>('browse')
   const [clearBusy, setClearBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const noticeTimer = useRef<number | undefined>(undefined)
@@ -2281,12 +2381,35 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
     ),
     ), // 左栏收尾（帮助 + 收件箱）
 
-    // 右栏（按三步上手顺序）：① 浏览外部会话（接进来）② 交接出去（寄存出站）③ 记忆快照（低频）
+    // 右栏（0.4.3 重构）：三卡合并为一张「接力动作」卡 + 分段器——同维度控件不再
+    // 三卡同屏（审查实测：静止可见 17 枚 chip + 9 个文本块，0 条内容）。
+    // 浏览窗格 bare+active 自动前置会话最多的可用家（内容默认可见，空态从此不存在）；
+    // 三窗格常驻挂载（display 切换），状态跨切换保留。
     createElement('div', { className: 'bt-col', style: { display: 'grid', gap: 16, alignItems: 'start' } },
-      // 外部会话浏览器（浏览 + 一键接管 + 投递后自动切会话；卡片蒸馏仍在会话里由模型完成）
-      createElement(ForeignBrowser, { state, t, lang, onError: (msg) => setError(msg), onNotice: showNotice, navigate }),
-      createElement(SendCard, { sessionId, t, lang, onError: (msg) => setError(msg), onNotice: showNotice }),
-      createElement(MemoryCard, { t, lang, onError: (msg) => setError(msg), onNotice: showNotice, onPushed: reload }),
+      createElement('div', { className: 'bt-card' },
+        createElement('div', { className: 'bt-seg', role: 'tablist', 'aria-label': t('actionSegAria') },
+          ([
+            ['browse', t('browserTitle')],
+            ['send', t('sendTitle')],
+            ['memory', t('memoryTitle')],
+          ] as Array<['browse' | 'send' | 'memory', string]>).map(([k, label]) =>
+            createElement('button', {
+              key: k,
+              className: `bt-segbtn${actionPane === k ? ' bt-segbtn-on' : ''}`,
+              role: 'tab',
+              'aria-selected': actionPane === k,
+              type: 'button',
+              onClick: () => setActionPane(k),
+            }, label),
+          ),
+        ),
+        createElement('div', { className: 'bt-tabpane', style: { display: actionPane === 'browse' ? 'block' : 'none' } },
+          createElement(ForeignBrowser, { state, t, lang, onError: (msg) => setError(msg), onNotice: showNotice, navigate, bare: true, active: actionPane === 'browse' })),
+        createElement('div', { className: 'bt-tabpane', style: { display: actionPane === 'send' ? 'block' : 'none' } },
+          createElement(SendCard, { sessionId, t, lang, onError: (msg) => setError(msg), onNotice: showNotice, bare: true })),
+        createElement('div', { className: 'bt-tabpane', style: { display: actionPane === 'memory' ? 'block' : 'none' } },
+          createElement(MemoryCard, { t, lang, onError: (msg) => setError(msg), onNotice: showNotice, onPushed: reload, bare: true, defaultOpen: true, active: actionPane === 'memory' })),
+      ),
     ),
     ),
   )
