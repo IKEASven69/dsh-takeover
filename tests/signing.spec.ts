@@ -3,11 +3,12 @@
  * → 未签名旧卡兼容 → 篡改进死亡地图（sig_tampered）。全部临时 HANDOFF_HOME，不碰真实总线。
  */
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { inboxLoad, pushHandoff, renderInbox } from '../src/tools.ts'
+import { dismissPending } from '../src/settings.ts'
 import { loadOrCreateSigningKey, macOf, signEnvelope, signingKeyPath, verifyEnvelopeSig } from '../src/signing.ts'
 import { readLifecycleEvents } from '../src/lifecycle.ts'
 
@@ -101,6 +102,22 @@ test('未签名旧卡兼容：无 sig 字段不报异常也不渲染签名行', 
     assert.equal(load.sig, undefined)
     const rendered = renderInbox(null, load)[0]?.text ?? ''
     assert.ok(!rendered.includes('签名'), '旧卡不应渲染任何签名行')
+  })
+})
+
+test('dismiss：卡+信封+patch 三件全移 archived，pending 清空', () => {
+  withHome((home) => {
+    const r = pushCard(home, '忽略搬运验证')
+    // 手工放一个 sidecar 补丁，模拟脏仓 push 的物质层
+    writeFileSync(join(home, 'pending', `${r.id}.patch`), 'diff --git a/x b/x\n', 'utf-8')
+    const d = dismissPending(r.id, home)
+    assert.equal(d.ok, true)
+    assert.equal(d.moved, 3)
+    assert.deepEqual(readdirSync(join(home, 'pending')).filter((f) => f.startsWith(r.id)), [])
+    assert.deepEqual(
+      readdirSync(join(home, 'archived')).filter((f) => f.startsWith(r.id)).sort(),
+      [`${r.id}.envelope.json`, `${r.id}.md`, `${r.id}.patch`],
+    )
   })
 })
 

@@ -360,7 +360,7 @@ export function dismissPending(id: string, dir?: string): { ok: boolean; moved?:
     return { ok: false, error: `archived 目录创建失败（${e instanceof Error ? e.message : String(e)}）` }
   }
   let moved = 0
-  for (const ext of ['.md', '.envelope.json'] as const) {
+  for (const ext of ['.md', '.envelope.json', '.patch'] as const) {
     const src = join(home, 'pending', safe + ext)
     if (!existsSync(src)) continue
     try {
