@@ -2,3 +2,6 @@
 # A CRLF checkout (core.autocrlf=true on Windows) breaks them — pin line endings.
 tests/fixtures/** text eol=lf
 tests/golden/** text eol=lf
+# Binary corpora (sqlite) must skip conversion entirely — "text eol=lf" above
+# makes git declare byte-identical binaries permanently modified on CRLF checkouts.
+tests/fixtures/**/*.sqlite -text
