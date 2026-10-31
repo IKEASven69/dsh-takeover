@@ -14,7 +14,7 @@ export { INBOX_SKILL_CONTENT, inboxSkillRegistration } from './inbox.ts'
 export { RESUME_SKILL_SPECS, resumeSkillContent, resumeSkillRegistration, resumeSkillRegistrations } from './resume.ts'
 export type { ResumeSkillSpec } from './resume.ts'
 
-/** 全部 bundled slash skill 注册项（/handoff /inbox + /resume-* 八条） */
+/** 全部 bundled slash skill 注册项（/handoff /inbox + /resume-* 九条） */
 export function skillRegistrations(): SkillRegistration[] {
   return [handoffSkillRegistration(), inboxSkillRegistration(), ...resumeSkillRegistrations()]
 }

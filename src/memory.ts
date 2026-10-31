@@ -27,19 +27,36 @@ export interface MemorySourceDef {
 
 /** 已知记忆文件清单（用户级全局 + 项目级常用约定文件）。
  * 只列有公开文档惯例的路径；没列入的家不是不支持，是路径无公开惯例。
- * hippo-db 特殊行：dsh-hippo（伴侣智能体长期记忆插件）的 SQLite 库——二进制不随卡
- * 直带，存在性照报（UI 提示装了记忆库），出卡时正文替换为 dump/import 指引。 */
+ * hippo-db 特殊行：dsh-hippo（伴侣智能体长期记忆插件）的记忆库——v0.1.9 起是
+ * <数据目录>/memories/ 的 zvec 原生目录（proxima 向量索引 + rocksdb FTS），二进制
+ * 不随卡直带，存在性照报（UI 提示装了记忆库），出卡时正文替换为 export/import 指引。 */
 export const MEMORY_SOURCES: readonly MemorySourceDef[] = [
   { key: 'claude-user', agent: 'Claude Code', scope: 'user', path: (h) => join(h, '.claude', 'CLAUDE.md') },
   { key: 'codex-user', agent: 'Codex CLI', scope: 'user', path: (h) => join(h, '.codex', 'AGENTS.md') },
   { key: 'opencode-user', agent: 'OpenCode', scope: 'user', path: (h) => join(h, '.config', 'opencode', 'AGENTS.md') },
   { key: 'zcode-user', agent: 'ZCode', scope: 'user', path: (h) => join(h, '.zcode', 'AGENTS.md') },
   { key: 'cursor-user', agent: 'Cursor', scope: 'user', path: (h) => join(h, '.cursorrules') },
-  { key: 'hippo-db', agent: 'dsh-hippo 记忆库', scope: 'user', path: (h) => join(process.env['DSH_HOME'] ?? join(h, '.dsh'), 'hippo', 'memory.db') },
+  { key: 'hippo-db', agent: 'dsh-hippo 记忆库', scope: 'user', path: (h) => join(hippoDataDir(h), 'memories') },
   { key: 'agents-project', agent: '项目 AGENTS.md', scope: 'project', path: (_h, c) => join(c, 'AGENTS.md') },
   { key: 'claude-project', agent: '项目 CLAUDE.md', scope: 'project', path: (_h, c) => join(c, 'CLAUDE.md') },
   { key: 'cursor-project', agent: '项目 .cursorrules', scope: 'project', path: (_h, c) => join(c, '.cursorrules') },
 ]
+
+/**
+ * dsh-hippo 数据目录解析（与 dsh-hippo 现役语义对齐，v0.1.9+ zvec 布局）：
+ * 优先 HIPPO_DATA_DIR 环境变量，其次 ~/.hippo/data-dir.txt 内容（hippo 把自己的
+ * 数据目录写在该文件），最后回退 ~/.hippo。探测对象是 <数据目录>/memories（zvec
+ * 目录）存在性；数据根下的 memories.db 是旧版引擎遗留文件，不作判断依据。
+ */
+function hippoDataDir(home: string): string {
+  const env = process.env['HIPPO_DATA_DIR']
+  if (env !== undefined && env.trim() !== '') return env.trim()
+  try {
+    const raw = readFileSync(join(home, '.hippo', 'data-dir.txt'), 'utf-8').trim()
+    if (raw !== '') return raw
+  } catch { /* 文件缺失/读失败按未配置，继续回退 */ }
+  return join(home, '.hippo')
+}
 
 const PREVIEW_CHARS = 240
 /** 单文件进卡正文的上限（字符）：记忆文件异常巨大时截断并注明 */
@@ -75,6 +92,15 @@ export function scanMemorySources(deps?: { home?: string; cwd?: string }): Memor
     if (def.scope === 'project' && cwd === '') continue
     const p = def.path(home, cwd)
     try {
+      if (def.key === 'hippo-db') {
+        // hippo-db 特例（v0.1.9+ zvec 布局）：探测对象是 <数据目录>/memories 目录
+        // 存在性，不是文件；目录体积不统计（proxima+rocksdb 索引树可达 GB 级，
+        // 全量走盘不值）——bytes 恒 0，mtime 取目录自身，预览照旧不读。
+        const st = statSync(p)
+        const isDir = st.isDirectory()
+        rows.push({ key: def.key, agent: def.agent, path: p, exists: isDir, bytes: 0, mtime: isDir ? toIso(st.mtimeMs) : '', preview: '' })
+        continue
+      }
       if (!existsSync(p)) {
         rows.push({ key: def.key, agent: def.agent, path: p, exists: false, bytes: 0, mtime: '', preview: '' })
         continue
@@ -85,7 +111,7 @@ export function scanMemorySources(deps?: { home?: string; cwd?: string }): Memor
         continue
       }
       let preview = ''
-      if (def.key !== 'hippo-db' && st.size <= 512 * 1024) {
+      if (st.size <= 512 * 1024) {
         try {
           preview = readFileSync(p, 'utf-8').slice(0, PREVIEW_CHARS)
         } catch { /* 预览失败不拦扫描 */ }
@@ -99,15 +125,16 @@ export function scanMemorySources(deps?: { home?: string; cwd?: string }): Memor
 }
 
 /** 读一份记忆文件进卡正文（超限截断并注明；读失败如实写 UNAVAILABLE。
- * hippo SQLite 库是二进制例外：不读内容，写 dump/import 互通指引——
- * dsh-hippo 官方通路：DSH 会话 `/memory dump <file>` 导出 JSON，取件方 `/memory import` 合并） */
+ * hippo 记忆库是二进制例外：不读内容，写 export/import 互通指引——
+ * dsh-hippo 官方通路（v0.1.9+ zvec 引擎）：`hippo export -f jsonl` 导出 JSONL
+ * 快照，取件方 `hippo import <file>` 幂等合并导入） */
 function fileBody(row: MemorySourceRow): string {
   if (row.key === 'hippo-db') {
     return [
-      '（dsh-hippo 记忆库是 SQLite 二进制，不随卡直带。官方互通通路：',
-      '- 源机 DSH 会话里 `/memory dump <file>` 导出全库 JSON 快照，把该 JSON 作为记忆来源重新出卡（或随同步盘带给对方）；',
-      '- 取件方若装了 dsh-hippo：`/memory import <file>` 合并式导入（保留脱敏/失效记录，INSERT OR IGNORE 不覆盖冲突条目）。',
-      '本卡先携带来源清单与交接意图，JSON 快照按上面两步补齐。）',
+      '（dsh-hippo 记忆库是 zvec 原生目录（proxima 向量索引 + rocksdb FTS），二进制不随卡直带。官方互通通路走 hippo CLI 的 JSONL 导出/导入：',
+      '- 源机：`hippo export -f jsonl -o hippo-memory.jsonl` 导出全库 JSONL 快照，把该 JSONL 随同步盘带给对方（或作为记忆来源重新出卡）；',
+      '- 取件方若装了 dsh-hippo：`hippo import hippo-memory.jsonl` 幂等导入（自动重嵌入；重复条目强化合并、不覆盖已有记录）。',
+      '本卡先携带来源清单与交接意图，JSONL 快照按上面两步补齐。）',
     ].join('\n')
   }
   try {

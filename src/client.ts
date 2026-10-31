@@ -4,7 +4,7 @@
  * （即时过滤 + 相邻重复卡分组 + 「新」卡徽标（localStorage 已见集，键含
  * HANDOFF_HOME 散列）+ 展开看目标段预览 + 单卡/全部导出 .md + 导出 HTML 报告
  * （自包含单文件，state→html 为可单测纯函数）+ archived 计数 + 清空归档）/
- * 支持矩阵（八家读取器：规范名+品牌图标、会话数、启用开关）/ 开关语义说明。
+ * 支持矩阵（九家读取器：规范名+品牌图标、会话数、启用开关）/ 开关语义说明。
  * 文案走宿主 i18n：ctx.locale 注册本卡词典（zh/en）+ bind 出 t()，
  * 语言切换经 locale revision 驱动重渲染（宿主缺席时回退 zh 静态词典）。
  * 数据通路走同源 fetch 直连 host 路由 /dsh-takeover/*。
@@ -218,10 +218,10 @@ const ICON_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" wi
   '</svg>'
 
 // ---------------------------------------------------------------------------
-// Provider 图标：八家全部官方矢量（见 brand-icons.ts 的来源清单）。
+// Provider 图标：官方矢量逐家在册（见 brand-icons.ts 的来源清单）；
+// gemini（第 9 家读取器）暂无在册官方矢量，走兜底小标不出冒牌标。
 // 常规形态 = 官方 tile 底色 + 官方 path（fill 逐 path 保真）；
 // workbuddy = 官方完整 SVG 整体内嵌（自带渐变圆底）。
-// 未知来源（如 dsh 自己）回退中性字母块——那不是品牌冒充，是兜底。
 // ---------------------------------------------------------------------------
 
 function providerMark(name: string): BrandMark | null {
@@ -740,7 +740,7 @@ export function coverageTextOf(state: TakeoverState): string | null {
 // ---------------------------------------------------------------------------
 // HTML 单文件报告导出（对齐 对标 Claude Code /export 需求）。
 // state→html 是可导出纯函数：单测直接喂 state + 双语词典 + 固定时刻，无 DOM。
-// 诚实纪律：内容仅来自 state 真有字段（pending 全卡 / 八家矩阵 / archived 计数 /
+// 诚实纪律：内容仅来自 state 真有字段（pending 全卡 / 九家矩阵 / archived 计数 /
 // pendingSkipped / inboxError），不硬造；卡片标题与预览是模型生成文本，进 HTML
 // 前一律过 escHtml——自包含单文件没有 CSP 兜底，转义是唯一防线。
 // ---------------------------------------------------------------------------
@@ -882,7 +882,7 @@ body { margin: 0; background: #f4f5fb; color: #1e293b;
  *   单测喂固定串即可逐字断言；
  * - 内容面：头部品牌渐变 + 三张统计卡（待取件 / 已消费 / 读取器已启用-总数）+
  *   边界说明 + 收件箱全卡（空态出横幅；inboxError / pendingSkipped 诚实浮出）+
- *   八家支持矩阵（启用与否、支持 pill、会话数、note 浮出）。
+ *   九家支持矩阵（启用与否、支持 pill、会话数、note 浮出）。
  */
 export function buildReportHtml(
   state: TakeoverState,
@@ -1328,7 +1328,7 @@ export function ProviderMatrix({ rows, busy, onToggle, t }: {
 // 交接出去（outbound）+ 记忆快照：右栏新增两卡。与 ForeignBrowser 同层。
 // ---------------------------------------------------------------------------
 
-/** 接收方 chips：交接出去与记忆快照共用（任意 agent + 八家） */
+/** 接收方 chips：交接出去与记忆快照共用（任意 agent + 九家） */
 export function TargetChips({ sel, lang, onSelect, ariaLabel }: {
   sel: string
   lang: Lang
@@ -1656,7 +1656,7 @@ export function HelpCard({ t }: { t: Translate }): ReturnType<typeof createEleme
 // 外部会话浏览器：浏览 + 一键投递。面板不产卡——蒸馏都在会话里由
 // 模型完成（卡片质量跟着模型能力走，这正是「跟着模型升级」的接法）；
 // 一键投递只是把与手动复制同源的指令送进新会话，失败退回复制。
-// 列表走轻量发现层（默认不自动扫八家，点哪家读哪家）；预览按需单会话拉结构化摘要。
+// 列表走轻量发现层（默认不自动扫九家，点哪家读哪家）；预览按需单会话拉结构化摘要。
 // ---------------------------------------------------------------------------
 
 interface PreviewEntry {
@@ -2013,7 +2013,7 @@ export function ForeignBrowser({ state, t, lang, onError, onNotice, navigate, ba
 // 保持一致——不直接 import（值引入会把 host 半的 cordis/dsh-tools 拖进客户端包）。
 // ---------------------------------------------------------------------------
 
-const RESUME_PROVIDERS = ['claude', 'codex', 'opencode', 'zcode', 'pi', 'workbuddy', 'cursor', 'grok'] as const
+const RESUME_PROVIDERS = ['claude', 'codex', 'opencode', 'zcode', 'pi', 'workbuddy', 'cursor', 'grok', 'gemini'] as const
 
 export function CommandsCard({ state, t }: { state: TakeoverState | null; t: Translate }): ReturnType<typeof createElement> {
   const disabled = new Set<string>(
@@ -2241,7 +2241,7 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
       setError(e instanceof Error ? e.message : String(e))
     }
   }
-  // 导出 HTML 报告：自包含单文件（八家矩阵 + 全部待取件 + 已消费计数；pending 为空也
+  // 导出 HTML 报告：自包含单文件（九家矩阵 + 全部待取件 + 已消费计数；pending 为空也
   // 有矩阵与计数可报，故不随 pending 禁用）。state→html 组装在 buildReportHtml 纯函数，
   // 文案按当前语言现取（reportWords）；文件名带导出时刻，生成失败进错误横幅不塌卡
   const exportHtmlReport = (): void => {

@@ -112,7 +112,7 @@ test('停用 provider：foreign_session_read 返回规范错误值「已停用�
 
 // ---------- buildState / clearArchived ----------
 
-test('buildState：pending 概览 + archived 计数 + 支持矩阵八行', () => {
+test('buildState：pending 概览 + archived 计数 + 支持矩阵（FOREIGN_PROVIDERS 全量九行）', () => {
   const home = freshHome()
   const c1 = makeCard({ from: { agent: 'claude', session: 's1', title: '修收件箱' }, project: 'takeover', pushed_at: '2026-10-01T10:00:00+08:00' })
   const c2 = makeCard({ from: { agent: 'codex', session: 's2', title: '' }, pushed_at: '2026-10-02T10:00:00+08:00' })
@@ -139,7 +139,7 @@ test('buildState：pending 概览 + archived 计数 + 支持矩阵八行', () =>
   assert.equal(st.pending[0]?.preview, 'g') // goal 段进预览
   assert.equal(st.archivedCount, 1)
 
-  assert.equal(st.providers.length, 8)
+  assert.equal(st.providers.length, 9)
   const claude = st.providers.find((p) => p.name === 'claude')
   assert.equal(claude?.supported, true)
   assert.equal(claude?.sessions, 3)
@@ -177,7 +177,7 @@ test('buildState：单家探测抛错只降级该行，不拖垮整体', () => {
   const st = buildState(readers, home)
   const cursor = st.providers.find((p) => p.name === 'cursor')
   assert.equal(cursor?.sessions, -1)
-  assert.equal(st.providers.filter((p) => p.sessions === 0).length, 7)
+  assert.equal(st.providers.filter((p) => p.sessions === 0).length, 8)
 })
 
 test('buildState：note 在探测后重取——discover 写回的假 0 哨兵首轮渲染即见', () => {
@@ -273,7 +273,7 @@ test('buildState：全新安装（pending/ 不存在）不进降级态，矩阵�
   const st = buildState(fakeReaders(), home)
   assert.equal(st.inboxError, undefined)
   assert.equal(st.pending.length, 0)
-  assert.equal(st.providers.length, 8)
+  assert.equal(st.providers.length, 9)
 })
 
 // 回归（0.4.1）：孤儿信封（对应 .md 已被任何实现取走）由 buildState 顺手清扫，envelopeChars 只计有主信封

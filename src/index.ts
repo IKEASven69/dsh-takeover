@@ -2,7 +2,7 @@
  * dsh-takeover host 半：会话接管插件（拉取 + 寄存 + 取件）。
  * 注册面 = 工具 handoff_push / handoff_inbox / foreign_session_read
  *        + slash /handoff /inbox + /resume-*×8。
- * 权限范围：写 ~/.handoff（可由 HANDOFF_HOME 覆盖）、读 git 状态、只读八家本地会话库。
+ * 权限范围：写 ~/.handoff（可由 HANDOFF_HOME 覆盖）、读 git 状态、只读九家本地会话库。
  * @module dsh-takeover
  */
 

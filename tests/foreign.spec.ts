@@ -1,10 +1,17 @@
 /**
  * v0.2 测试：foreign_session_read 的 list / show / 歧义 / 降级，
- * 以及 /resume-* 八条 skill 的注册形态。
- * 读取层一律注入假货（ForeignReaders），不碰真实 ~/.claude 等目录。
+ * 以及 /resume-* 九条 skill 的注册形态。
+ * 大部分用例注入假货读取层（ForeignReaders），不碰真实 ~/.claude 等目录；
+ * gemini（第 9 家）另有一组真实适配器用例：HANDOFF_ROOT_GEMINI 指向临时目录，
+ * 本地构造 JSONL 新格式 / JSON 旧格式 / 子代理会话三层 fixture（corpus-golden
+ * 同款约束：适配器在模块加载时读根路径，env 必须先于 readers 首次加载，
+ * 因此本文件对 readers 的值导入放在 env 之后动态 await import）。
  */
 import assert from 'node:assert/strict'
-import test from 'node:test'
+import test, { after } from 'node:test'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   FOREIGN_PROVIDERS,
   RESUME_SKILL_SPECS,
@@ -17,7 +24,61 @@ import {
 } from '../src/index.ts'
 import { HANDOFF_SKILL_CONTENT, INBOX_SKILL_CONTENT } from '../skills/index.ts'
 import type { SessionRef, Turn } from '@agent-handoff/readers'
-import { makeTurn } from '@agent-handoff/readers'
+
+// ---------- gemini 真实适配器 fixture（env 先于 readers 首次加载） ----------
+
+const GEMINI_ROOT = mkdtempSync(join(tmpdir(), 'dsh-gemini-fix-'))
+process.env['HANDOFF_ROOT_GEMINI'] = GEMINI_ROOT
+const { makeTurn } = await import('@agent-handoff/readers')
+after(() => { try { rmSync(GEMINI_ROOT, { recursive: true, force: true }) } catch { /* 临时目录尽力清 */ } })
+
+const GEMINI_PROJ = join(GEMINI_ROOT, 'proj-a')
+const GEMINI_CHATS = join(GEMINI_PROJ, 'chats')
+const GEMINI_JSONL = join(GEMINI_CHATS, 'session-20261030-aa11.jsonl')
+const GEMINI_JSON = join(GEMINI_CHATS, 'session-20261029-bb22.json')
+const GEMINI_SUB = join(GEMINI_CHATS, 'p1', 'session-20261028-cc33.jsonl')
+
+/** gemini 双格式 fixture：JSONL 新格式 + 整块 JSON 旧格式 + 子代理再嵌一层 */
+function buildGeminiFixture(): void {
+  mkdirSync(join(GEMINI_CHATS, 'p1'), { recursive: true })
+  writeFileSync(join(GEMINI_PROJ, '.project_root'), 'D:\\gemini-fix\\demo\n', 'utf-8')
+  // 新格式：首行 metadata → MessageRecord 行 + info/斜杠/控制行/未知行/坏行穿插
+  writeFileSync(GEMINI_JSONL, [
+    JSON.stringify({ sessionId: 'sess-gem-jsonl', startTime: '2026-10-30T01:00:00Z', lastUpdated: '2026-10-30T02:00:00Z', summary: '收件箱联调', directories: ['D:\\gemini-fix\\demo'], kind: 'main' }),
+    JSON.stringify({ type: 'user', content: '帮我把 gemini 会话接管跑通', timestamp: '2026-10-30T01:01:00Z' }),
+    JSON.stringify({ type: 'info', content: 'Quad service 初始化完成', timestamp: '2026-10-30T01:01:30Z' }),
+    JSON.stringify({ type: 'user', content: '/help', timestamp: '2026-10-30T01:01:40Z' }),
+    JSON.stringify({
+      type: 'gemini', content: '好的，先读一下入口文件。', model: 'gemini-2.5-pro', timestamp: '2026-10-30T01:02:00Z',
+      toolCalls: [
+        { name: 'read_file', args: { path: 'D:\\gemini-fix\\demo\\src\\a.ts' }, result: 'const x = 1', status: 'ok', timestamp: '2026-10-30T01:02:10Z' },
+        { name: 'run_shell_command', args: { command: 'npm test' }, result: 'all green', status: 'ok', timestamp: '2026-10-30T01:03:00Z' },
+        { name: 'write_file', args: { file_path: 'D:\\gemini-fix\\demo\\src\\b.ts' }, result: 'disk full', status: 'error', timestamp: '2026-10-30T01:04:00Z' },
+      ],
+    }),
+    '{"$patch":{}}',
+    '{"type":"future-unknown","content":"向后兼容：未知类型行静默跳过"}',
+    JSON.stringify({ type: 'user', content: '再跑一遍 e2e', timestamp: '2026-10-30T01:05:00Z' }),
+    JSON.stringify({ type: 'gemini', content: [{ type: 'text', text: '跑完了，全绿。' }], timestamp: '2026-10-30T01:06:00Z' }),
+    '{"broken":',
+  ].join('\n'), 'utf-8')
+  // 旧格式：整块 JSON（metadata + messages 单对象）
+  writeFileSync(GEMINI_JSON, JSON.stringify({
+    summary: '早班交接',
+    lastUpdated: '2026-10-29T09:00:00Z',
+    messages: [
+      { type: 'user', content: '整理交接清单', timestamp: '2026-10-29T08:00:00Z' },
+      { type: 'gemini', content: [{ type: 'text', text: '清单见下。' }], timestamp: '2026-10-29T08:01:00Z' },
+    ],
+  }), 'utf-8')
+  // 子代理会话：chats/<parentShortId>/ 再嵌一层
+  writeFileSync(GEMINI_SUB, [
+    JSON.stringify({ sessionId: 'sess-gem-sub', startTime: '2026-10-28T07:00:00Z', lastUpdated: '2026-10-28T08:00:00Z', summary: '子代理调研', kind: 'subagent' }),
+    JSON.stringify({ type: 'user', content: '调研向量库选型', timestamp: '2026-10-28T07:30:00Z' }),
+    JSON.stringify({ type: 'gemini', content: '结论：用 zvec。', timestamp: '2026-10-28T08:00:00Z' }),
+  ].join('\n'), 'utf-8')
+}
+buildGeminiFixture()
 
 /** 造一个 SessionRef */
 function ref(partial: Partial<SessionRef> & Pick<SessionRef, 'id' | 'agent'>): SessionRef {
@@ -183,6 +244,78 @@ test('foreign：适配器不可用（如 Node<22 的 zcode）降级为规范错�
   assert.match(r.error, /Node ≥22/)
 })
 
+// ---------- gemini（第 9 家）：接线 + 真实适配器双格式 fixture ----------
+
+test('foreign gemini：provider 门内（adapter=gemini），未知 provider 报错文案带全九家', async () => {
+  // 门内：假货层记录 adapterNote 收到的 adapter 名
+  const seen: string[] = []
+  const r = await foreignSessionRead({ provider: 'gemini', action: 'list' }, fakeReaders({
+    listSessions: (agent) => { seen.push(agent); return [] },
+  }))
+  assert.equal(r.ok, true)
+  if (!r.ok || r.action !== 'list') return
+  assert.equal(r.provider, 'gemini')
+  assert.deepEqual(seen, ['gemini'], 'provider 名必须原样映射到 readers 适配器名 gemini')
+  // 门外：未知 provider 的报错候选列表要带上 gemini（九家文案）
+  const bad = await foreignSessionRead({ provider: 'emacs', action: 'list' }, fakeReaders())
+  assert.equal(bad.ok, false)
+  if (!bad.ok) assert.match(bad.error, /gemini/)
+})
+
+test('foreign gemini list：真实适配器对双格式 + 子代理 fixture 全发现，按更新时间倒序', async () => {
+  const r = await foreignSessionRead({ provider: 'gemini', action: 'list' })
+  assert.equal(r.ok, true)
+  if (!r.ok || r.action !== 'list') return
+  assert.equal(r.total, 3, 'JSONL 新格式 + JSON 旧格式 + 子代理会话都要被发现')
+  assert.equal(r.sessions.length, 3)
+  assert.equal(r.sessions[0]?.title, '收件箱联调')
+  assert.equal(r.sessions[0]?.cwd, 'D:\\gemini-fix\\demo')
+  assert.equal(r.sessions[0]?.turns, 2, 'JSONL 会话用户轮数：info / 斜杠命令不计数')
+  assert.equal(r.sessions[1]?.title, '早班交接')
+  assert.equal(r.sessions[1]?.turns, 1)
+  assert.equal(r.sessions[2]?.title, '子代理调研')
+  assert.equal(r.sessions[2]?.cwd, 'D:\\gemini-fix\\demo', '子代理沿 .project_root 逐层反查 cwd')
+  // 新→旧排序（updatedAt 来自 metadata.lastUpdated）
+  assert.ok(r.sessions[0]!.updatedAt > r.sessions[1]!.updatedAt)
+  assert.ok(r.sessions[1]!.updatedAt > r.sessions[2]!.updatedAt)
+})
+
+test('foreign gemini show：latest 命中新格式 JSONL，摘要/骨架/分页原文齐全', async () => {
+  const r = await foreignSessionRead({ provider: 'gemini', action: 'show', reference: 'latest', limit: 10 })
+  assert.equal(r.ok, true)
+  if (!r.ok || r.action !== 'show') return
+  const s = r.summary
+  assert.equal(s.title, '收件箱联调')
+  assert.equal(s.sessionId, GEMINI_JSONL)
+  assert.equal(s.cwd, 'D:\\gemini-fix\\demo')
+  assert.equal(s.turnCount, 10, 'user×2 + assistant×2 + 工具轮×3 + 工具结果轮×3')
+  assert.equal(s.userTurns, 2)
+  assert.equal(s.firstUserMessage, '帮我把 gemini 会话接管跑通')
+  assert.equal(s.lastUserMessage, '再跑一遍 e2e')
+  assert.ok(s.files.includes('D:\\gemini-fix\\demo\\src\\a.ts'), 'read_file 参数路径被正则回退抠出')
+  assert.ok(s.files.includes('D:\\gemini-fix\\demo\\src\\b.ts'))
+  assert.match(r.skeleton.warnings, /HISTORY_REPORTED/)
+  // 分页原文：工具轮 toolName 原生名直透，status=error 记 toolFailed
+  assert.equal(r.turns?.length, 10)
+  assert.equal(r.turns?.[2]?.toolName, 'read_file')
+  assert.equal(r.turns?.[7]?.toolFailed, true, 'status=error 的工具结果轮要标 toolFailed')
+  // 坏行/控制行/未知行没混进 Turn 流
+  for (const t of r.turns ?? []) assert.doesNotMatch(t.text, /future-unknown|broken|\$patch/)
+})
+
+test('foreign gemini show：旧格式 .json（整块 metadata+messages）按标题关键词命中并解析', async () => {
+  const r = await foreignSessionRead({ provider: 'gemini', action: 'show', reference: '早班交接' })
+  assert.equal(r.ok, true)
+  if (!r.ok || r.action !== 'show') return
+  assert.equal(r.summary.sessionId, GEMINI_JSON)
+  assert.equal(r.summary.title, '早班交接')
+  assert.equal(r.summary.turnCount, 2)
+  assert.equal(r.summary.userTurns, 1)
+  assert.equal(r.summary.firstUserMessage, '整理交接清单')
+  // content Part 数组形态取 text 部分
+  assert.ok(r.summary.tailProgress.some((t) => t.includes('清单见下。')))
+})
+
 // ---------- summarizeTurns 纯函数 ----------
 
 test('summarizeTurns：空会话不抛，各段给占位', () => {
@@ -205,14 +338,14 @@ test('summarizeTurns：cwd 为空时骨架 warnings 追加确认目录警告，�
 
 // ---------- skill 注册形态 ----------
 
-test('skill 注册面：/handoff /inbox + /resume-* 八条，共 10 条', () => {
+test('skill 注册面：/handoff /inbox + /resume-* 九条，共 11 条', () => {
   const regs = skillRegistrations()
-  assert.equal(regs.length, 10)
+  assert.equal(regs.length, 11)
   const names = regs.map((r) => r.name)
   assert.deepEqual(names, [
     'handoff', 'inbox',
     'resume-claude', 'resume-codex', 'resume-opencode', 'resume-zcode', 'resume-pi', 'resume-workbuddy',
-    'resume-cursor', 'resume-grok',
+    'resume-cursor', 'resume-grok', 'resume-gemini',
   ])
   for (const reg of regs) {
     assert.equal(reg.source, 'bundled')
@@ -222,8 +355,8 @@ test('skill 注册面：/handoff /inbox + /resume-* 八条，共 10 条', () => 
   }
 })
 
-test('resume skill 内容：八条共用模板，含 inert-history / 四态账本 / 六段 / verify / 寄存询问', () => {
-  assert.equal(RESUME_SKILL_SPECS.length, 8)
+test('resume skill 内容：九条共用模板，含 inert-history / 四态账本 / 六段 / verify / 寄存询问', () => {
+  assert.equal(RESUME_SKILL_SPECS.length, 9)
   for (const spec of RESUME_SKILL_SPECS) {
     assert.ok(FOREIGN_PROVIDERS.includes(spec.provider))
     const content = resumeSkillContent(spec)
@@ -245,6 +378,15 @@ test('resume skill 内容：八条共用模板，含 inert-history / 四态账�
     assert.match(content, /不要为此申请提权/)
     assert.match(content, /不要加载诊断类技能/)
   }
+  // gemini（第 9 家）：描述含双格式 JSONL/JSON 与子代理会话提示
+  const gemini = RESUME_SKILL_SPECS.find((s) => s.provider === 'gemini')
+  assert.ok(gemini !== undefined, '缺 resume-gemini 规格')
+  assert.match(gemini.description, /双格式/)
+  assert.match(gemini.description, /JSONL/)
+  assert.match(gemini.description, /JSON/)
+  assert.match(gemini.description, /子代理/)
+  const geminiContent = resumeSkillContent(gemini)
+  assert.match(geminiContent, /"gemini"/)
 })
 
 test('handoff / inbox skill 内容：同款核验降级纪律', () => {

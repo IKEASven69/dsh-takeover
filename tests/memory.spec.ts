@@ -90,23 +90,93 @@ test('scanMemorySources：temp home 命中已存在文件、缺文件如实 exis
   }
 })
 
-test('scanMemorySources：hippo 库存在时报存在但不读预览（二进制特例）', () => {
+// ---------- memory.ts hippo-db 探测（v0.1.9+ zvec 布局）----------
+
+const HIPPO_ENV_KEYS = ['HIPPO_DATA_DIR'] as const
+
+/** 保存/恢复 hippo 相关环境变量的 try/finally 辅助 */
+function withHippoEnv(env: Record<string, string | undefined>, fn: () => void): void {
+  const saved = new Map(HIPPO_ENV_KEYS.map((k) => [k, process.env[k]]))
+  try {
+    for (const [k, v] of Object.entries(env)) {
+      if (v === undefined) delete process.env[k]
+      else process.env[k] = v
+    }
+    fn()
+  } finally {
+    for (const [k, v] of saved) {
+      if (v === undefined) delete process.env[k]
+      else process.env[k] = v
+    }
+  }
+}
+
+test('scanMemorySources：hippo 库（HIPPO_DATA_DIR/memories zvec 目录）存在时报存在、bytes 0、不读预览', () => {
   const tmp = mkdtempSync(join(tmpdir(), 'dsh-mem-hippo-'))
   try {
-    mkdirSync(join(tmp, 'hippo'), { recursive: true })
-    writeFileSync(join(tmp, 'hippo', 'memory.db'), Buffer.from([1, 2, 3, 0x00, 0xff]))
-    process.env['DSH_HOME'] = tmp
-    try {
+    mkdirSync(join(tmp, 'data', 'memories'), { recursive: true })
+    // zvec 目录里放点东西，证明体积不靠全量走盘统计
+    writeFileSync(join(tmp, 'data', 'memories', 'LOCK'), Buffer.from([1, 2, 3, 0x00, 0xff]))
+    withHippoEnv({ HIPPO_DATA_DIR: join(tmp, 'data') }, () => {
       const rows = scanMemorySources({ home: tmp })
       const hippo = rows.find((r) => r.key === 'hippo-db')
-      assert.ok(hippo?.exists)
+      assert.ok(hippo?.exists, 'HIPPO_DATA_DIR 下的 memories/ 目录应判存在')
       assert.equal(hippo?.preview, '')
-      assert.ok(hippo.bytes > 0)
-    } finally {
-      delete process.env['DSH_HOME']
-    }
+      assert.match(hippo?.path ?? '', /memories$/)
+      assert.equal(hippo?.bytes, 0, 'zvec 目录体积不统计（GB 级索引树不走盘）')
+      assert.ok((hippo?.mtime ?? '') !== '', '目录 mtime 照报')
+    })
   } finally {
     rmSync(tmp, { recursive: true, force: true })
+  }
+})
+
+test('scanMemorySources：hippo 目录三级回退——data-dir.txt 内容 > ~/.hippo；legacy memories.db 不再判存在', () => {
+  // 回退 ~/.hippo/memories：home 即数据目录
+  const tmp = mkdtempSync(join(tmpdir(), 'dsh-mem-hippo-fb-'))
+  try {
+    mkdirSync(join(tmp, '.hippo', 'memories'), { recursive: true })
+    withHippoEnv({ HIPPO_DATA_DIR: undefined }, () => {
+      const rows = scanMemorySources({ home: tmp })
+      const hippo = rows.find((r) => r.key === 'hippo-db')
+      assert.ok(hippo?.exists, '无 env 无 data-dir.txt 时回退 ~/.hippo/memories')
+      assert.match(hippo?.path ?? '', /[\\/]\.hippo[\\/]memories$/)
+    })
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+
+  // data-dir.txt 指向别处：内容生效
+  const tmp2 = mkdtempSync(join(tmpdir(), 'dsh-mem-hippo-txt-'))
+  const other = mkdtempSync(join(tmpdir(), 'dsh-mem-hippo-other-'))
+  try {
+    mkdirSync(join(tmp2, '.hippo'), { recursive: true })
+    mkdirSync(join(other, 'memories'), { recursive: true })
+    writeFileSync(join(tmp2, '.hippo', 'data-dir.txt'), `${other}\n`)
+    withHippoEnv({ HIPPO_DATA_DIR: undefined }, () => {
+      const rows = scanMemorySources({ home: tmp2 })
+      const hippo = rows.find((r) => r.key === 'hippo-db')
+      assert.ok(hippo?.exists, 'data-dir.txt 内容指向的数据目录应判存在')
+      assert.ok((hippo?.path ?? '').startsWith(other), `path 应落在 data-dir.txt 指向的目录：${hippo?.path}`)
+    })
+  } finally {
+    rmSync(tmp2, { recursive: true, force: true })
+    rmSync(other, { recursive: true, force: true })
+  }
+
+  // 回归（v0.1.9 遗留路径错位）：只有旧版 memories.db 文件、没有 memories/ 目录 → 不判存在
+  const tmp3 = mkdtempSync(join(tmpdir(), 'dsh-mem-hippo-legacy-'))
+  try {
+    mkdirSync(join(tmp3, '.hippo'), { recursive: true })
+    writeFileSync(join(tmp3, '.hippo', 'memory.db'), Buffer.from([1, 0x00, 0xff]))
+    withHippoEnv({ HIPPO_DATA_DIR: undefined }, () => {
+      const rows = scanMemorySources({ home: tmp3 })
+      const hippo = rows.find((r) => r.key === 'hippo-db')
+      assert.equal(hippo?.exists, false, 'legacy memories.db 不作判断依据')
+      assert.equal(hippo?.mtime, '')
+    })
+  } finally {
+    rmSync(tmp3, { recursive: true, force: true })
   }
 })
 
@@ -117,14 +187,14 @@ const fakeRow = (over: Partial<MemorySourceRow>): MemorySourceRow => ({
   bytes: 100, mtime: '2026-10-01T00:00:00.000Z', preview: '偏好 bun', ...over,
 })
 
-test('memorySections：六段齐全、来源清单进 goal/files、正文进 suggested、hippo 行给 dump/import 指引', () => {
+test('memorySections：六段齐全、来源清单进 goal/files、正文进 suggested、hippo 行给 export/import 指引', () => {
   const tmp = mkdtempSync(join(tmpdir(), 'dsh-mem-sec-'))
   try {
     const real = join(tmp, 'CLAUDE.md')
     writeFileSync(real, '偏好 bun。')
     const picks = [
       fakeRow({ path: real, bytes: 15 }),
-      fakeRow({ key: 'hippo-db', agent: 'dsh-hippo 记忆库', path: '/fake/memory.db', bytes: 2048 }),
+      fakeRow({ key: 'hippo-db', agent: 'dsh-hippo 记忆库', path: '/fake/memories', bytes: 0 }),
     ]
     const s = memorySections(picks, { target: 'claude', at: '2026-10-20T12:00:00.000Z' })
     assert.match(s.goal, /2 份记忆文件/)
@@ -135,8 +205,10 @@ test('memorySections：六段齐全、来源清单进 goal/files、正文进 sug
     assert.match(s.stopped, /2026-10-20/)
     assert.match(s.warnings, /HISTORY_REPORTED/)
     assert.match(s.suggested ?? '', /偏好 bun/)
-    assert.match(s.suggested ?? '', /\/memory dump/)
-    assert.match(s.suggested ?? '', /\/memory import/)
+    // hippo 指引走现役通路：hippo CLI 的 JSONL export / import（不是旧版 /memory dump|import）
+    assert.match(s.suggested ?? '', /hippo export -f jsonl/)
+    assert.match(s.suggested ?? '', /hippo import/)
+    assert.doesNotMatch(s.suggested ?? '', /\/memory dump/)
   } finally {
     rmSync(tmp, { recursive: true, force: true })
   }

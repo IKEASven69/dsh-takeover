@@ -202,7 +202,7 @@ export declare function handoffHostNotice(userQuestions: unknown, action: 'push'
 //#region node_modules/.pnpm/@agent-handoff+readers@file+vendor+@agent-handoff+readers/node_modules/@agent-handoff/readers/dist/index.d.mts
 //#region src/transcript.d.ts
 /**
- * 会话 Turn 的最小类型与 Claude transcript 解析（transcript 解析模式，
+ * 会话 Turn 的最小类型与 Claude transcript 解析（移植自 dsh-hippo src/patterns/transcript.ts，
  * 去掉 cwdToProject——它依赖 hippo 项目别名表，不属于读取层）。
  *
  * 一条 assistant 消息的多个 content block 拆成多个 Turn（text / thinking / tool_use），
@@ -222,7 +222,7 @@ interface Turn {
 //#region src/types.d.ts
 /** 一个已发现的会话（发现层产物，轻量：不含内容）。 */
 interface SessionRef {
-  /** 归属适配器名：claude-code | codex | opencode | zcode | pi | workbuddy | cursor | grok */
+  /** 归属适配器名：claude-code | codex | opencode | zcode | pi | workbuddy | cursor | grok | gemini */
   agent: string;
   /** 稳定 id：文件系=绝对路径；SQLite 系=会话 id。 */
   id: string;
@@ -236,8 +236,8 @@ interface SessionRef {
 }
 //#endregion
 //#region src/foreign.d.ts
-/** 面向用户的八家提供方名 → readers 适配器名（claude 是 claude-code 的别名） */
-export declare const FOREIGN_PROVIDERS: readonly ['claude', 'codex', 'opencode', 'zcode', 'pi', 'workbuddy', 'cursor', 'grok'];
+/** 面向用户的九家提供方名 → readers 适配器名（claude 是 claude-code 的别名） */
+export declare const FOREIGN_PROVIDERS: readonly ['claude', 'codex', 'opencode', 'zcode', 'pi', 'workbuddy', 'cursor', 'grok', 'gemini'];
 type ForeignProvider = (typeof FOREIGN_PROVIDERS)[number];
 /** 面向用户的 provider 名 → readers 适配器名（设置卡支持矩阵同用） */
 export declare const PROVIDER_TO_ADAPTER: Record<ForeignProvider, string>;
@@ -437,7 +437,7 @@ export declare function switchesPath(dir?: string): string;
 export declare function loadSwitches(dir?: string): TakeoverSwitches;
 /** 写开关：tmp+rename 原子替换（进程中断不再留下半截 config.json） */
 export declare function saveSwitches(switches: TakeoverSwitches, dir?: string): void;
-/** 某家是否启用（默认启用；只认八家名单内的停用条目） */
+/** 某家是否启用（默认启用；只认九家名单内的停用条目） */
 export declare function isProviderEnabled(provider: string, dir?: string): boolean;
 /** 切某家开关并持久化；未知 provider 抛中文错（路由层转 400） */
 export declare function setProviderEnabled(provider: string, enabled: boolean, dir?: string): TakeoverSwitches;
@@ -644,8 +644,9 @@ interface MemorySourceDef {
 }
 /** 已知记忆文件清单（用户级全局 + 项目级常用约定文件）。
  * 只列有公开文档惯例的路径；没列入的家不是不支持，是路径无公开惯例。
- * hippo-db 特殊行：dsh-hippo（伴侣智能体长期记忆插件）的 SQLite 库——二进制不随卡
- * 直带，存在性照报（UI 提示装了记忆库），出卡时正文替换为 dump/import 指引。 */
+ * hippo-db 特殊行：dsh-hippo（伴侣智能体长期记忆插件）的记忆库——v0.1.9 起是
+ * <数据目录>/memories/ 的 zvec 原生目录（proxima 向量索引 + rocksdb FTS），二进制
+ * 不随卡直带，存在性照报（UI 提示装了记忆库），出卡时正文替换为 export/import 指引。 */
 export declare const MEMORY_SOURCES: readonly MemorySourceDef[];
 /** 扫描结果行 */
 interface MemorySourceRow {
@@ -713,7 +714,7 @@ interface ResumeSkillSpec {
   /** 各家恢复边界文案（读取器排除什么、永不做什么） */
   readonly recoveryBoundary: string;
 }
-/** 八家注册规格：单一出处，content 由模板函数生成 */
+/** 九家注册规格：单一出处，content 由模板函数生成 */
 export declare const RESUME_SKILL_SPECS: readonly [{
   readonly name: 'resume-claude';
   readonly provider: 'claude';
@@ -762,14 +763,20 @@ export declare const RESUME_SKILL_SPECS: readonly [{
   readonly product: 'Grok';
   readonly description: '把一条 Grok 会话拉进当前会话，生成六段交接卡接手工作；可附会话 id、会话目录、记录路径或标题关键词。';
   readonly recoveryBoundary: '读取器只用 Grok 可见的 updates.jsonl 流，永不读 chat_history.jsonl 原始模型上下文。';
+}, {
+  readonly name: 'resume-gemini';
+  readonly provider: 'gemini';
+  readonly product: 'Gemini CLI';
+  readonly description: '把一条 Gemini CLI 会话拉进当前会话，生成六段交接卡接手工作；本地记录是新旧双格式 JSONL/JSON，子代理会话单独存盘，可附会话 id（记录路径）、记录路径或标题关键词。';
+  readonly recoveryBoundary: '读取器只读 Gemini CLI 本地 chats/ 下的会话文件（JSONL 新格式 / 整块 JSON 旧格式，含子代理会话目录）；info/error/warning CLI 提示与斜杠命令行不进对话流；只读不写、不复活 Gemini CLI 进程。';
 }];
-/** 单条 skill 内容模板：八条共用一个模板函数 */
+/** 单条 skill 内容模板：九条共用一个模板函数 */
 export declare function resumeSkillContent(spec: ResumeSkillSpec): string;
-/** 八条注册项（数组驱动，与 RESUME_SKILL_SPECS 一一对应） */
+/** 九条注册项（数组驱动，与 RESUME_SKILL_SPECS 一一对应） */
 export declare function resumeSkillRegistrations(): SkillRegistration[];
 //#endregion
 //#region skills/index.d.ts
-/** 全部 bundled slash skill 注册项（/handoff /inbox + /resume-* 八条） */
+/** 全部 bundled slash skill 注册项（/handoff /inbox + /resume-* 九条） */
 export declare function skillRegistrations(): SkillRegistration[];
 //#endregion
 //#region src/index.d.ts

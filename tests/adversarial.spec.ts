@@ -296,7 +296,7 @@ test('server：GET state 的 Host 必须回环；跨站 no-cors（Sec-Fetch-Site
       assert.equal(rebinding.status, 403, `rebinding Host 直通：${rebinding.status}`)
 
       const crossSite = await callRoute(handler, { headers: { host: '127.0.0.1:65001', 'sec-fetch-site': 'cross-site' } })
-      assert.equal(crossSite.status, 403, '跨站 no-cors GET 白跑八家目录扫描不受限')
+      assert.equal(crossSite.status, 403, '跨站 no-cors GET 白跑九家目录扫描不受限')
 
       const legit = await callRoute(handler, { headers: { host: '127.0.0.1:65001' } })
       assert.equal(legit.status, 200)

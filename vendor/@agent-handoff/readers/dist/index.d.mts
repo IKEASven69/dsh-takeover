@@ -1,6 +1,6 @@
 //#region src/transcript.d.ts
 /**
- * 会话 Turn 的最小类型与 Claude transcript 解析（transcript 解析模式，
+ * 会话 Turn 的最小类型与 Claude transcript 解析（移植自 dsh-hippo src/patterns/transcript.ts，
  * 去掉 cwdToProject——它依赖 hippo 项目别名表，不属于读取层）。
  *
  * 一条 assistant 消息的多个 content block 拆成多个 Turn（text / thinking / tool_use），
@@ -28,7 +28,7 @@ export declare function entryToTurns(entry: Entry): Turn[];
 //#region src/types.d.ts
 /** 一个已发现的会话（发现层产物，轻量：不含内容）。 */
 interface SessionRef {
-  /** 归属适配器名：claude-code | codex | opencode | zcode | pi | workbuddy | cursor | grok */
+  /** 归属适配器名：claude-code | codex | opencode | zcode | pi | workbuddy | cursor | grok | gemini */
   agent: string;
   /** 稳定 id：文件系=绝对路径；SQLite 系=会话 id。 */
   id: string;
@@ -114,6 +114,14 @@ export declare function parseCursorStore(dbPath: string): Turn[];
 export declare function parseGrokUpdatesText(text: string, cwd?: string, model?: string): Turn[];
 /** 解析一个会话目录（或 summary.json / updates.jsonl 路径）。 */
 export declare function parseGrokSession(id: string): Turn[];
+//#endregion
+//#region src/gemini.d.ts
+/** JSONL 文本 → Turn 流：已知类型分派，控制行与未知行静默跳过。 */
+export declare function parseGeminiText(text: string, cwd?: string): Turn[];
+/** 旧 .json（metadata+messages 单对象）→ Turn 流。 */
+export declare function parseGeminiJson(text: string, cwd?: string): Turn[];
+/** 会话文件路径（.jsonl 新格式 / .json 旧格式）→ Turn 流。文件缺失/损坏返回 []。 */
+export declare function parseGeminiSession(id: string): Turn[];
 //#endregion
 //#region src/index.d.ts
 export declare const AGENTS: SessionAdapter[];

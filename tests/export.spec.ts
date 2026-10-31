@@ -3,7 +3,7 @@
  * buildReportHtml / reportWords）+ host 侧并行字段的防御式读取
  * （envelopeCharsOf / coverageTextOf）。全部无 DOM、无时钟依赖：
  * generatedAt 由测试喂固定串，输出逐字可断言。
- * 覆盖面：全部区块（渐变头 / 统计三卡 / 边界说明 / 收件箱全卡 / 八家矩阵）、
+ * 覆盖面：全部区块（渐变头 / 统计三卡 / 边界说明 / 收件箱全卡 / 矩阵）、
  * zh/en 文案注入、空 pending 形态、转义纪律（模型生成文本不得以原文进 HTML）、
  * 防御位（字段缺席 → null 不显示）。
  */
@@ -37,7 +37,7 @@ function makeRow(partial?: Partial<PendingRow>): PendingRow {
   }
 }
 
-/** 八家矩阵：supported 交替、grok 停用、opencode 带假 0 哨兵 note */
+/** 矩阵 fixture（8 行）：supported 交替、grok 停用、opencode 带假 0 哨兵 note */
 function makeProviders(): ProviderRow[] {
   const names = ['claude', 'codex', 'opencode', 'zcode', 'pi', 'workbuddy', 'cursor', 'grok'] as const
   return names.map((name, i) => ({
@@ -95,7 +95,7 @@ test('reportWords：zh/en 全字段非空且确来自词典（缺键回退 key �
 
 // ---------- 全区块 ----------
 
-test('buildReportHtml：自包含单文件全区块——渐变头/统计三卡/边界说明/收件箱全卡/八家矩阵', () => {
+test('buildReportHtml：自包含单文件全区块——渐变头/统计三卡/边界说明/收件箱全卡/矩阵', () => {
   const html = render(makeState(), 'zh')
   // 自包含：DOCTYPE 开场、内联 <style>、无外链资源、恰一个收尾换行
   assert.ok(html.startsWith('<!DOCTYPE html>'))
@@ -130,7 +130,7 @@ test('buildReportHtml：自包含单文件全区块——渐变头/统计三卡/
   assert.ok(html.includes(WORDS.zh.previewEmpty))
   // 推送时间：可解析 ISO 出 YYYY-MM-DD HH:mm 形态（本地时区，不锚死具体值）
   assert.match(html, /\d{4}-\d{2}-\d{2} \d{2}:\d{2}/)
-  // 八家矩阵：规范名 ×8、原始 id、支持 pill、会话数、停用行、哨兵 note 浮出
+  // 矩阵（fixture 自带 8 行）：规范名 ×8、原始 id、支持 pill、会话数、停用行、哨兵 note 浮出
   for (const label of ['Claude Code', 'Codex CLI', 'OpenCode', 'ZCode', 'Pi', 'WorkBuddy', 'Cursor', 'Grok CLI']) {
     assert.ok(html.includes(label), `矩阵缺 ${label}`)
   }

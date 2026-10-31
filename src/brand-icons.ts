@@ -1,5 +1,5 @@
 /**
- * 八家 provider 品牌图标 —— 全部官方矢量，零字母块。
+ * provider 品牌图标 —— 全部官方矢量，零字母块。
  * 来源（09-25/10-01 逐个从官方渠道核实下载）：
  * - claude / codex(openai) / cursor：simple-icons（CC0，官方 path 收录）
  * - opencode：opencode.ai 官方 favicon（环形 #fff + 芯 #5A5858 双色原样保留）
@@ -8,6 +8,8 @@
  * - grok：xAI 官方 logomark（gilbarbara/logos 收录的官方矢量，256×246 单 path）
  * - workbuddy：workbuddy.cn 官方 logo.svg 整体内嵌（自带渐变圆底，不走 tile）
  * tile 底色均取官方主色；workbuddy 走 BRAND_FULL_SVG 特例。
+ * gemini（第 9 家读取器）暂无官方矢量在册：图标走 ProviderIcon 中性兜底，
+ * 显示名由 PROVIDER_LABEL 承担——未经核实的「官方 path」不入表。
  * @module dsh-takeover/brand-icons
  */
 
@@ -63,5 +65,6 @@ export const PROVIDER_LABEL: Record<string, string> = {
   workbuddy: 'WorkBuddy',
   cursor: 'Cursor',
   grok: 'Grok CLI',
+  gemini: 'Gemini CLI',
   dsh: 'DeepSeek Harness',
 }

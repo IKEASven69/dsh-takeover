@@ -42,7 +42,7 @@ test('registerInboxTool：注册 handoff_inbox 且 action 枚举齐全', async (
   assert.deepEqual(def.parameters.properties.action?.enum, ['list', 'load'])
 })
 
-test('registerForeignTool：注册 foreign_session_read，八家 provider 枚举齐全', async () => {
+test('registerForeignTool：注册 foreign_session_read，九家 provider 枚举齐全', async () => {
   const { registerForeignTool } = await import('../src/foreign.ts')
   const { ctx, registered } = fakeToolsCtx()
   registerForeignTool(ctx)
@@ -50,8 +50,8 @@ test('registerForeignTool：注册 foreign_session_read，八家 provider 枚举
   const def = registered[0]?.def as { parameters: { properties: Record<string, { enum?: string[] }> } }
   assert.deepEqual(def.parameters.properties.action?.enum, ['list', 'show'])
   const providers = def.parameters.properties.provider?.enum ?? []
-  assert.equal(providers.length, 8)
-  for (const p of ['claude', 'codex', 'opencode', 'zcode', 'pi', 'workbuddy', 'cursor', 'grok']) {
+  assert.equal(providers.length, 9)
+  for (const p of ['claude', 'codex', 'opencode', 'zcode', 'pi', 'workbuddy', 'cursor', 'grok', 'gemini']) {
     assert.ok(providers.includes(p), `缺 provider ${p}`)
   }
 })
