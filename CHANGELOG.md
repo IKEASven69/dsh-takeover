@@ -1,5 +1,16 @@
 # Changelog — dsh-takeover
 
+## [0.4.4] — 2026-11-01
+
+信用版：卡带上机器签名、收件箱装上「忽略」、读取器进到第九家——「诚实交接 + 最小惊扰」两条原则落到字节层。
+
+- **信封机器签名**：首次 push 自动生成总线密钥 `.signing-key.json`（密钥同步域=信任域）；签名面=信封全字段+卡面 `cardSha256`——未持钥改卡面（信封原样）同样可检出。取件侧三态裁决 `ok / tampered / no-key`（跨信任域绝不误报篡改），篡改进死亡地图新理由 `sig_tampered`，取件渲染 🔐/🚨 行；未签名旧卡完全兼容。诚实边界：持全权者连密钥一起换防不住——总线文件的系统权限是最后防线。
+- **pending 单卡忽略**：工作台卡行「忽略」按钮 + `POST /dsh-takeover/dismiss-pending` + `dismissPending`——卡/信封/patch 边车三件原样移入 `archived/`，id 消毒防路径穿越；全新总线无 `archived/` 时先建目录。
+- **第九家读取器 Gemini CLI**：`/resume-gemini` + list/show 全链——JSON/JSONL 双格式、子代理嵌套、`.project_root` cwd 还原；图标走中性兜底；`OUTBOUND_TARGETS` 不加 gemini（交接目标与读取器两轴独立）。
+- **记忆探测路径修正**：hippo-db 探测从遗留 `memory.db` 改到现役 zvec 位置（`~/.hippo` 系）——记忆快照 tab 在现部署下显示真实记忆库。
+- **测试基建信用修复**：`tests/secret-gate.spec.ts` 三处 `pushHandoff` 缺 `{ dir: home }`——每次全量测试向真实 `~/.handoff` 泄漏一张骨架卡 + 账本拒收事件（历史残留卡的增长规律由此解释），修复后以「跑前跑后 pending 数与 lifecycle 行数双不变」验证；smoke-foreign 技能数断言跟上九家（10→11）；smoke-userflow 上总线隔离守卫（默认拒真实总线，`--allow-real-bus` 逃生）+ act5 文案纠偏。
+- 质量闸：测试 **314** 全绿、typecheck+build 干净；真宿主浏览器点击链复验（三段 tab/忽略链：通知行、16→15、archived 三件套盘面核对）；密钥闸实战佐证——工作区 diff 含测试夹具串时 patch 边车扫描当场拦截 push（设计行为，假阳性按 redact 指引处理）。
+
 ## [0.4.3] — 2026-10-28
 
 居中模态版：接力工作台浮层从「锚定接力按钮位置弹出」改为**真正的视口居中模态**（inset:0 + margin:auto + fit-content，双轴居中）——多台机器、任意窗口尺寸下面板不再偏移；与宿主滚动完全解耦（移除捕获阶段滚动监听）；宽度三档分档与高度自适应保持不变。
