@@ -53,9 +53,9 @@ console.log('\n== 2. skill 注册表 ==')
 const skillList = await skills.list({ cwd: process.cwd() })
 const ours = skillList.filter((s) => s.provider === 'dsh-takeover')
 for (const s of ours) console.log(`- ${s.name} (user=${s.invocation.userInvocable}, model=${s.invocation.modelInvocable})`)
-check('10 条 bundled skill（handoff+inbox+八家 resume）', ours.length === 10)
-const resumeNames = ['resume-claude', 'resume-codex', 'resume-opencode', 'resume-zcode', 'resume-pi', 'resume-workbuddy', 'resume-cursor', 'resume-grok']
-check('/resume-* 八条齐全', resumeNames.every((n) => ours.some((s) => s.name === n)))
+check('11 条 bundled skill（handoff+inbox+九家 resume）', ours.length === 11)
+const resumeNames = ['resume-claude', 'resume-codex', 'resume-opencode', 'resume-zcode', 'resume-pi', 'resume-workbuddy', 'resume-cursor', 'resume-grok', 'resume-gemini']
+check('/resume-* 九条齐全', resumeNames.every((n) => ours.some((s) => s.name === n)))
 check('全部 userInvocable 且非 modelInvocable', ours.every((s) => s.invocation.userInvocable === true && s.invocation.modelInvocable === false))
 
 console.log('\n== 3. 真实 dispatch：foreign_session_read list zcode ==')

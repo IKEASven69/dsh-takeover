@@ -48,7 +48,7 @@ test('push 密钥闸：命中拒绝并回喂 redact 指引；allowSecrets 留痕
       goal: '配置说明',
       warnings: 'aws key: AKIAIOSFODNN7EXAMPLE（测试样例）',
       cwd: 'D:/nonexistent-xyz',
-    })
+    }, { dir: home })
     assert.equal(blocked.ok, false)
     if (blocked.ok) return
     assert.match(blocked.error, /密钥闸/)
@@ -61,7 +61,7 @@ test('push 密钥闸：命中拒绝并回喂 redact 指引；allowSecrets 留痕
       cwd: 'D:/nonexistent-xyz',
       allowSecrets: true,
       confirmSkeleton: true, // 混合手写+占位仍会触发空壳守门，两道旁路可叠加
-    })
+    }, { dir: home })
     assert.equal(bypass.ok, true)
     if (!bypass.ok) return
     assert.deepEqual(bypass.secretsBypass, ['AWS Access Key（AKIA…）'])
@@ -108,12 +108,17 @@ test('github_pat_ / ASIA / 连接串口令补漏', () => {
 })
 
 test('title 侧门封死（密钥进 title 同样被闸）', () => {
-  const blocked = pushHandoff(null, {
-    title: 'ghp_1234567890abcdefghij1234567890ABCD',
-    goal: '正常内容', cwd: 'D:/nonexistent-xyz',
-  })
-  assert.equal(blocked.ok, false)
-  if (!blocked.ok) assert.match(blocked.error, /密钥闸/)
+  const home = tmpHome()
+  try {
+    const blocked = pushHandoff(null, {
+      title: 'ghp_1234567890abcdefghij1234567890ABCD',
+      goal: '正常内容', cwd: 'D:/nonexistent-xyz',
+    }, { dir: home })
+    assert.equal(blocked.ok, false)
+    if (!blocked.ok) assert.match(blocked.error, /密钥闸/)
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
 })
 
 test('同一把 sk- key 只报一次（具体规则优先，不双计）', () => {

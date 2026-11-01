@@ -224,7 +224,7 @@ try {
     check('寄存的新卡在设置卡收件箱概览可见', ids.some((x) => [ocId, zcId].includes(x)), `pending=${ids.length}`)
     check('archived 计数已含本轮取件（≥3）', Number(state['archivedCount'] ?? 0) >= 3, `archivedCount=${state['archivedCount']}`)
   } else {
-    console.log(`⏭ 运行中宿主是隔离屋（${state['home']}），与旅程屋（${HANDOFF}）不同——分屋是设计行为，跳过可见性断言`)
+    console.log(`⏭ 运行中宿主的总线（${state['home']}）与旅程屋（${HANDOFF}）不同——分屋是设计行为，跳过可见性断言`)
   }
 } catch (e) {
   console.log(`⏭ 宿主 3080 不可达（${e.message}），跳过浏览器面——非阻塞项`)
