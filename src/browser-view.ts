@@ -223,6 +223,36 @@ export function filterByCwd(rows: SessionRow[], cwd: string | null): SessionRow[
   return rows.filter((r) => r.cwd === cwd)
 }
 
+/** 项目身份色板：300-400 级亮度，近黑壳与浅色壳都可读；rgb 三元组供 rgba 底/描边合成。 */
+export const PROJECT_PALETTE: Array<{ hex: string; rgb: string }> = [
+  { hex: '#818cf8', rgb: '129,140,248' }, // indigo
+  { hex: '#38bdf8', rgb: '56,189,248' }, // sky
+  { hex: '#34d399', rgb: '52,211,153' }, // emerald
+  { hex: '#fbbf24', rgb: '251,191,36' }, // amber
+  { hex: '#fb7185', rgb: '251,113,133' }, // rose
+  { hex: '#a78bfa', rgb: '167,139,250' }, // violet
+  { hex: '#22d3ee', rgb: '34,211,238' }, // cyan
+  { hex: '#fb923c', rgb: '251,146,60' }, // orange
+  { hex: '#a3e635', rgb: '163,230,53' }, // lime
+  { hex: '#e879f9', rgb: '232,121,249' }, // fuchsia
+]
+
+/** 空 cwd（无 cwd 信息的会话）用中性灰，不占用色板身份位 */
+export const PROJECT_NEUTRAL = { hex: '#94a3b8', rgb: '148,163,184' }
+
+/** 项目身份色：cwd 确定性哈希（fnv-1a 32bit）→ 色板取一。
+ * 同一项目在筛选 chips 与会话行里永远同色——「一个项目一眼同色」；
+ * 空 cwd 归中性灰。纯函数，无运行时依赖。 */
+export function projectColor(cwd: string): { hex: string; rgb: string } {
+  if (cwd === '') return PROJECT_NEUTRAL
+  let h = 2166136261
+  for (let i = 0; i < cwd.length; i++) {
+    h ^= cwd.charCodeAt(i)
+    h = Math.imul(h, 16777619)
+  }
+  return PROJECT_PALETTE[(h >>> 0) % PROJECT_PALETTE.length] ?? PROJECT_NEUTRAL
+}
+
 /**
  * 一键接管闭环（v2）：投递成功后让整个应用切换到新会话——uiWorkspace 是宿主
  * 客户端的导航服务（官方 sidebar 即 ctx.get("uiWorkspace").openSession(id)）。

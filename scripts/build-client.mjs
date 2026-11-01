@@ -4,12 +4,14 @@
 // 已验证的静态装配形态）。react 由宿主在运行时经 factory 的 require 注入，
 // 构建期一律 external；@deepseek-ai/* 仅 import type，编译后不产生运行时引用。
 import { build } from 'esbuild'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const OUT = join(ROOT, 'lib', 'client.js')
+// 版本徽标构建期注入——曾经硬编码在 client.ts 里，0.4.3→0.4.4 发版它还停在旧值
+const PKG_VERSION = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version
 
 const result = await build({
   entryPoints: [join(ROOT, 'src', 'client.ts')],
@@ -18,6 +20,7 @@ const result = await build({
   platform: 'browser',
   target: 'es2022',
   external: ['react', 'react/jsx-runtime'],
+  define: { __PANEL_VERSION__: JSON.stringify(`v${PKG_VERSION}`) },
   minify: false,
   write: false,
   sourcemap: false,

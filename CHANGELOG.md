@@ -8,6 +8,9 @@
 - **pending 单卡忽略**：工作台卡行「忽略」按钮 + `POST /dsh-takeover/dismiss-pending` + `dismissPending`——卡/信封/patch 边车三件原样移入 `archived/`，id 消毒防路径穿越；全新总线无 `archived/` 时先建目录。
 - **第九家读取器 Gemini CLI**：`/resume-gemini` + list/show 全链——JSON/JSONL 双格式、子代理嵌套、`.project_root` cwd 还原；图标走中性兜底；`OUTBOUND_TARGETS` 不加 gemini（交接目标与读取器两轴独立）。
 - **记忆探测路径修正**：hippo-db 探测从遗留 `memory.db` 改到现役 zvec 位置（`~/.hippo` 系）——记忆快照 tab 在现部署下显示真实记忆库。
+- **项目身份系统（会话浏览器）**：cwd 确定性哈希 → 十色板——项目筛选 chips 与会话行同源同色（彩色文件夹图标 + 选中态项目色描边 + 行首项目色左缘条 + 行内同色项目标），456 个会话的长列表滚动中「哪片是哪个项目」一眼可辨；空 cwd 归中性灰不占身份位。
+- **交接目标图标化**：「交接给谁」八家目标补品牌图标（与来源 pills 同款），裸文字钮退场；任意 agent 用本插件品牌小标。
+- **版本徽标自动化**：`v0.4.x` 徽标从 client.ts 手写常量改为构建期经 esbuild define 注入 package.json 版本——发版不再漂移（0.4.3 时代它停在旧值无人察觉）。
 - **测试基建信用修复**：`tests/secret-gate.spec.ts` 三处 `pushHandoff` 缺 `{ dir: home }`——每次全量测试向真实 `~/.handoff` 泄漏一张骨架卡 + 账本拒收事件（历史残留卡的增长规律由此解释），修复后以「跑前跑后 pending 数与 lifecycle 行数双不变」验证；smoke-foreign 技能数断言跟上九家（10→11）；smoke-userflow 上总线隔离守卫（默认拒真实总线，`--allow-real-bus` 逃生）+ act5 文案纠偏。
 - 质量闸：测试 **314** 全绿、typecheck+build 干净；真宿主浏览器点击链复验（三段 tab/忽略链：通知行、16→15、archived 三件套盘面核对）；密钥闸实战佐证——工作区 diff 含测试夹具串时 patch 边车扫描当场拦截 push（设计行为，假阳性按 redact 指引处理）。
 

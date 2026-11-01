@@ -54,6 +54,7 @@ import {
   OUTBOUND_TARGETS,
   outboundCommand,
   pickupCommand,
+  projectColor,
   relTime,
   shortId,
   takeoverCommand,
@@ -227,6 +228,19 @@ const ICON_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" wi
 function providerMark(name: string): BrandMark | null {
   const m = BRAND_MARKS[name]
   return m ?? null
+}
+
+/** 项目文件夹图标：实心小夹子，颜色=项目身份色（projectColor）。
+ * 会话浏览器的项目筛选 chips 与行内项目标同源同色——同一项目跨视图一眼可认。 */
+function FolderIcon({ color, size = 13 }: { color: string; size?: number }): ReturnType<typeof createElement> {
+  return createElement('svg', {
+    viewBox: '0 0 16 16', width: size, height: size, 'aria-hidden': true, style: { flex: 'none', display: 'block' },
+  },
+    createElement('path', {
+      d: 'M1.5 4A1.5 1.5 0 0 1 3 2.5h3.1c.44 0 .86.2 1.14.53l.9 1.07H13A1.5 1.5 0 0 1 14.5 5.6V12A1.5 1.5 0 0 1 13 13.5H3A1.5 1.5 0 0 1 1.5 12V4Z',
+      fill: color,
+    }),
+  )
 }
 
 function ProviderIcon({ name, size = 20 }: { name: string; size?: number }): ReturnType<typeof createElement> {
@@ -506,8 +520,9 @@ const CSS = `
 .bt-fsess-title:focus-visible { outline: 2px solid var(--bt-a); outline-offset: 2px; }
 .bt-fsess-time { flex: none; font-size: 11px; color: var(--bt-mut); font-variant-numeric: tabular-nums; }
 .bt-fsess-line2 { display: flex; gap: 8px; align-items: center; margin-top: 4px; }
-.bt-fsess-src { flex: none; max-width: 30%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-size: 11px; color: var(--bt-mut); }
+.bt-fsess-src { display: inline-flex; align-items: center; gap: 5px; flex: none; max-width: 32%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 600; }
+.bt-fsess-src svg { flex: none; }
 .bt-fsess-id { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-size: 11px; color: var(--bt-mut); cursor: pointer; font-variant-numeric: tabular-nums; }
 .bt-fsess-id:hover { color: var(--bt-a); }
@@ -1343,6 +1358,10 @@ export function TargetChips({ sel, lang, onSelect, ariaLabel }: {
       type: 'button',
       onClick: () => onSelect(tg),
     },
+      // 与左侧来源 pills 同款品牌图标——「交接给谁」不再是裸文字钮（any 用本插件品牌小标）
+      tg === 'any'
+        ? createElement('span', { className: 'bt-icon', style: { width: 13, height: 13, background: 'linear-gradient(135deg, #6366F1, #8B5CF6)' }, dangerouslySetInnerHTML: { __html: '<svg viewBox="0 0 64 64" width="100%" height="100%"><g fill="none" stroke="#fff" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"><path d="M15 19 L27 32 L15 45"/><path d="M29 19 L41 32 L29 45"/></g></svg>' } })
+        : createElement(ProviderIcon, { name: tg, size: 13 }),
       createElement('span', { className: 'bt-chip-label' }, OUTBOUND_LABELS[tg][lang]),
     )),
   )
@@ -1839,7 +1858,13 @@ export function ForeignBrowser({ state, t, lang, onError, onNotice, navigate, ba
     const open = openId === r.id
     const idShown = shortId(r)
     const idKey = `id:${r.id}`
-    return createElement('div', { key: r.id, className: 'bt-fsess' },
+    const rowCol = projectColor(r.cwd)
+    return createElement('div', {
+      key: r.id,
+      className: 'bt-fsess',
+      // 项目色左缘条：整个列表按项目着色——滚动里扫一眼就知道哪片是哪个项目
+      style: { borderLeft: `3px solid ${rowCol.hex}` },
+    },
       createElement('div', { className: 'bt-fsess-line1' },
         createElement('span', {
           className: 'bt-fsess-title',
@@ -1855,10 +1880,15 @@ export function ForeignBrowser({ state, t, lang, onError, onNotice, navigate, ba
         createElement('span', { className: 'bt-fsess-time' }, relTime(r.updatedAt, now, lang)),
       ),
       createElement('div', { className: 'bt-fsess-line2' },
-        createElement('span', {
-          className: 'bt-fsess-src',
-          title: r.cwd !== '' ? r.cwd : undefined,
-        }, r.cwd === '' ? '—' : (r.cwd.split(/[\\/]/).filter(Boolean).pop() ?? r.cwd)),
+        (() => {
+          const col = projectColor(r.cwd)
+          const label = r.cwd === '' ? '—' : (r.cwd.split(/[\\/]/).filter(Boolean).pop() ?? r.cwd)
+          return createElement('span', {
+            className: 'bt-fsess-src',
+            title: r.cwd !== '' ? r.cwd : undefined,
+            style: r.cwd === '' ? undefined : { color: col.hex },
+          }, createElement(FolderIcon, { color: col.hex }), label)
+        })(),
         createElement('span', {
           className: 'bt-fsess-id',
           role: 'button',
@@ -1988,17 +2018,23 @@ export function ForeignBrowser({ state, t, lang, onError, onNotice, navigate, ba
           ),
           list.total > 0 && facets.length > 1
             ? createElement('div', { className: 'bt-chips', key: 'fs-cwd', role: 'group', 'aria-label': t('facetCwdAria'), style: { marginTop: 6 } },
-                ...facets.map((f) => createElement('button', {
-                  key: f.cwd === '' ? '(empty)' : f.cwd,
-                  className: `bt-chip${cwdEffective === f.cwd ? ' bt-chip-on' : ''}`,
-                  'aria-pressed': cwdEffective === f.cwd,
-                  type: 'button',
-                  title: f.cwd === '' ? undefined : f.cwd,
-                  onClick: () => setCwdSel(cwdEffective === f.cwd ? null : f.cwd),
-                },
-                  createElement('span', { className: 'bt-chip-label' }, f.label),
-                  createElement('span', { className: 'bt-chip-count' }, String(f.count)),
-                )),
+                ...facets.map((f) => {
+                  const col = projectColor(f.cwd)
+                  const on = cwdEffective === f.cwd
+                  return createElement('button', {
+                    key: f.cwd === '' ? '(empty)' : f.cwd,
+                    className: `bt-chip${on ? ' bt-chip-on' : ''}`,
+                    style: on ? { borderColor: `rgba(${col.rgb},.55)`, background: `rgba(${col.rgb},.14)`, color: col.hex } : undefined,
+                    'aria-pressed': on,
+                    type: 'button',
+                    title: f.cwd === '' ? undefined : f.cwd,
+                    onClick: () => setCwdSel(on ? null : f.cwd),
+                  },
+                    createElement(FolderIcon, { color: col.hex }),
+                    createElement('span', { className: 'bt-chip-label' }, f.label),
+                    createElement('span', { className: 'bt-chip-count' }, String(f.count)),
+                  )
+                }),
               )
             : null,
           list.total > 0 && matched.length === 0
@@ -2449,7 +2485,10 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
  * （不够放就改朝下），窄窗左缘夹进视口——不再顶出屏幕外、不再钻进侧栏底下。
  * sessionId 由宿主座位注入（session 级座位的标准参数；交接出去一键用，缺席降级复制路径）。 */
 /** 面板版本徽标（发布时随版本号更新；显示在浮层标题旁，用于一眼核对部署版本） */
-const PANEL_VERSION = 'v0.4.3'
+// 版本徽标：构建期由 scripts/build-client.mjs 经 esbuild define 注入 package.json 的 version——
+// 不再手写（0.4.3 发 0.4.4 时它还停在旧值）。tsx 直跑（测试）无 define，回退 'v?'。
+declare const __PANEL_VERSION__: string
+const PANEL_VERSION: string = typeof __PANEL_VERSION__ === 'string' ? __PANEL_VERSION__ : 'v?'
 
 export function ComposerChip({ t, locale, navigate, sessionId }: {
   t: Translate
