@@ -1,10 +1,11 @@
 /**
- * dsh-takeover 浏览器半：设置页「dsh-takeover」卡。
- * 四区：命令速览（/handoff · /inbox · /resume-*，直接可见）/ 收件箱概览
- * （即时过滤 + 相邻重复卡分组 + 「新」卡徽标（localStorage 已见集，键含
- * HANDOFF_HOME 散列）+ 展开看目标段预览 + 单卡/全部导出 .md + 导出 HTML 报告
- * （自包含单文件，state→html 为可单测纯函数）+ archived 计数 + 清空归档）/
- * 支持矩阵（九家读取器：规范名+品牌图标、会话数、启用开关）/ 开关语义说明。
+ * dsh-takeover 浏览器半：设置页「dsh-takeover」卡 + 接力工作台（composer 浮层）。
+ * 设置卡（DESIGN.md §4 设置卡页签，三段页签、禁止长滚动）：命令速览（/handoff · /inbox ·
+ * /resume-*，mono 键+说明）/ 支持矩阵（九家读取器：规范名+品牌图标、会话数、状态 pill、
+ * 启用开关）/ 开关语义说明。工作台（收件箱概览即时过滤 + 相邻重复卡分组 + 「新」卡徽标
+ * （localStorage 已见集，键含 HANDOFF_HOME 散列）+ 展开看目标段预览 + 单卡/全部导出 .md +
+ * 导出 HTML 报告（自包含单文件，state→html 为可单测纯函数）+ archived 计数 + 清空归档）
+ * 在 slim 模式下由输入框「接力」按钮唤出，老宿主降级时内嵌在设置卡页签之外常驻。
  * 文案走宿主 i18n：ctx.locale 注册本卡词典（zh/en）+ bind 出 t()，
  * 语言切换经 locale revision 驱动重渲染（宿主缺席时回退 zh 静态词典）。
  * 数据通路走同源 fetch 直连 host 路由 /dsh-takeover/*。
@@ -14,7 +15,7 @@
  * @module dsh-takeover/client
  */
 
-import { Component, createElement, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { Component, createElement, useEffect, useId, useRef, useState, useSyncExternalStore } from 'react'
 // 0.2.0：一方客户端插件直接收 cordis Context。
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: ctx.slots（SlotRegistry 服务）由 ui-renderer 的 cordis Context 合并提供。
@@ -122,10 +123,13 @@ function langOf(locale: LocaleRuntime | undefined): Lang {
  * prefers-color-scheme 又只跟系统不跟宿主；宿主切主题换的是背景（浅=白底，
  * 深=黑底），文字色恒定。所以按 body 背景色亮度判断明暗，给 muted /
  * 语义色选对轴。每次渲染现算（主题切换后任意交互即校正）。
+ * forceDark：工作台面（DESIGN.md §1 近黑画布指挥台）自铺 --tk-canvas，恒走暗轴
+ * ——设置卡内嵌（老宿主降级）落在浅色宿主页里也不翻白。
  */
-function themeVars(): Record<string, string> {
+function themeVars(forceDark = false): Record<string, string> {
   let dark = true
   try {
+    if (forceDark) return darkVars()
     // body 背景透明（rgba alpha 0 / 空）时退化到 html 根元素——部分宿主只给根上底色
     let bg = getComputedStyle(document.body).backgroundColor
     if (bg === '' || /rgba?\([^)]*\/\s*0\s*\)/.test(bg) || bg === 'transparent') {
@@ -148,25 +152,7 @@ function themeVars(): Record<string, string> {
     /* 保底按深色 */
   }
   return dark
-    ? {
-        '--bt-a-text': '#a5b4fc',
-        '--bt-mut': 'rgba(255,255,255,.62)',
-        '--bt-ok': '#4ade80',
-        '--bt-warn': '#fbbf24',
-        '--bt-err': '#f87171',
-        // 三级表面：canvas（浮层壳/面板自身，不另铺色）→ 卡（透明/极淡底+描边）
-        // → 嵌套面（--bt-card，比卡再抬一档，预览块/输入框/会话行用）
-        '--bt-card': 'rgba(255,255,255,.035)',
-        '--bt-line': 'rgba(255,255,255,.08)',
-        '--bt-id': 'rgba(255,255,255,.58)',
-        '--bt-hover': 'rgba(255,255,255,.10)',
-        // 壳层（浮层模态本体）：近黑画布 + 发光描边——与宿主页立即拉开层次
-        '--bt-shell-bg': 'linear-gradient(180deg, #0e0f13, #08090a)',
-        '--bt-shell-border': 'rgba(255,255,255,.12)',
-        '--bt-shell-edge': 'linear-gradient(90deg, #6366F1, #8B5CF6, #6366F1)',
-        // 顶部 1px 内发光（描边浮现卡的内高光，随明暗轴换色）
-        '--bt-inset': 'inset 0 1px 0 rgba(255,255,255,.06)',
-      }
+    ? darkVars()
     : {
         '--bt-a-text': '#4f46e5',
         '--bt-mut': 'rgba(30,41,59,.72)',
@@ -182,6 +168,31 @@ function themeVars(): Record<string, string> {
         '--bt-shell-border': 'rgba(15,23,42,.12)',
         '--bt-shell-edge': 'linear-gradient(90deg, #6366F1, #8B5CF6, #6366F1)',
       }
+}
+
+/** 暗轴 --bt-* 令牌（宿主深色页 / 工作台画布内恒用）。文字与描边值对齐
+ * DESIGN.md §2 的 --tk-* 三级文字与两级描边，内层组件（卡行/chips/输入框）
+ * 不改一行也落在同一调色板上。 */
+function darkVars(): Record<string, string> {
+  return {
+    '--bt-a-text': '#c7cdfd',
+    '--bt-mut': '#9aa3b5',
+    '--bt-ok': '#34d399',
+    '--bt-warn': '#fbbf24',
+    '--bt-err': '#fb7185',
+    // 三级表面：canvas（浮层壳/面板自身，不另铺色）→ 卡（透明/极淡底+描边）
+    // → 嵌套面（--bt-card，比卡再抬一档，预览块/输入框/会话行用）
+    '--bt-card': 'rgba(255,255,255,.032)',
+    '--bt-line': 'rgba(255,255,255,.075)',
+    '--bt-id': '#6b7386',
+    '--bt-hover': 'rgba(255,255,255,.055)',
+    // 壳层（浮层模态本体）：近黑画布 + 发光描边——与宿主页立即拉开层次
+    '--bt-shell-bg': 'linear-gradient(180deg, #0e0f13, #08090a)',
+    '--bt-shell-border': 'rgba(255,255,255,.12)',
+    '--bt-shell-edge': 'linear-gradient(90deg, #6366F1, #8B5CF6, #6366F1)',
+    // 顶部 1px 内发光（描边浮现卡的内高光，随明暗轴换色）
+    '--bt-inset': 'inset 0 1px 0 rgba(255,255,255,.06)',
+  }
 }
 
 // 注意：不要把 'sidebarRightTabs' 加进 inject——第三方插件入口的加载器对未知
@@ -277,6 +288,66 @@ function ProviderIcon({ name, size = 20 }: { name: string; size?: number }): Ret
 // 深色模式下兜底值整体换轴（prefers-color-scheme），宿主令牌在场时天然跟随主题。
 // ---------------------------------------------------------------------------
 
+/**
+ * DESIGN.md §2/§6 语义 token（--tk-*）：一处定义——CSS 经 TK_DECLS 注入
+ * .bt-panel，浮层壳（在 .bt-panel 之外）行内展开同一份；组件规则只许引用
+ * var(--tk-*)，禁止裸色值绕过 token（DESIGN.md DON'T）。
+ * 动效 token 沿用 --bt-ease/--bt-dur（cubic-bezier(.4,0,.2,1) + 160ms，同 §7）。
+ */
+const TK_TOKENS = {
+  // canvas：近黑画布 + 顶部品牌径向辉光（§2）；壳与内嵌工作台共用一份背景
+  '--tk-canvas': '#0a0c11',
+  '--tk-canvas-bg':
+    'radial-gradient(900px 340px at 22% -8%, rgba(99,102,241,.16), transparent 60%), ' +
+    'radial-gradient(700px 300px at 90% -12%, rgba(167,139,250,.10), transparent 60%), var(--tk-canvas)',
+  // surface 两级 + 导航轨微底
+  '--tk-surface': 'rgba(255,255,255,.032)',
+  '--tk-surface-2': 'rgba(255,255,255,.055)',
+  '--tk-rail': 'rgba(255,255,255,.018)',
+  // line 两级
+  '--tk-line': 'rgba(255,255,255,.075)',
+  '--tk-line-2': 'rgba(255,255,255,.13)',
+  // text 三级
+  '--tk-text': '#e7eaf2',
+  '--tk-mut': '#9aa3b5',
+  '--tk-dim': '#6b7386',
+  // 唯一 accent 渐变（§2：logo/主按钮/导航选中/win 顶条）+ 选中态文字/软底
+  '--tk-a': '#818cf8',
+  '--tk-a2': '#a78bfa',
+  '--tk-a-text': '#c7cdfd',
+  '--tk-a-soft': 'rgba(129,140,248,.14)',
+  '--tk-a-line': 'rgba(129,140,248,.5)',
+  '--tk-grad': 'linear-gradient(135deg, #6366F1, #8B5CF6)',
+  '--tk-edge-grad': 'linear-gradient(90deg, #6366F1, #a78bfa, #6366F1)',
+  // 渐变上的文字/滑块色（§2 on-accent）——规则里不再写 #fff
+  '--tk-on-accent': '#fff',
+  // 品牌辉光投影闭集（§2/§6）：glow = logo + primary 按钮；glow-ctl = 选中页签等紧凑控件
+  '--tk-glow': '0 4px 14px rgba(99,102,241,.4)',
+  '--tk-glow-ctl': '0 2px 10px rgba(99,102,241,.3)',
+  // 状态三色（闭集，§2）
+  '--tk-ok': '#34d399',
+  '--tk-warn': '#fbbf24',
+  '--tk-err': '#fb7185',
+  // 状态 pill 底纹/描边（§4：ok/warn 两色底纹+描边）——tint 也只在这里定义一次
+  '--tk-ok-soft': 'rgba(52,211,153,.1)',
+  '--tk-ok-line': 'rgba(52,211,153,.3)',
+  '--tk-warn-soft': 'rgba(251,191,36,.1)',
+  '--tk-warn-line': 'rgba(251,191,36,.3)',
+  // 唯一投影：浮层本体（§6）
+  '--tk-shadow': '0 24px 70px rgba(0,0,0,.5)',
+}
+const TK_DECLS = Object.entries(TK_TOKENS).map(([k, v]) => `${k}: ${v};`).join(' ')
+
+/** 导航轨图标（lucide 同款线性笔触，24 viewBox stroke=currentColor；UI 字形
+ * 非品牌标，不涉「禁止虚构官方矢量」约束）。记忆快照字形与记忆卡折叠栏
+ * 头部的图标同源（lucide database），独立一份避免图标计数误报。 */
+const NAV_ICONS = {
+  inbox: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>',
+  browser: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19.07 4.93A10 10 0 0 0 6.99 3.34"/><path d="M4 6h.01"/><path d="M2.29 9.62A10 10 0 1 0 21.31 8.35"/><path d="M16.24 7.76A6 6 0 1 0 8.23 16.67"/><path d="M12 18h.01"/><path d="M17.99 11.66A6 6 0 0 1 15.77 16.67"/><circle cx="12" cy="12" r="2"/><path d="m13.41 10.59 5.66-5.66"/></svg>',
+  send: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.714 3.048a.498.498 0 0 0-.683.627l2.843 7.627a2 2 0 0 1 0 1.396l-2.842 7.627a.498.498 0 0 0 .682.627l18-8.5a.5.5 0 0 0 0-.904z"/><path d="M6 12h16"/></svg>',
+  memory: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>',
+}
+
 const CSS = `
 .bt-panel { display: flex; flex-direction: column; gap: 16px; padding: 4px 0 10px;
   container-type: inline-size;
@@ -287,29 +358,94 @@ const CSS = `
   /* 动效 token：全套 transition/animation 只吃这两个值（D 批收敛，不再零散调参） */
   --bt-ease: cubic-bezier(.4,0,.2,1); --bt-dur: 160ms;
   /* 顶部 1px 内发光（明轴默认；暗轴由 themeVars 按 body 亮度覆写） */
-  --bt-inset: inset 0 1px 0 rgba(255,255,255,.7); }
-/* 浮层挂载（bt-bounded）：面板吃满浮层剩余高，横幅/引导条固定；宽容器双列各自内滚。
-   窄容器（auto-fit 退化为单列，<976px）整体退回 .bt-cols 内滚——@container 只能
-   作用于容器后代，故退化规则挂在 .bt-cols 上而非 .bt-bounded 本身 */
-.bt-bounded { flex: 1 1 auto; min-height: 0; overflow: hidden; }
-.bt-bounded .bt-col { overflow-y: auto; min-height: 0; min-width: 0;
-/* 右栏分段动作卡（0.4.3）：三窗格单卡 + 分段器——同维度控件不再三卡同屏 */
-.bt-seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: 10px;
-  background: rgba(127,127,127,.08); border: 1px solid var(--bt-line); }
-.bt-segbtn { border: none; background: transparent; border-radius: 8px;
-  padding: 4px 12px; font-size: 12px; font-weight: 500; color: var(--bt-mut);
-  cursor: pointer; font-family: inherit; }
-.bt-segbtn[aria-selected="true"] { background: var(--bt-card); color: var(--bt-a-text);
-  font-weight: 600; box-shadow: inset 0 0 0 1px var(--bt-line); }
-.bt-tabpane { min-width: 0; }
-.bt-bare { min-width: 0; }
-  scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.18) transparent; }
-.bt-bounded .bt-col::-webkit-scrollbar { width: 8px; }
-.bt-bounded .bt-col::-webkit-scrollbar-thumb { background: var(--bt-line); border-radius: 999px; }
-.bt-bounded .bt-col::-webkit-scrollbar-track { background: transparent; }
+  --bt-inset: inset 0 1px 0 rgba(255,255,255,.7);
+  /* DESIGN.md §2/§6 语义 token（唯一定义见 TK_TOKENS） */
+  ${TK_DECLS} }
+/* ===== 工作台重排（DESIGN.md §5）：左导航轨 148px + 右侧全宽视图，两栏拼盘废除 ===== */
+/* 浮层挂载（bt-bounded）：面板吃满浮层剩余高、贴壳零内距；滚动责任下沉到 .tk-scroll */
+.bt-bounded { flex: 1 1 auto; min-height: 0; overflow: hidden; gap: 0; padding: 0; }
+/* 屏幕阅读器专用（浮层标题：壳内唯一可见文字是导航轨，dialog 可及名走这里） */
+.tk-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.tk-body { display: flex; flex: 1 1 auto; min-height: 0; color: var(--tk-text); }
+/* 设置卡内嵌（老宿主降级，无浮层壳）：工作台自铺 canvas+辉光，成为页内一块深色指挥台 */
+.bt-panel:not(.bt-bounded) .tk-body { background: var(--tk-canvas-bg); border: 1px solid var(--tk-line);
+  border-radius: 16px; overflow: hidden; min-height: 480px; }
+/* 导航轨：164px（148 会截断「会话浏览器」——真宿主验收 11-02 抓的），logo+四视图+上手指南+版本徽标（§4 导航轨项 / §5 布局） */
+.tk-rail { width: 164px; flex: none; box-sizing: border-box; border-right: 1px solid var(--tk-line);
+  background: var(--tk-rail); padding: 14px 10px; display: flex; flex-direction: column; gap: 4px; }
+.tk-brand { display: flex; align-items: center; gap: 8px; padding: 4px 8px 14px; min-width: 0; }
+.tk-brand-logo { width: 26px; height: 26px; flex: none; display: block; overflow: hidden; border-radius: 8px;
+  filter: drop-shadow(var(--tk-glow)); }
+.tk-brand-logo svg { display: block; }
+.tk-brand b { font-size: 13px; font-weight: 600; letter-spacing: .01em; color: var(--tk-text); }
+.tk-navitem { display: flex; align-items: center; gap: 9px; width: 100%; box-sizing: border-box;
+  border: 0; background: transparent; color: var(--tk-mut); padding: 9px 10px; border-radius: 9px;
+  font-size: 12.5px; font-weight: 500; font-family: inherit; cursor: pointer; text-align: left;
+  position: relative; transition: background var(--bt-dur) var(--bt-ease), color var(--bt-dur) var(--bt-ease); }
+.tk-navitem:hover { background: var(--tk-surface); color: var(--tk-text); }
+.tk-navitem:focus-visible { outline: 2px solid var(--tk-a); outline-offset: -2px; }
+/* 壳层关闭钮：右上角悬浮（视图头动作让出右缘，见 .bt-bounded .tk-head） */
+.tk-close { position: absolute; top: 11px; right: 12px; z-index: 2; width: 26px; height: 26px;
+  display: grid; place-items: center; border-radius: 8px; border: 1px solid var(--tk-line-2);
+  background: var(--tk-surface); color: var(--tk-mut); font-size: 12px; font-family: inherit; cursor: pointer;
+  transition: color var(--bt-dur, 160ms) var(--bt-ease, ease), border-color var(--bt-dur, 160ms) var(--bt-ease, ease); }
+.tk-close:hover { color: var(--tk-text); border-color: var(--tk-a-line); }
+.tk-close:focus-visible { outline: 2px solid var(--tk-a); outline-offset: 2px; }
+/* 选中态：品牌渐变左缘光条 + --tk-a-soft 底（§4） */
+.tk-navitem[aria-pressed="true"] { background: var(--tk-a-soft); color: var(--tk-a-text); font-weight: 600; }
+.tk-navitem[aria-pressed="true"]::before { content: ''; position: absolute; left: -10px; top: 8px; bottom: 8px;
+  width: 3px; border-radius: 0 3px 3px 0; background: var(--tk-grad); }
+.tk-navitem .tk-ic { width: 15px; height: 15px; flex: none; display: inline-flex; }
+.tk-navitem .tk-ic svg { width: 15px; height: 15px; display: block; }
+.tk-navlabel { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tk-badge { margin-left: auto; flex: none; font-size: 10px; font-weight: 600; min-width: 17px; text-align: center;
+  padding: 1px 5px; border-radius: 999px; box-sizing: border-box; background: var(--tk-a-soft); color: var(--tk-a-text);
+  font-variant-numeric: tabular-nums; }
+.tk-badge-hot { background: var(--tk-grad); color: var(--tk-on-accent); }
+.tk-rail-foot { margin-top: auto; display: flex; flex-direction: column; gap: 2px; }
+.tk-ver { margin: 8px 8px 0; font-size: 10px; color: var(--tk-dim); font-family: ui-monospace, monospace;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 主区：视图头（15px 标题+一句副标+视图级动作，§5）+ 视图体内滚，头部与轨常驻 */
+.tk-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.tk-view { display: none; flex-direction: column; flex: 1 1 auto; min-height: 0; min-width: 0; }
+.tk-view-on { display: flex; }
+.tk-head { flex: none; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 15px 20px 13px; border-bottom: 1px solid var(--tk-line); }
+.bt-bounded .tk-head { padding-right: 50px; }
+/* 指南属展开体（§6）：虚线顶边分隔，不嵌卡片底色 */
+.tk-view-guide .tk-head { border-bottom-style: dashed; }
+.tk-view-guide .tk-scroll > .bt-card { background: transparent; border: 0; border-radius: 0; box-shadow: none; padding: 0; }
+.tk-head-text { min-width: 0; }
+.tk-h { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -.01em; line-height: 1.3; }
+.tk-p { margin: 2px 0 0; font-size: 11px; color: var(--tk-mut); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tk-head-acts { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.tk-head .bt-filter { flex: 0 1 220px; min-width: 150px; height: 30px; }
+.tk-scroll { flex: 1 1 auto; min-height: 0; min-width: 0; display: flex; flex-direction: column; gap: 13px;
+  padding: 16px 20px 20px; }
+.bt-bounded .tk-scroll { overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.18) transparent; }
+.bt-bounded .tk-scroll::-webkit-scrollbar { width: 8px; }
+.bt-bounded .tk-scroll::-webkit-scrollbar-thumb { background: var(--tk-line-2); border-radius: 999px; }
+.bt-bounded .tk-scroll::-webkit-scrollbar-track { background: transparent; }
+.tk-strips { flex: none; display: flex; flex-direction: column; gap: 8px; padding: 10px 20px 0; }
+/* 收件箱概览瓦片（§4）：大数字 19px tabular + 小标签 + 左缘 3px 语义色条；窄容器两行（§8）。
+   DOM 顺序=标签在前数字在后（读屏念「待取件 3」而非「3 待取件」），column-reverse 负责视觉上数字在上 */
+.tk-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.tk-tile { background: var(--tk-surface); border: 1px solid var(--tk-line); border-radius: 12px;
+  padding: 11px 13px 10px; position: relative; overflow: hidden; box-sizing: border-box; min-width: 0;
+  display: flex; flex-direction: column-reverse; gap: 2px; }
+.tk-tile::after { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+  background: var(--tk-tc, var(--tk-a)); opacity: .85; }
+.tk-tile-num { font-size: 19px; font-weight: 600; letter-spacing: -.02em; line-height: 1.15;
+  font-variant-numeric: tabular-nums; }
+.tk-tile-lab { font-size: 11px; color: var(--tk-mut); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tk-tile-ok .tk-tile-num { color: var(--tk-ok); }
+.tk-tile-warn .tk-tile-num { color: var(--tk-warn); }
+.tk-tile-err .tk-tile-num { color: var(--tk-err); }
 @container (max-width: 975px) {
-  .bt-bounded .bt-col { overflow: visible; }
-  .bt-bounded .bt-cols { overflow-y: auto; min-height: 0; }
+  .tk-tiles { grid-template-columns: repeat(3, 1fr); }
+  .tk-head { padding: 13px 16px 11px; }
+  .tk-scroll { padding: 13px 16px 16px; }
+  .tk-strips { padding: 10px 16px 0; }
 }
 /* 筛选行：未读开关居左、来源 chips 靠右随折行 */
 .bt-filterrow { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; justify-content: space-between; }
@@ -357,14 +493,8 @@ const CSS = `
   color: var(--bt-mut); background: rgba(127,127,127,.1); border: 1px solid var(--bt-line);
   font-variant-numeric: tabular-nums; }
 .bt-badge-hot { color: var(--bt-a); background: rgba(99,102,241,.1); border-color: rgba(99,102,241,.3); }
-/* 收件箱统计条：待取件/已存档/可查证/信封 四枚软胶囊（数字对齐，热态品牌渐变描边） */
-.bt-statstrip { display: flex; gap: 6px; flex-wrap: wrap; }
-.bt-stat { font-size: 11px; color: var(--bt-mut); background: var(--bt-hover);
-  border: 1px solid transparent; border-radius: 999px; padding: 3px 10px;
-  font-variant-numeric: tabular-nums; white-space: nowrap;
-  transition: background var(--bt-dur) var(--bt-ease), border-color var(--bt-dur) var(--bt-ease); }
-.bt-stat-hot { color: var(--bt-a-text); background: rgba(99,102,241,.12); border-color: rgba(99,102,241,.35); font-weight: 600; }
-.bt-stat-warn { color: var(--bt-warn); background: rgba(251,191,36,.12); border-color: rgba(251,191,36,.4); }
+/* bare 根（SendCard / ForeignBrowser / MemoryCard 嵌入视图体时的无壳容器） */
+.bt-bare { min-width: 0; }
 .bt-btn { cursor: pointer; border-radius: 10px; font-size: 12px; font-weight: 500; padding: 6px 16px;
   border: 1px solid var(--bt-line); background: transparent; color: inherit; white-space: nowrap;
   transition: border-color var(--bt-dur) var(--bt-ease), color var(--bt-dur) var(--bt-ease), background var(--bt-dur) var(--bt-ease), transform var(--bt-dur) var(--bt-ease); }
@@ -428,9 +558,9 @@ const CSS = `
 .bt-filter:focus { border-color: var(--bt-a); box-shadow: 0 0 0 3px rgba(99,102,241,.15); }
 .bt-filter::placeholder { color: var(--bt-mut); opacity: .75; }
 /* 行内小徽标：「新」（未展开过的卡）与分组计数，同一基座。
-   C 批降饱和：低饱和底 + 1px 同色描边，视觉权重降一档（10px/600） */
-.bt-tag { font-size: 10px; font-weight: 600; line-height: 1.5; padding: 1px 8px;
-  border-radius: 999px; flex: none; white-space: nowrap; box-sizing: border-box; letter-spacing: .02em; }
+   C 批降饱和：低饱和底 + 1px 同色描边，视觉权重降一档；字号 11px——文案是中文（§3 下限，与 .tk-pill 同裁决） */
+.bt-tag { font-size: 11px; font-weight: 600; line-height: 1.5; padding: 1px 8px;
+  border-radius: 999px; flex: none; white-space: nowrap; box-sizing: border-box; letter-spacing: .01em; }
 .bt-tag-new { color: var(--bt-warn); background: rgba(251,191,36,.08); border: 1px solid rgba(251,191,36,.32); }
 .bt-tag-lowinfo { color: var(--bt-mut); background: rgba(127,127,127,.06); border: 1px solid var(--bt-line); }
 .bt-tag-group { color: var(--bt-a); background: rgba(99,102,241,.08); border: 1px solid rgba(99,102,241,.3); }
@@ -438,49 +568,96 @@ const CSS = `
 .bt-pending-member { margin-left: 20px; }
 /* 行外壳（中性容器，内含 role=button 行 + 兄弟预览块）：延续原先行内 flex-wrap 布局 */
 .bt-pending-wrap { display: flex; flex-wrap: wrap; }
-.bt-cmds { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 10px; }
-.bt-cmd { display: flex; align-items: center; gap: 8px; min-width: 0; border: 1px solid var(--bt-line);
-  border-radius: 10px; padding: 7px 12px; font-size: 12px; background: transparent;
-  transition: opacity var(--bt-dur) var(--bt-ease), border-color var(--bt-dur) var(--bt-ease), background var(--bt-dur) var(--bt-ease); }
-.bt-cmd:hover { border-color: var(--bt-line); background: var(--bt-hover); }
-.bt-cmd-key { font-family: ui-monospace, monospace; font-size: 11px; font-weight: 600; flex: none; }
-.bt-cmd-key-primary { color: var(--bt-a-text); }
-.bt-cmd-desc { color: var(--bt-mut); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bt-cmd .bt-icon { width: 16px; height: 16px; flex: none; border-radius: 5px; }
-.bt-cmd-off { opacity: .42; }
+/* ===== 设置卡（DESIGN.md §4 设置卡页签 / 原型窗口 2）=====
+   自铺 canvas 的深色指挥台块（--bt-* 行内恒走暗轴，浅色宿主页里不翻白，同工作台内嵌处理）：
+   头行（logo+标题+分段器+动作）+ 三段页签面板（命令速览 / 支持矩阵 / 开关语义），禁止长滚动一屏到底 */
+.tk-set { position: relative; overflow: hidden; box-sizing: border-box; min-width: 0;
+  background: var(--tk-canvas-bg); color: var(--tk-text); border: 1px solid var(--tk-line); border-radius: 16px;
+  padding: 16px 20px 20px; display: flex; flex-direction: column; gap: 13px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.05); }
+/* 顶边 3px 品牌渐变条（§2：accent 渐变用于 win 顶条） */
+.tk-set::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+  background: var(--tk-edge-grad); opacity: .9; }
+.tk-set-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
+.tk-set-logo { width: 26px; height: 26px; flex: none; display: block; overflow: hidden; border-radius: 8px;
+  filter: drop-shadow(var(--tk-glow)); }
+.tk-set-logo svg { display: block; }
+.tk-set-text { min-width: 0; flex: 0 1 auto; }
+.tk-set-title { font-size: 13px; font-weight: 600; letter-spacing: -.01em; line-height: 1.3; color: var(--tk-text); }
+.tk-set-sub { font-size: 11px; color: var(--tk-dim); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tk-set-acts { display: flex; align-items: center; gap: 8px; flex: none; }
+/* 分段器：3px 内距容器 + 7px 圆角页签，选中页签品牌渐变（§4）；button+aria-selected 语义 */
+.tk-tabs { display: flex; gap: 3px; padding: 3px; width: fit-content; max-width: 100%; box-sizing: border-box;
+  background: var(--tk-surface); border: 1px solid var(--tk-line); border-radius: 9px; margin-left: auto; }
+.tk-tab { border: 0; background: transparent; color: var(--tk-mut); font-family: inherit; font-size: 12px; font-weight: 500;
+  line-height: 1.3; padding: 6px 15px; border-radius: 7px; cursor: pointer; white-space: nowrap;
+  transition: background var(--bt-dur) var(--bt-ease), color var(--bt-dur) var(--bt-ease); }
+.tk-tab:hover { color: var(--tk-text); background: var(--tk-surface-2); }
+.tk-tab:focus-visible { outline: 2px solid var(--tk-a); outline-offset: 2px; }
+.tk-tab[aria-selected="true"] { background: var(--tk-grad); color: var(--tk-on-accent); font-weight: 600;
+  box-shadow: var(--tk-glow-ctl); }
+/* 面板：三块常驻挂载，hidden 切换（与工作台视图同一手法：display 由类控制，hidden 属性给语义） */
+.tk-pane { display: none; flex-direction: column; gap: 10px; min-width: 0; }
+.tk-pane-on { display: flex; }
+.tk-pane[hidden] { display: none; }
+.tk-pane-lead { font-size: 11px; color: var(--tk-dim); }
+/* 命令速览网格：mono 键 + 说明文案（§3 代码 ui-monospace）；数据源不变（/handoff · /inbox · /resume-*） */
+.tk-cmds { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 8px; }
+.tk-cmd { display: flex; align-items: center; gap: 9px; min-width: 0; box-sizing: border-box;
+  border: 1px solid var(--tk-line); border-radius: 9px; padding: 9px 12px; background: var(--tk-surface);
+  transition: border-color var(--bt-dur) var(--bt-ease), opacity var(--bt-dur) var(--bt-ease); }
+.tk-cmd:hover { border-color: var(--tk-a-line); }
+.tk-cmd .bt-icon { width: 16px; height: 16px; flex: none; border-radius: 5px; }
+.tk-cmd-key { font-family: ui-monospace, monospace; font-size: 11px; font-weight: 600; color: var(--tk-text); flex: none; }
+.tk-cmd-key-primary { color: var(--tk-a-text); }
+.tk-cmd-desc { font-size: 11px; color: var(--tk-mut); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tk-cmd-off { opacity: .42; }
 .bt-icon { display: inline-flex; align-items: center; justify-content: center; border-radius: 6px;
   flex: none; overflow: hidden; box-shadow: inset 0 0 0 1px rgba(255,255,255,.14), 0 1px 2px rgba(0,0,0,.16); }
 .bt-icon svg { display: block; }
 .bt-icon-full { border-radius: 50%; }
 .bt-icon-full svg { width: 100%; height: 100%; }
 .bt-icon-letter { color: #fff; font-weight: 700; font-size: 11px; line-height: 1; letter-spacing: -.02em; user-select: none; }
-.bt-matrix { display: flex; flex-direction: column; }
-.bt-mrow { display: grid; grid-template-columns: minmax(170px, auto) 1fr auto auto; gap: 10px; align-items: center;
-  padding: 8px 6px; font-size: 12px; border-bottom: 1px solid var(--bt-line); border-radius: 8px;
+/* 支持矩阵（九家）：名称列（品牌图标+规范名+mono id+哨兵提示）/ 会话数 / 状态 pill / 开关 */
+.tk-mx { display: flex; flex-direction: column; }
+.tk-mxr { display: grid; grid-template-columns: minmax(170px, auto) 1fr auto auto; gap: 11px; align-items: center;
+  padding: 8px 4px; border-bottom: 1px solid var(--tk-line); border-radius: 8px;
   transition: opacity var(--bt-dur) var(--bt-ease), background var(--bt-dur) var(--bt-ease); }
-.bt-mrow:hover { background: var(--bt-hover); }
-.bt-mrow:last-child { border-bottom: none; }
-.bt-mrow-idle { opacity: .48; }
-.bt-mrow-idle:hover { opacity: .8; }
-.bt-mname-col { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.bt-mname-wrap { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.bt-mname { font-weight: 600; font-size: 13px; white-space: nowrap; }
-.bt-mid { font-family: ui-monospace, monospace; font-size: 11px; color: var(--bt-mut); opacity: .75; }
-/* 假 0 哨兵浮出：supported 且 note 非空时行内橙色小字（不只放 title），与 --bt-warn 同轴 */
-.bt-mnote { font-size: 11px; line-height: 1.5; color: var(--bt-warn); max-width: 360px; overflow-wrap: anywhere; }
-.bt-mstat { font-size: 11px; color: var(--bt-mut); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.bt-pill { font-size: 10px; font-weight: 600; padding: 2px 9px; border-radius: 999px; flex: none;
-  min-width: 34px; text-align: center; box-sizing: border-box; letter-spacing: .02em; }
-.bt-pill-ok { color: var(--bt-ok); background: rgba(21,128,61,.1); border: 1px solid rgba(21,128,61,.35); }
-.bt-pill-no { color: var(--bt-warn); background: rgba(180,83,9,.1); border: 1px solid rgba(180,83,9,.35); }
-.bt-toggle { cursor: pointer; width: 38px; height: 22px; border-radius: 999px; border: none;
-  background: rgba(127,127,127,.25); position: relative; padding: 0; justify-self: end;
-  transition: background var(--bt-dur) var(--bt-ease); box-shadow: inset 0 1px 2px rgba(0,0,0,.12); }
-.bt-toggle:disabled { opacity: .45; cursor: default; }
-.bt-toggle::after { content: ''; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px;
-  border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.25); transition: left var(--bt-dur) var(--bt-ease); }
-.bt-toggle-on { background: var(--bt-a); }
-.bt-toggle-on::after { left: 19px; }
+.tk-mxr:hover { background: var(--tk-surface); }
+.tk-mxr:last-child { border-bottom: 0; }
+/* 灰行 = 本机未装或暂无会话（note 为空）；待确认行保持全亮，黄 pill 第一眼可辨 */
+.tk-mxr-idle { opacity: .5; }
+.tk-mxr-idle:hover { opacity: .85; }
+.tk-mname-col { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.tk-mname-wrap { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.tk-mname { font-size: 13px; font-weight: 600; letter-spacing: -.01em; color: var(--tk-text); white-space: nowrap; }
+.tk-mid { font-family: ui-monospace, monospace; font-size: 11px; color: var(--tk-dim); }
+/* 假 0 哨兵浮出：supported 且 note 非空时行内黄色小字（不只放 title），与 pill 同轴 */
+.tk-mnote { font-size: 11px; line-height: 1.5; color: var(--tk-warn); max-width: 360px; overflow-wrap: anywhere; }
+.tk-mstat { font-size: 11px; color: var(--tk-mut); text-align: right; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* 状态 pill（§4）：11px/600 胶囊（§3 中文下限 11px 优先于原型的 10px——文案是中文），
+   ok/warn 两色底纹+描边，文案闭集（支持 / 待确认 / 不可用） */
+.tk-pill { font-size: 11px; font-weight: 600; padding: 2px 9px; border-radius: 999px; flex: none;
+  min-width: 34px; text-align: center; box-sizing: border-box; letter-spacing: .01em; white-space: nowrap; }
+.tk-pill-ok { color: var(--tk-ok); background: var(--tk-ok-soft); border: 1px solid var(--tk-ok-line); }
+.tk-pill-warn { color: var(--tk-warn); background: var(--tk-warn-soft); border: 1px solid var(--tk-warn-line); }
+/* 开关（§4）：34×19 圆角轨（视觉），选中品牌渐变，白色滑块带投影；滑块只动 transform（§7）。
+   命中区：透明 ::before 上下各扩 3px → 25px 高，满足 §8 可点目标 ≥24px，轨尺寸不变 */
+.tk-switch { cursor: pointer; width: 34px; height: 19px; border-radius: 999px; border: 0; padding: 0;
+  background: var(--tk-line-2); position: relative; justify-self: end; flex: none;
+  transition: background var(--bt-dur) var(--bt-ease); }
+.tk-switch::before { content: ''; position: absolute; left: 0; right: 0; top: -3px; bottom: -3px; }
+.tk-switch:disabled { opacity: .45; cursor: default; }
+.tk-switch:focus-visible { outline: 2px solid var(--tk-a); outline-offset: 2px; }
+.tk-switch::after { content: ''; position: absolute; top: 2.5px; left: 2.5px; width: 14px; height: 14px; border-radius: 50%;
+  background: var(--tk-on-accent); box-shadow: 0 1px 3px rgba(0,0,0,.35); transition: transform var(--bt-dur) var(--bt-ease); }
+.tk-switch-on { background: var(--tk-grad); }
+.tk-switch-on::after { transform: translateX(15px); }
+/* 开关语义：虚线描边透明面（§6 不嵌套卡片底色），两段说明 */
+.tk-sem { border: 1px dashed var(--tk-line); border-radius: 12px; padding: 13px 16px;
+  font-size: 12px; color: var(--tk-mut); line-height: 1.7; display: flex; flex-direction: column; gap: 8px; }
+.tk-sem p { margin: 0; }
 .bt-note { font-size: 12px; color: var(--bt-mut); line-height: 1.6; border-left: 2px solid var(--bt-line);
   padding-left: 10px; }
 .bt-note summary { cursor: pointer; user-select: none; list-style: none; display: flex; align-items: center; gap: 6px; }
@@ -488,7 +665,7 @@ const CSS = `
 .bt-note summary::before { content: '▸'; font-size: 10px; transition: transform var(--bt-dur) var(--bt-ease); }
 .bt-note[open] summary::before { transform: rotate(90deg); }
 .bt-note-body { margin-top: 6px; }
-/* 窄容器（侧栏收窄）：命令单列、矩阵行收掉会话数列，避免挤压换行 */
+/* 窄容器（侧栏收窄）：矩阵行收掉会话数列，避免挤压换行（命令网格走 auto-fill 自然单列）；规则见文末 @container */
 /* 来源筛选 chips：全部/各家/只看新卡，pill 基座 + 选中态品牌描边 */
 .bt-chips { display: flex; flex-wrap: wrap; gap: 6px 8px; margin: 2px 0 8px; }
 .bt-chip { display: inline-flex; align-items: center; gap: 6px; cursor: pointer;  border: 1px solid var(--bt-line); border-radius: 999px; padding: 3px 12px;
@@ -505,8 +682,12 @@ const CSS = `
  * 蒸馏都在会话里由模型完成（卡片质量跟模型能力走）。
  * 样式：主操作「接管」有主按钮权重；动作按钮定宽防状态文案切换跳动；
  * chips 与按钮补键盘焦点环。 */
-.bt-btn-primary { color: var(--bt-a-text); border-color: rgba(99,102,241,.45); background: rgba(99,102,241,.12); font-weight: 600; }
-.bt-btn-primary:not(:disabled):hover { background: var(--bt-a); border-color: var(--bt-a); color: #fff; transform: translateY(-1px); }
+/* primary 按钮（§4/§6）：品牌渐变底 + on-accent 文字 + 品牌投影 --tk-glow（原型 tk-btn.primary 同法）；
+   悬浮只提亮（brightness）不换色，基类 hover 的描边/文字换色在此覆盖；全部走 --tk-* token */
+.bt-btn-primary { color: var(--tk-on-accent); border-color: transparent; background: var(--tk-grad); font-weight: 600;
+  box-shadow: var(--tk-glow); transition: filter var(--bt-dur) var(--bt-ease), transform var(--bt-dur) var(--bt-ease); }
+.bt-btn-primary:not(:disabled):hover { background: var(--tk-grad); border-color: transparent; color: var(--tk-on-accent);
+  filter: brightness(1.12); transform: translateY(-1px); }
 .bt-fsess-act .bt-btn-xs { min-width: 4.5em; }
 .bt-chip:focus-visible, .bt-btn:focus-visible { outline: 2px solid var(--bt-a); outline-offset: 2px; }
 .bt-chip-off { opacity: .4; }
@@ -551,9 +732,8 @@ const CSS = `
   .bt-fsess-act { flex-wrap: wrap; }
 }
 @container (max-width: 430px) {
-  .bt-cmds { grid-template-columns: 1fr; }
-  .bt-mrow { grid-template-columns: minmax(0, auto) auto auto; }
-  .bt-mstat { display: none; }
+  .tk-mxr { grid-template-columns: minmax(0, auto) auto auto; }
+  .tk-mstat { display: none; }
 }
 `
 
@@ -1297,36 +1477,45 @@ export function ProviderMatrix({ rows, busy, onToggle, t }: {
   onToggle: (name: string, enabled: boolean) => void
   t: Translate
 }): ReturnType<typeof createElement> {
-  return createElement('div', { className: 'bt-matrix' },
+  return createElement('div', { className: 'tk-mx' },
     ...rows.map((r) => {
       const label = PROVIDER_LABEL[r.name] ?? r.name
-      // 假 0 哨兵浮出：supported 且 note 非空（布局迁移提示等）→ 行内橙色小字 +
-      // title 悬浮 + aria-description，三处同源；unsupported 行仍走 stat 列的 unsupportedNote
+      // 假 0 哨兵浮出：supported 且 note 非空（布局迁移提示等）→ 行内黄色小字 +
+      // title 悬浮 + aria-describedby，三处同源；unsupported 行仍走 stat 列的 unsupportedNote
       const showNote = r.supported && r.note !== ''
       const noteId = `bt-mnote-${r.name}`
+      // 状态 pill（DESIGN.md §2 三色纪律，§4 文案闭集）：
+      //   绿「支持」= 可用且发现了会话；
+      //   黄「待确认」= 目录存在但 0 会话（假 0 哨兵：sessions===0 且 note 非空）或会话数探测失败（<0，低信息）；
+      //   黄「不可用」= 本机不支持。
+      // 灰行（idle）只给「本机未装/暂无会话」（0 会话且无哨兵）与不支持行——待确认行保持全亮，黄 pill 第一眼可辨
+      const pending = r.supported && ((r.sessions === 0 && r.note !== '') || r.sessions < 0)
+      const idle = !r.supported || (r.sessions === 0 && r.note === '')
+      const pillClass = r.supported && !pending ? 'tk-pill tk-pill-ok' : 'tk-pill tk-pill-warn'
+      const pillText = !r.supported ? t('pillNo') : pending ? t('pillPending') : t('pillOk')
       return createElement('div', {
         key: r.name,
-        className: `bt-mrow${!r.supported || r.sessions === 0 ? ' bt-mrow-idle' : ''}`,
+        className: `tk-mxr${idle ? ' tk-mxr-idle' : ''}`,
         title: r.note !== '' ? r.note : undefined,
         // aria-description 不是有效 ARIA 属性（读屏不识别）——改 aria-describedby 指向可见 note 节点
         'aria-describedby': showNote ? noteId : undefined,
       },
-        createElement('span', { className: 'bt-mname-col' },
-          createElement('span', { className: 'bt-mname-wrap' },
+        createElement('span', { className: 'tk-mname-col' },
+          createElement('span', { className: 'tk-mname-wrap' },
             createElement(ProviderIcon, { name: r.name }),
-            createElement('span', { className: 'bt-mname' }, label),
-            createElement('span', { className: 'bt-mid' }, r.name),
+            createElement('span', { className: 'tk-mname' }, label),
+            createElement('span', { className: 'tk-mid' }, r.name),
           ),
-          showNote ? createElement('span', { className: 'bt-mnote', id: noteId }, r.note) : null,
+          showNote ? createElement('span', { className: 'tk-mnote', id: noteId }, r.note) : null,
         ),
-        createElement('span', { className: 'bt-mstat' },
+        createElement('span', { className: 'tk-mstat' },
           r.supported
             ? (r.sessions >= 0 ? t('sessionsCount', { n: r.sessions }) : t('sessionsProbeFail'))
             : (r.note !== '' ? t('unsupportedNote', { note: r.note }) : t('unsupported'))),
-        createElement('span', { className: `bt-pill ${r.supported ? 'bt-pill-ok' : 'bt-pill-no'}` },
-          r.supported ? t('pillOk') : t('pillNo')),
+        createElement('span', { className: pillClass }, pillText),
         createElement('button', {
-          className: `bt-toggle${r.enabled ? ' bt-toggle-on' : ''}`,
+          className: `tk-switch${r.enabled ? ' tk-switch-on' : ''}`,
+          type: 'button',
           role: 'switch',
           'aria-checked': r.enabled,
           'aria-label': t('toggleAria', { label, id: r.name }),
@@ -2045,13 +2234,14 @@ export function ForeignBrowser({ state, t, lang, onError, onNotice, navigate, ba
 }
 
 // ---------------------------------------------------------------------------
-// 命令速览：直接可见（不折叠）。provider 与 foreign.ts 的 FOREIGN_PROVIDERS
-// 保持一致——不直接 import（值引入会把 host 半的 cordis/dsh-tools 拖进客户端包）。
+// 命令速览：设置卡「命令速览」页签的网格体（mono 键 + 说明文案，DESIGN.md §3/§4）。
+// provider 与 foreign.ts 的 FOREIGN_PROVIDERS 保持一致——不直接 import
+// （值引入会把 host 半的 cordis/dsh-tools 拖进客户端包）。
 // ---------------------------------------------------------------------------
 
 const RESUME_PROVIDERS = ['claude', 'codex', 'opencode', 'zcode', 'pi', 'workbuddy', 'cursor', 'grok', 'gemini'] as const
 
-export function CommandsCard({ state, t }: { state: TakeoverState | null; t: Translate }): ReturnType<typeof createElement> {
+export function CommandsGrid({ state, t }: { state: TakeoverState | null; t: Translate }): ReturnType<typeof createElement> {
   const disabled = new Set<string>(
     (state?.providers ?? []).filter((p) => !p.enabled).map((p) => p.name as string),
   )
@@ -2060,28 +2250,23 @@ export function CommandsCard({ state, t }: { state: TakeoverState | null; t: Tra
     const label = provider !== undefined ? (PROVIDER_LABEL[provider] ?? provider) : undefined
     return createElement('div', {
       key: cmd,
-      className: `bt-cmd${off ? ' bt-cmd-off' : ''}`,
+      className: `tk-cmd${off ? ' tk-cmd-off' : ''}`,
       title: off && label !== undefined ? t('cmdOffTitle', { label }) : undefined,
     },
       provider !== undefined
         ? createElement(ProviderIcon, { name: provider })
-        : createElement('span', { className: 'bt-icon', style: { width: 16, height: 16, background: 'var(--bt-a, #2563eb)' } },
+        // 本插件自有命令：品牌渐变块（§2 来源头像：品牌渐变圆角块 + 图标）
+        : createElement('span', { className: 'bt-icon', style: { width: 16, height: 16, background: 'var(--tk-grad)' } },
             createElement('svg', { viewBox: '0 0 64 64', width: 10, height: 10, 'aria-hidden': true },
               createElement('rect', { x: 12, y: 26.5, width: 40, height: 11, rx: 5.5, fill: '#fff', transform: 'rotate(-45 32 32)' }))),
-      createElement('span', { className: `bt-cmd-key${primary ? ' bt-cmd-key-primary' : ''}` }, cmd),
-      createElement('span', { className: 'bt-cmd-desc' }, desc),
+      createElement('span', { className: `tk-cmd-key${primary ? ' tk-cmd-key-primary' : ''}` }, cmd),
+      createElement('span', { className: 'tk-cmd-desc' }, desc),
     )
   }
-  return createElement('div', { className: 'bt-card' },
-    createElement('div', { className: 'bt-head' },
-      createElement('span', { className: 'bt-title-sec' }, t('cmdTitle')),
-      createElement('span', { className: 'bt-badge' }, t('cmdBadge')),
-    ),
-    createElement('div', { className: 'bt-cmds' },
-      chip('/handoff', t('cmdHandoffDesc'), undefined, true),
-      chip('/inbox', t('cmdInboxDesc'), undefined, true),
-      ...RESUME_PROVIDERS.map((p) => chip(`/resume-${p}`, t('cmdResumeDesc', { name: PROVIDER_LABEL[p] ?? p }), p)),
-    ),
+  return createElement('div', { className: 'tk-cmds' },
+    chip('/handoff', t('cmdHandoffDesc'), undefined, true),
+    chip('/inbox', t('cmdInboxDesc'), undefined, true),
+    ...RESUME_PROVIDERS.map((p) => chip(`/resume-${p}`, t('cmdResumeDesc', { name: PROVIDER_LABEL[p] ?? p }), p)),
   )
 }
 
@@ -2170,10 +2355,19 @@ function useTakeoverPolling(): {
   return { state, setState, error, setError, reload, generationRef }
 }
 
-/** 工作台面：收件箱概览 + 交接出去 + 外部会话浏览器 + 记忆快照（一键接管/定向取件/
- * 出站交接/记忆打包全在这里）。挂载面有两个——宿主 0.2 右侧栏「接管」tab
- * （chrome=true，自带 slim 头卡）与老宿主降级时的设置卡内嵌（chrome=false，
- * 头卡由设置卡提供）。sessionId 由宿主座位注入（交接出去用）；缺席只降级该卡。 */
+/** 面板版本徽标（显示在导航轨底部，用于一眼核对部署版本） */
+// 版本徽标：构建期由 scripts/build-client.mjs 经 esbuild define 注入 package.json 的 version——
+// 不再手写（0.4.3 发 0.4.4 时它还停在旧值）。tsx 直跑（测试）无 define，回退 'v?'。
+declare const __PANEL_VERSION__: string
+const PANEL_VERSION: string = typeof __PANEL_VERSION__ === 'string' ? __PANEL_VERSION__ : 'v?'
+
+/** 工作台视图键：四个数据视图（常驻挂载、display 切换保状态）+ 轨底「上手指南」唤出的第五视图 */
+type WorkView = 'inbox' | 'browse' | 'send' | 'memory' | 'guide'
+
+/** 工作台面（DESIGN.md §5：左导航轨 148px + 右侧全宽视图）：收件箱 / 会话浏览器 /
+ * 交接出去 / 记忆快照（一键接管/定向取件/出站交接/记忆打包全在这里）。挂载面有两个——
+ * composer「接力」浮层（bounded=true，壳由 ComposerChip 提供）与老宿主降级时的设置卡内嵌
+ * （bounded 缺席，工作台自铺 canvas）。sessionId 由宿主座位注入（交接出去用）；缺席只降级该卡。 */
 export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp, bounded }: {
   t: Translate
   locale: LocaleRuntime | undefined
@@ -2181,9 +2375,9 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
   chrome: boolean
   /** 当前会话 id（宿主 conversation 座位注入；设置卡/老宿主缺席 → 交接出去卡走复制路径） */
   sessionId?: string
-  /** 新手 FAQ 显隐（由浮层标题栏的 [?] 按钮切换；默认隐藏不占行） */
+  /** 新手 FAQ：true 时初始落在「上手指南」视图（轨底按钮可随时切换；默认收件箱） */
   showHelp?: boolean
-  /** 浮层挂载（有固定高度外壳：面板变 flex 列、栅格内滚） */
+  /** 浮层挂载（有固定高度外壳：面板变 flex 列、视图体内滚） */
   bounded?: boolean
 }): ReturnType<typeof createElement> {
   useLocaleSync(locale)
@@ -2198,8 +2392,41 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
   const [exportMenu, setExportMenu] = useState(false)
   // 取件投递态（记正在投的卡 id，按行显示投递中）+ 操作回执横幅
   const [takeBusyId, setTakeBusyId] = useState<string | null>(null)
-  // 右栏分段动作卡：当前窗格（浏览/交接/记忆——三窗格常驻挂载，display 切换保状态）
-  const [actionPane, setActionPane] = useState<'browse' | 'send' | 'memory'>('browse')
+  // 导航轨当前视图：四视图常驻挂载（display 切换保状态），指南按需渲染。
+  // showHelp=true（旧浮层 [?] 语义）→ 落在指南视图
+  const [view, setView] = useState<WorkView>(showHelp === true ? 'guide' : 'inbox')
+  useEffect(() => { if (showHelp === true) setView('guide') }, [showHelp])
+  // 视图头 h2 id 前缀：设置卡内嵌 + composer 浮层可同时挂两实例（chipReady 晚翻转），
+  // 固定 id 会撞、aria-labelledby 指向歧义——与设置卡 tabId/paneId 同法走 useId
+  const uid = useId()
+  const headId = (k: WorkView): string => `${uid}h-${k}`
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const railRef = useRef<HTMLElement | null>(null)
+  const filterRef = useRef<HTMLInputElement | null>(null)
+  // 过滤框聚焦（DESIGN.md §5：`/` 键聚焦，Cmd/Ctrl+K 语义）：过滤框只在收件箱视图头，
+  // 其他视图下先切回收件箱，等本轮提交后再聚焦（display:none 的输入框 focus 会落空）
+  const focusFilter = (): void => {
+    if (view === 'inbox') {
+      filterRef.current?.focus()
+      filterRef.current?.select()
+      return
+    }
+    setView('inbox')
+    window.setTimeout(() => { filterRef.current?.focus(); filterRef.current?.select() }, 0)
+  }
+  // 键盘流挂在工作台根（React 合成事件只在焦点落在工作台内时触发——设置卡内嵌态不劫持
+  // 宿主页面其他输入；浮层态打开即焦点入壳，`/` 立即可用）。`/` 在可编辑元素里放行（照常输入），
+  // Cmd/Ctrl+K 不分焦点一律生效并截断（盖掉浏览器/宿主自己的 K 绑定）
+  const onRootKeyDown = (e: { key: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean; target: unknown; preventDefault(): void; stopPropagation(): void }): void => {
+    const cmdK = (e.metaKey || e.ctrlKey) && !e.altKey && (e.key === 'k' || e.key === 'K')
+    if (cmdK) { e.preventDefault(); e.stopPropagation(); focusFilter(); return }
+    if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return
+    const el = e.target as { tagName?: string; isContentEditable?: boolean } | null
+    const tag = el?.tagName ?? ''
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el?.isContentEditable === true) return
+    e.preventDefault()
+    focusFilter()
+  }
   const [clearBusy, setClearBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const noticeTimer = useRef<number | undefined>(undefined)
@@ -2293,26 +2520,72 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
       setError(e instanceof Error ? e.message : String(e))
     }
   }
-  return createElement('div', { className: `bt-panel${bounded === true ? ' bt-bounded' : ''}`, style: themeVars() },
-    createElement('style', null, CSS),
+  // ---- 导航轨数据：待取件数 / 默认前置家会话数（与 ForeignBrowser bare+active 自动前置规则同口径：
+  //      会话最多的可用家；浏览器内换家是其私有状态，轨徽标不跟随——title 里如实披露口径） ----
+  const pendingCount = state?.pending.length ?? 0
+  const frontHome = state === null
+    ? undefined
+    : [...state.providers].filter((p) => p.supported && p.enabled && p.sessions > 0).sort((a, b) => b.sessions - a.sessions)[0]
+  interface NavItem { k: WorkView; label: string; icon: string; badge?: number; hot?: boolean; badgeTitle?: string }
+  const navItems: NavItem[] = [
+    { k: 'inbox', label: t('navInbox'), icon: NAV_ICONS.inbox, badge: state !== null ? pendingCount : undefined, hot: pendingCount > 0, badgeTitle: t('pendingDirHint') },
+    {
+      k: 'browse', label: t('navBrowser'), icon: NAV_ICONS.browser, badge: frontHome?.sessions,
+      badgeTitle: frontHome !== undefined ? t('navBrowserBadgeTitle', { label: PROVIDER_LABEL[frontHome.name] ?? frontHome.name }) : undefined,
+    },
+    { k: 'send', label: t('sendTitle'), icon: NAV_ICONS.send },
+    { k: 'memory', label: t('memoryTitle'), icon: NAV_ICONS.memory },
+  ]
+  // ---- 导航轨键盘流（DESIGN.md §4 导航轨项）：↑/↓ 循环、Home/End 首尾，落焦即切视图
+  //      （与设置卡页签 onTabsKeyDown 同法；轨是 <nav>，各项保持可 Tab，不做 roving tabindex）----
+  const RAIL_ORDER: readonly WorkView[] = ['inbox', 'browse', 'send', 'memory', 'guide']
+  const onRailKeyDown = (e: { key: string; preventDefault(): void }): void => {
+    const i = RAIL_ORDER.indexOf(view)
+    const n = RAIL_ORDER.length
+    const next = e.key === 'ArrowDown' ? RAIL_ORDER[(i + 1) % n]
+      : e.key === 'ArrowUp' ? RAIL_ORDER[(i - 1 + n) % n]
+        : e.key === 'Home' ? RAIL_ORDER[0]
+          : e.key === 'End' ? RAIL_ORDER[n - 1]
+            : undefined
+    if (next === undefined) return
+    e.preventDefault()
+    setView(next)
+    // 指南视图按需渲染，但轨上的按钮常驻——同步查到即可聚焦
+    railRef.current?.querySelector<HTMLElement>(`[data-view="${next}"]`)?.focus()
+  }
+  const navButton = (item: NavItem): ReturnType<typeof createElement> =>
+    createElement('button', {
+      key: item.k,
+      className: 'tk-navitem',
+      type: 'button',
+      'data-view': item.k,
+      'aria-pressed': view === item.k,
+      onClick: () => setView(item.k),
+    },
+      createElement('span', { className: 'tk-ic', 'aria-hidden': true, dangerouslySetInnerHTML: { __html: item.icon } }),
+      createElement('span', { className: 'tk-navlabel' }, item.label),
+      item.badge !== undefined
+        ? createElement('span', { className: `tk-badge${item.hot === true ? ' tk-badge-hot' : ''}`, title: item.badgeTitle }, String(item.badge))
+        : null,
+    )
 
-    // 右侧栏挂载时的 slim 头卡：标识 + 手动刷新（设置卡内嵌时头卡由 Panel 提供）
-    chrome
-      ? createElement('div', { className: 'bt-card' },
-          createElement('div', { className: 'bt-head' },
-            createElement('span', { className: 'bt-logo', dangerouslySetInnerHTML: { __html: ICON_SVG } }),
-            createElement('span', { className: 'bt-title-sec' }, t('sidebarTabTitle')),
-            createElement('span', { className: 'bt-spacer' }),
-            createElement('button', { className: 'bt-btn', onClick: reload }, t('refresh')),
-          ),
-        )
-      : null,
-    error !== null ? createElement('div', { className: 'bt-banner bt-banner-err' }, error) : null,
-    notice !== null ? createElement('div', { className: 'bt-banner bt-banner-info' }, notice) : null,
-
+  // ---- 视图头（15px 标题 + 一句副标 + 视图级动作）与视图壳（hidden 视图 display:none + hidden 属性）----
+  type Node = ReturnType<typeof createElement> | null
+  const head = (k: WorkView, title: string, sub: string, actions: Node[]): ReturnType<typeof createElement> =>
+    createElement('div', { className: 'tk-head' },
+      createElement('div', { className: 'tk-head-text' },
+        createElement('h2', { className: 'tk-h', id: headId(k) }, title),
+        createElement('p', { className: 'tk-p' }, sub),
+      ),
+      actions.some((a) => a !== null) ? createElement('div', { className: 'tk-head-acts' }, ...actions) : null,
+    )
+  // 横幅/引导条只渲染一份：挂在当前视图头下（头部常驻，视图体内滚）
+  const stripNodes: Node[] = [
+    error !== null ? createElement('div', { key: 'err', className: 'bt-banner bt-banner-err' }, error) : null,
+    notice !== null ? createElement('div', { key: 'notice', className: 'bt-banner bt-banner-info' }, notice) : null,
     // 新手三步引导条（仅浮层挂载；「知道了」后 localStorage 记住不再出现）
     bounded === true && onboardGone === false
-      ? createElement('div', { className: 'bt-card', style: { borderColor: 'var(--bt-a)' } },
+      ? createElement('div', { key: 'onboard', className: 'bt-card', style: { borderColor: 'var(--bt-a)' } },
           createElement('div', { style: { display: 'grid', gap: 4, fontSize: 12 } },
             createElement('span', { style: { fontWeight: 600 } }, t('popoverSubtitle')),
             createElement('span', null, `① ${t('onboard1')} → ② ${t('onboard2')} → ③ ${t('onboard3')}`),
@@ -2328,152 +2601,183 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
           ),
         )
       : null,
+  ]
+  const strips = stripNodes.some((n) => n !== null) ? createElement('div', { className: 'tk-strips' }, ...stripNodes) : null
+  const section = (k: WorkView, title: string, sub: string, actions: Node[], body: Node[]): ReturnType<typeof createElement> =>
+    createElement('section', {
+      key: k,
+      className: `tk-view${view === k ? ' tk-view-on' : ''}${k === 'guide' ? ' tk-view-guide' : ''}`,
+      'data-v': k,
+      'aria-labelledby': headId(k),
+      hidden: view !== k,
+    },
+      head(k, title, sub, actions),
+      view === k ? strips : null,
+      createElement('div', { className: 'tk-scroll' }, ...body),
+    )
 
-    // 工作台双栏栅格：宽容器（浮层 ≥920px）下收件箱与浏览器并排，窄容器 auto-fit 收单列。
-    // bounded（浮层挂载）时双列各自内滚（.bt-bounded .bt-col），横幅/引导条固定不随滚
-    createElement('div', { className: 'bt-cols', style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(480px, 1fr))', gap: 16, alignItems: bounded === true ? 'stretch' : 'start', ...(bounded === true ? { flex: '1 1 auto', minHeight: 0 } : {}) } },
-    // 左栏：新手帮助（[?] 按钮切换，默认隐藏）+ 收件箱概览
-    createElement('div', { className: 'bt-col', style: { display: 'grid', gap: 10, alignItems: 'start' } },
-      showHelp === true ? createElement(HelpCard, { t }) : null,
-      // 收件箱概览
-      createElement('div', { className: 'bt-card' },
-      createElement('div', { className: 'bt-head' },
-        createElement('span', { className: 'bt-title-sec' }, t('inboxTitle')),
-        createElement('span', { className: 'bt-spacer' }),
-        createElement('button', {
-          className: `bt-btn bt-btn-danger${confirmClear ? ' bt-btn-confirm' : ''}`,
-          disabled: clearBusy || takeBusyId !== null || archivedCount === 0,
-          onClick: clear,
-          title: t('clearArchivedTitle'),
-        }, confirmClear ? t('clearConfirm', { n: archivedCount }) : t('clearArchived')),
-      ),
-      // 统计条：四格横排（待取件 / 已消费 / 账本覆盖 / 信封），一个元素一行信息
-      state !== null
-        ? createElement('div', { className: 'bt-statstrip' },
-            createElement('span', {
-              className: `bt-stat${(state?.pending.length ?? 0) > 0 ? ' bt-stat-hot' : ''}`,
-              title: t('pendingDirHint'),
-            }, t('badgePending', { n: state?.pending.length ?? '…' })),
-            createElement('span', {
-              className: 'bt-stat',
-              title: t('archivedDirHint'),
-            }, t('badgeArchived', { n: archivedCount })),
-            coverage !== null
-              ? createElement('span', { className: 'bt-stat', title: t('coverageBadgeTitle') },
-                  t('coverageBadge', { v: coverage }))
-              : null,
-            envelopeChars !== null
-              ? createElement('span', { className: 'bt-stat', title: t('envelopeArchivedTitle', { n: envelopeChars }) },
-                  t('envelopeArchived', { v: humanChars(envelopeChars) }))
-              : null,
-            (state?.pendingDuplicates ?? 0) > 0
-              ? createElement('span', { className: 'bt-stat bt-stat-warn', title: t('pendingDupTitle') },
-                  t('pendingDupChip', { n: state.pendingDuplicates }))
-              : null,
-            rejectionCount(state) > 0
-              ? createElement('span', {
-                  className: 'bt-stat bt-stat-warn',
-                  title: `${t('rejectionsTitle')}；${rejectionTitle(state)}`,
-                }, t('rejectionsBadge', { n: rejectionCount(state) }))
-              : null,
-          )
-        : null,
-      // 工具行：即时过滤 + 导出全部 + 导出 HTML 报告
-      state !== null
-        ? createElement('div', { className: 'bt-inbox-toolbar' },
-            createElement('input', {
-              className: 'bt-filter',
-              type: 'search',
-              value: query,
-              placeholder: t('filterPlaceholder'),
-              'aria-label': t('filterAria'),
-              title: t('filterAria'),
-              onChange: (e: { target: { value: string } }) => { setQuery(e.target.value) },
-            }),
-            createElement('div', { className: 'bt-export-wrap' },
-              createElement('button', {
-                className: 'bt-btn',
-                disabled: state.pending.length === 0,
-                'aria-haspopup': 'menu',
-                'aria-expanded': exportMenu,
-                onClick: () => setExportMenu((v) => !v),
-                title: t('exportMenuAria'),
-              }, t('exportMenu')),
-              exportMenu ? createElement('div', {
-                className: 'bt-export-mask',
-                onClick: () => setExportMenu(false),
-              }) : null,
-              exportMenu ? createElement('div', { className: 'bt-export-menu', role: 'menu' },
-                createElement('button', {
-                  className: 'bt-export-item',
-                  role: 'menuitem',
-                  disabled: state.pending.length === 0,
-                  onClick: () => { setExportMenu(false); exportAll() },
-                  title: t('exportAllTitle'),
-                }, t('exportAll')),
-                createElement('button', {
-                  className: 'bt-export-item',
-                  role: 'menuitem',
-                  onClick: () => { setExportMenu(false); exportHtmlReport() },
-                  title: t('exportHtmlTitle'),
-                }, t('exportHtml')),
-              ) : null,
-            ),
-          )
-        : null,
-      state !== null
-        ? createElement(PendingList, {
-            rows: state.pending,
-            query,
-            home: state.home,
-            t,
-            lang,
-            onExport: exportOne,
-            onChainFilter: (id: string) => { setQuery(id) },
-            onTakeInbox: takeInbox,
-            takeBusyId,
-            onDismiss: dismiss,
-            dismissBusyId,
-          })
-        // state 未到位：3 条骨架条占位（E 批）——比「加载」纯文字更接近成卡后的版面
-        : createElement('div', { style: { display: 'grid', gap: 8, padding: '4px 0' } },
-            createElement('div', { className: 'bt-skeleton', style: { width: '100%' } }),
-            createElement('div', { className: 'bt-skeleton', style: { width: '70%' } }),
-            createElement('div', { className: 'bt-skeleton', style: { width: '45%' } }),
-          ),
-    ),
-    ), // 左栏收尾（帮助 + 收件箱）
+  // ---- 收件箱概览瓦片（DESIGN.md §4）：待取件/已存档/进展可查证/信封附件/拒收，
+  //      语义色左缘 品牌紫/绿/绿/紫/红；重复文件为防御计数，>0 才出第六枚（黄） ----
+  const tile = (key: string, value: string, label: string, color: string, tone: '' | 'ok' | 'warn' | 'err', title: string): ReturnType<typeof createElement> =>
+    createElement('div', { key, className: `tk-tile${tone !== '' ? ` tk-tile-${tone}` : ''}`, style: { '--tk-tc': color }, title },
+      createElement('span', { className: 'tk-tile-lab' }, label),
+      ' ',
+      createElement('b', { className: 'tk-tile-num' }, value),
+    )
+  const rejected = rejectionCount(state)
+  const tiles = state === null
+    ? null
+    : createElement('div', { className: 'tk-tiles' },
+        tile('pending', String(state.pending.length), t('tilePending'), 'var(--tk-a)', '', t('pendingDirHint')),
+        tile('archived', String(archivedCount), t('tileArchived'), 'var(--tk-ok)', '', t('archivedDirHint')),
+        coverage !== null ? tile('coverage', coverage, t('tileCoverage'), 'var(--tk-ok)', 'ok', t('coverageBadgeTitle')) : null,
+        envelopeChars !== null ? tile('envelope', humanChars(envelopeChars), t('tileEnvelope'), 'var(--tk-a2)', '', t('envelopeArchivedTitle', { n: envelopeChars })) : null,
+        tile('rejected', String(rejected), t('tileRejected'), 'var(--tk-err)', rejected > 0 ? 'err' : '',
+          rejected > 0 ? `${t('rejectionsTitle')}；${rejectionTitle(state)}` : t('rejectionsTitle')),
+        (state.pendingDuplicates ?? 0) > 0
+          ? tile('dup', String(state.pendingDuplicates), t('tileDup'), 'var(--tk-warn)', 'warn', t('pendingDupTitle'))
+          : null,
+      )
 
-    // 右栏（0.4.3 重构）：三卡合并为一张「接力动作」卡 + 分段器——同维度控件不再
-    // 三卡同屏（审查实测：静止可见 17 枚 chip + 9 个文本块，0 条内容）。
-    // 浏览窗格 bare+active 自动前置会话最多的可用家（内容默认可见，空态从此不存在）；
-    // 三窗格常驻挂载（display 切换），状态跨切换保留。
-    createElement('div', { className: 'bt-col', style: { display: 'grid', gap: 16, alignItems: 'start' } },
-      createElement('div', { className: 'bt-card' },
-        createElement('div', { className: 'bt-seg', role: 'tablist', 'aria-label': t('actionSegAria') },
-          ([
-            ['browse', t('browserTitle')],
-            ['send', t('sendTitle')],
-            ['memory', t('memoryTitle')],
-          ] as Array<['browse' | 'send' | 'memory', string]>).map(([k, label]) =>
+  // ---- 收件箱视图级动作：即时过滤（`/` 与 Cmd/Ctrl+K 聚焦，见 onRootKeyDown）+ 清空已消费（二次确认）+ 导出▾菜单 ----
+  const inboxActions: Node[] = [
+    state !== null
+      ? createElement('input', {
+          key: 'filter',
+          ref: filterRef,
+          className: 'bt-filter',
+          type: 'search',
+          value: query,
+          placeholder: t('filterPlaceholder'),
+          'aria-label': t('filterAria'),
+          // 快捷键写进 title（可发现性，§7 DON'T「为极简砍可发现性」）
+          title: `${t('filterAria')} · ${t('filterShortcut')}`,
+          onChange: (e: { target: { value: string } }) => { setQuery(e.target.value) },
+          // 有字时 Escape 先清空并截断（各浏览器一致，不靠 Chrome 的 search 原生清空）；
+          // 清空后再按 Escape 才冒泡到浮层壳去关闭（DESIGN.md §5 模态契约）
+          onKeyDown: (e: { key: string; preventDefault(): void; stopPropagation(): void }) => {
+            if (e.key === 'Escape' && query !== '') { e.preventDefault(); e.stopPropagation(); setQuery('') }
+          },
+        })
+      : null,
+    createElement('button', {
+      key: 'clear',
+      className: `bt-btn bt-btn-danger${confirmClear ? ' bt-btn-confirm' : ''}`,
+      disabled: clearBusy || takeBusyId !== null || archivedCount === 0,
+      onClick: clear,
+      title: t('clearArchivedTitle'),
+    }, confirmClear ? t('clearConfirm', { n: archivedCount }) : t('clearArchived')),
+    state !== null
+      ? createElement('div', { key: 'export', className: 'bt-export-wrap' },
+          createElement('button', {
+            className: 'bt-btn',
+            disabled: state.pending.length === 0,
+            'aria-haspopup': 'menu',
+            'aria-expanded': exportMenu,
+            onClick: () => setExportMenu((v) => !v),
+            title: t('exportMenuAria'),
+          }, t('exportMenu')),
+          exportMenu ? createElement('div', {
+            className: 'bt-export-mask',
+            onClick: () => setExportMenu(false),
+          }) : null,
+          exportMenu ? createElement('div', { className: 'bt-export-menu', role: 'menu' },
             createElement('button', {
-              key: k,
-              className: `bt-segbtn${actionPane === k ? ' bt-segbtn-on' : ''}`,
-              role: 'tab',
-              'aria-selected': actionPane === k,
-              type: 'button',
-              onClick: () => setActionPane(k),
-            }, label),
-          ),
+              className: 'bt-export-item',
+              role: 'menuitem',
+              disabled: state.pending.length === 0,
+              onClick: () => { setExportMenu(false); exportAll() },
+              title: t('exportAllTitle'),
+            }, t('exportAll')),
+            createElement('button', {
+              className: 'bt-export-item',
+              role: 'menuitem',
+              onClick: () => { setExportMenu(false); exportHtmlReport() },
+              title: t('exportHtmlTitle'),
+            }, t('exportHtml')),
+          ) : null,
+        )
+      : null,
+  ]
+  const inboxBody: Node[] = [
+    tiles,
+    state !== null
+      ? createElement(PendingList, {
+          rows: state.pending,
+          query,
+          home: state.home,
+          t,
+          lang,
+          onExport: exportOne,
+          onChainFilter: (id: string) => { setQuery(id) },
+          onTakeInbox: takeInbox,
+          takeBusyId,
+          onDismiss: dismiss,
+          dismissBusyId,
+        })
+      // state 未到位：3 条骨架条占位（E 批）——比「加载」纯文字更接近成卡后的版面
+      : createElement('div', { style: { display: 'grid', gap: 8, padding: '4px 0' } },
+          createElement('div', { className: 'bt-skeleton', style: { width: '100%' } }),
+          createElement('div', { className: 'bt-skeleton', style: { width: '70%' } }),
+          createElement('div', { className: 'bt-skeleton', style: { width: '45%' } }),
         ),
-        createElement('div', { className: 'bt-tabpane', style: { display: actionPane === 'browse' ? 'block' : 'none' } },
-          createElement(ForeignBrowser, { state, t, lang, onError: (msg) => setError(msg), onNotice: showNotice, navigate, bare: true, active: actionPane === 'browse' })),
-        createElement('div', { className: 'bt-tabpane', style: { display: actionPane === 'send' ? 'block' : 'none' } },
-          createElement(SendCard, { sessionId, t, lang, onError: (msg) => setError(msg), onNotice: showNotice, bare: true })),
-        createElement('div', { className: 'bt-tabpane', style: { display: actionPane === 'memory' ? 'block' : 'none' } },
-          createElement(MemoryCard, { t, lang, onError: (msg) => setError(msg), onNotice: showNotice, onPushed: reload, bare: true, defaultOpen: true, active: actionPane === 'memory' })),
+  ]
+
+  return createElement('div', { className: `bt-panel${bounded === true ? ' bt-bounded' : ''}`, style: themeVars(true), ref: rootRef, onKeyDown: onRootKeyDown },
+    createElement('style', null, CSS),
+
+    // 右侧栏挂载时的 slim 头卡：标识 + 手动刷新（设置卡内嵌时头卡由 Panel 提供）
+    chrome
+      ? createElement('div', { className: 'bt-card' },
+          createElement('div', { className: 'bt-head' },
+            createElement('span', { className: 'bt-logo', dangerouslySetInnerHTML: { __html: ICON_SVG } }),
+            createElement('span', { className: 'bt-title-sec' }, t('sidebarTabTitle')),
+            createElement('span', { className: 'bt-spacer' }),
+            createElement('button', { className: 'bt-btn', onClick: reload }, t('refresh')),
+          ),
+        )
+      : null,
+
+    // 工作台本体：左导航轨 148px + 右侧全宽视图（DESIGN.md §5，两栏拼盘废除）
+    createElement('div', { className: 'tk-body' },
+      createElement('nav', { className: 'tk-rail', 'aria-label': t('navAria'), ref: railRef, onKeyDown: onRailKeyDown },
+        createElement('div', { className: 'tk-brand' },
+          createElement('span', { className: 'tk-brand-logo', 'aria-hidden': true, dangerouslySetInnerHTML: { __html: ICON_SVG } }),
+          createElement('b', null, t('sidebarTabTitle')),
+        ),
+        ...navItems.map(navButton),
+        createElement('div', { className: 'tk-rail-foot' },
+          createElement('button', {
+            className: 'tk-navitem',
+            type: 'button',
+            'data-view': 'guide',
+            'aria-pressed': view === 'guide',
+            onClick: () => setView('guide'),
+            title: t('helpTitle'),
+          },
+            createElement('span', { className: 'tk-ic', 'aria-hidden': true, dangerouslySetInnerHTML: { __html: HELP_SVG } }),
+            createElement('span', { className: 'tk-navlabel' }, t('navGuide')),
+          ),
+          createElement('div', { className: 'tk-ver', title: t('versionTitle') }, `dsh-takeover ${PANEL_VERSION}`),
+        ),
       ),
-    ),
+      createElement('div', { className: 'tk-main' },
+        section('inbox', t('inboxTitle'), t('viewInboxSub', { n: state?.pending.length ?? '…' }), inboxActions, inboxBody),
+        // 浏览窗格 bare+active 自动前置会话最多的可用家（内容默认可见，空态从此不存在）
+        section('browse', t('browserTitle'), t('browserHint'), [], [
+          createElement(ForeignBrowser, { state, t, lang, onError: (msg) => setError(msg), onNotice: showNotice, navigate, bare: true, active: view === 'browse' }),
+        ]),
+        section('send', t('sendTitle'), sessionId !== undefined && sessionId !== '' ? t('sendHint') : t('sendHintCopy'), [], [
+          createElement(SendCard, { sessionId, t, lang, onError: (msg) => setError(msg), onNotice: showNotice, bare: true }),
+        ]),
+        section('memory', t('memoryTitle'), t('viewMemorySub'), [], [
+          createElement(MemoryCard, { t, lang, onError: (msg) => setError(msg), onNotice: showNotice, onPushed: reload, bare: true, defaultOpen: true, active: view === 'memory' }),
+        ]),
+        // 上手指南：轨底按钮唤出的第五视图（无状态，按需渲染；展开体不嵌卡片底色，见 .tk-view-guide）
+        view === 'guide'
+          ? section('guide', t('helpTitle'), t('popoverSubtitle'), [], [createElement(HelpCard, { t })])
+          : null,
+      ),
     ),
   )
 }
@@ -2484,12 +2788,6 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
  * 浮层几何按按钮实际位置现算（fixed + 视口夹取）：矮窗限高到按钮上缘以上空间
  * （不够放就改朝下），窄窗左缘夹进视口——不再顶出屏幕外、不再钻进侧栏底下。
  * sessionId 由宿主座位注入（session 级座位的标准参数；交接出去一键用，缺席降级复制路径）。 */
-/** 面板版本徽标（发布时随版本号更新；显示在浮层标题旁，用于一眼核对部署版本） */
-// 版本徽标：构建期由 scripts/build-client.mjs 经 esbuild define 注入 package.json 的 version——
-// 不再手写（0.4.3 发 0.4.4 时它还停在旧值）。tsx 直跑（测试）无 define，回退 'v?'。
-declare const __PANEL_VERSION__: string
-const PANEL_VERSION: string = typeof __PANEL_VERSION__ === 'string' ? __PANEL_VERSION__ : 'v?'
-
 export function ComposerChip({ t, locale, navigate, sessionId }: {
   t: Translate
   locale: LocaleRuntime | undefined
@@ -2498,9 +2796,8 @@ export function ComposerChip({ t, locale, navigate, sessionId }: {
 }): ReturnType<typeof createElement> {
   useLocaleSync(locale)
   const [open, setOpen] = useState(false)
-  const [showHelp, setShowHelp] = useState(false)
   const chipRef = useRef<HTMLButtonElement | null>(null)
-  const panelRef = useRef<HTMLDivElement | null>(null)
+  const dialogRef = useRef<HTMLDivElement | null>(null)
   // 浮层定位（0.4.3 起为视口居中模态）：不再锚定 chip——用户明确要「居中」，
   // 且居中定位与宿主滚动完全解耦（不再需要捕获阶段滚动监听）。
   // 只量两个数：宽度分档 + 可用高度（视口 - 上下 16px 边距）。
@@ -2509,8 +2806,8 @@ export function ComposerChip({ t, locale, navigate, sessionId }: {
     if (typeof window === 'undefined' || typeof window.innerHeight !== 'number') return
     const vw = window.innerWidth
     const vh = window.innerHeight
-    // 宽度分档（视觉审查 P0-1）：大屏放大、中屏定宽、小屏贴边，不再焊死 1040
-    const width = vw >= 1600 ? Math.min(1240, vw - 48) : vw >= 1200 ? Math.min(1040, vw - 48) : Math.max(360, Math.min(720, vw - 16))
+    // 宽度分档（视觉审查 P0-1）：大屏放大、中屏定宽、小屏贴边；上限 1180（DESIGN.md §8）
+    const width = vw >= 1600 ? Math.min(1180, vw - 48) : vw >= 1200 ? Math.min(1040, vw - 48) : Math.max(360, Math.min(720, vw - 16))
     setPos({ width, maxH: Math.max(240, vh - 32) })
   }
   useEffect(() => {
@@ -2519,6 +2816,50 @@ export function ComposerChip({ t, locale, navigate, sessionId }: {
     window.addEventListener('resize', onRe)
     return () => {
       window.removeEventListener('resize', onRe)
+    }
+  }, [open])
+  // 模态契约（DESIGN.md §5；兑现 role=dialog + aria-modal 的声明）：
+  //   打开 → 焦点入壳（落在当前视图的导航项，`/` 立即可用；没有就落关闭钮）；
+  //   Tab/Shift+Tab 在壳内圈闭（跳过 hidden 视图与 tabindex=-1）；Escape 关闭；
+  //   关闭/卸载 → 焦点归还唤出 chip。监听挂 document：焦点无论在壳内何处都接得住
+  useEffect(() => {
+    if (!open) return
+    const dlg = dialogRef.current
+    if (dlg === null) return
+    const focusables = (): HTMLElement[] =>
+      [...dlg.querySelectorAll<HTMLElement>('a[href], button, input, select, textarea, [tabindex]')]
+        .filter((el) => !(el as { disabled?: boolean }).disabled
+          && el.getAttribute('tabindex') !== '-1'
+          && el.closest('[hidden]') === null)
+    const t0 = window.setTimeout(() => {
+      const first = dlg.querySelector<HTMLElement>('.tk-navitem[aria-pressed="true"]') ?? dlg.querySelector<HTMLElement>('.tk-close')
+      first?.focus()
+    }, 0)
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        if (e.defaultPrevented) return // 过滤框有字时先清空（WorkspaceBody 已截断），不关壳
+        e.preventDefault()
+        setOpen(false)
+        return
+      }
+      if (e.key !== 'Tab') return
+      const list = focusables()
+      if (list.length === 0) return
+      const first = list[0] as HTMLElement
+      const last = list[list.length - 1] as HTMLElement
+      const active = document.activeElement
+      const inside = active !== null && dlg.contains(active)
+      if (e.shiftKey) {
+        if (!inside || active === first) { e.preventDefault(); last.focus() }
+      } else if (!inside || active === last) {
+        e.preventDefault(); first.focus()
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => {
+      window.clearTimeout(t0)
+      document.removeEventListener('keydown', onKey)
+      chipRef.current?.focus()
     }
   }, [open])
   return createElement('div', { style: { position: 'relative', display: 'inline-flex' } },
@@ -2551,92 +2892,73 @@ export function ComposerChip({ t, locale, navigate, sessionId }: {
       onClick: () => setOpen(false),
     }) : null,
     open ? createElement('div', {
-      ref: panelRef,
+      ref: dialogRef,
+      role: 'dialog',
+      'aria-modal': true,
+      'aria-label': t('popoverTitle'),
       style: {
-        // 就地定义面板用的 --bg/--border：composer 作用域没有这两个变量（设置卡
-        // 作用域才有），不吃宿主输入卡实色的话整层近乎透明（实测）。底色直接对齐
-        // 宿主输入卡变量，暗亮主题随宿主。
-        '--bg': 'var(--dsw-specific-input-major, #171717)',
-        '--border': 'var(--dsw-alias-border-l2, rgba(127,127,127,.25))',
-        // 壳层直接挂主题变量：顶栏按钮在 .bt-panel 的 <style> 作用域之外，
-        // 不挂的话 var(--bt-a/--bt-line/--bt-hover) 解析为空，hover 样式整条丢弃（实测）
-        '--bt-a': 'var(--accent, #6366f1)',
-        '--bt-line': 'var(--dsw-alias-border-l2, rgba(127,127,127,.25))',
-        '--bt-hover': 'rgba(255,255,255,.10)',
-        '--bt-inset': 'inset 0 1px 0 rgba(255,255,255,.06)',
+        // DESIGN.md §2/§6 token 行内展开：壳在 .bt-panel 的 <style> 作用域之外，
+        // var(--tk-*) 要在这一层可解析（同一份 TK_TOKENS，不另写色值）
+        ...TK_TOKENS,
         position: 'fixed', zIndex: 9999,
         boxSizing: 'border-box', // maxHeight 必须含 padding+border，否则矮窗仍溢出视口（实测 583>568）
         // 视口居中模态（inset:0 + margin:auto + fit-content：双轴居中，maxHeight
         // 受尊重且与宿主滚动完全解耦——不再锚定 chip 位置）
         inset: 0, margin: 'auto', height: 'fit-content',
-        // 整体不滚（overflow hidden）：滚动责任下沉到 .bt-bounded/.bt-col——
-        // 标题栏与横幅固定，双列各自内滚（窄容器退化为 .bt-cols 整体内滚）
+        // 整体不滚（overflow hidden）：滚动责任下沉到 .bt-bounded/.tk-scroll——
+        // 导航轨与视图头常驻，视图体内滚
         display: 'flex', flexDirection: 'column', overflow: 'hidden',
         ...(pos !== null
           ? { width: pos.width, maxHeight: pos.maxH }
           : { width: 'min(1040px, calc(100vw - 16px))', maxHeight: '70vh' }),
-        // 壳层近黑画布（暗轴）：与宿主页立即拉开层次；发光描边 + 品牌渐变顶边
-        background: 'var(--bt-shell-bg, var(--bg))',
-        border: '1px solid var(--bt-shell-border, var(--border))', borderRadius: 16,
-        boxShadow: '0 24px 64px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.06)',
-        padding: '0 14px 12px',
+        // 壳 = canvas 近黑画布 + 顶部品牌径向辉光（§2）；line 描边；唯一投影（§6）
+        background: 'var(--tk-canvas-bg)',
+        color: 'var(--tk-text)',
+        border: '1px solid var(--tk-line)', borderRadius: 16,
+        boxShadow: 'var(--tk-shadow), inset 0 1px 0 rgba(255,255,255,.05)',
+        padding: 0,
       },
     },
-      // 顶部品牌渐变边条（模态身份标识）
-      createElement('div', { style: { height: 3, margin: '0 -14px 10px', background: 'var(--bt-shell-edge, linear-gradient(90deg, #6366F1, #8B5CF6, #6366F1))', borderRadius: '16px 16px 0 0' } }),
-      createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, padding: '2px 4px 6px' } },
-        createElement('span', { className: 'bt-logo', style: { width: 14, height: 14, display: 'inline-block' }, dangerouslySetInnerHTML: { __html: ICON_SVG } }),
-        // 「接力工作台」标题走 .bt-title 基准（14px + letter-spacing -.01em，B 批字体阶梯），
-        // 不再行内压到 13px——浮层主标题是全页面最高一级
-        createElement('span', { className: 'bt-title' }, t('popoverTitle')),
-        createElement('span', {
-          className: 'bt-ver',
-          title: 'dsh-takeover 插件版本',
-          style: { fontSize: 10, fontWeight: 600, color: 'var(--bt-mut)', border: '1px solid var(--bt-line)', borderRadius: 999, padding: '1px 7px', fontFamily: 'ui-monospace, monospace' },
-        }, PANEL_VERSION),
-        createElement('span', { style: { flex: 1 } }),
-        createElement('button', {
-          className: 'bt-btn bt-btn-xs',
-          // 打开（而非收起）时把帮助卡滚进视口——帮助卡插在滚动容器顶部，
-          // 长列表滚动位置不动的话用户会以为按钮没反应（真机验收实测）
-          onClick: () => {
-            const next = !showHelp
-            setShowHelp(next)
-            if (next) {
-              window.setTimeout(() => {
-                panelRef.current?.querySelector('[data-help-card]')?.scrollIntoView({ block: 'start' })
-              }, 0)
-            }
-          },
-          'aria-label': 'help',
-          title: t('helpTitle'),
-          style: showHelp ? { color: 'var(--bt-a)', borderColor: 'var(--bt-a)' } : undefined,
-        }, '?'),
-        createElement('button', {
-          className: 'bt-btn bt-btn-xs', onClick: () => { setOpen(false); setShowHelp(false) }, 'aria-label': 'close',
-        }, '✕'),
-      ),
+      // 顶边 3px 品牌渐变条（模态身份标识，保留）
+      createElement('div', { 'aria-hidden': true, style: { height: 3, flex: 'none', background: 'var(--tk-edge-grad)', opacity: 0.9 } }),
+      // dialog 可及名的可见落点：壳内可见文字只剩导航轨「接力」，完整标题走读屏专用节点
+      createElement('h2', { className: 'tk-sr' }, t('popoverTitle')),
+      createElement('button', {
+        className: 'tk-close',
+        type: 'button',
+        onClick: () => setOpen(false),
+        'aria-label': 'close',
+        title: t('closeBtn'),
+      }, '✕'),
       createElement(PanelBoundary, {
         t,
         // 这层包装是壳与 bt-bounded 之间的 flex 中继：不给 flex:1/minHeight:0 的话
-        // 默认 min-height:auto 挡住收缩链，bt-bounded 撑到内容高，双列内滚失效（真机实测）
-        children: createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 8, flex: '1 1 auto', minHeight: 0, overflow: 'hidden' } },
-          showHelp ? createElement(HelpCard, { t }) : null,
-          createElement(WorkspaceBody, { t, locale, navigate, chrome: false, sessionId, showHelp, bounded: true }),
+        // 默认 min-height:auto 挡住收缩链，bt-bounded 撑到内容高，视图体内滚失效（真机实测）
+        children: createElement('div', { style: { display: 'flex', flexDirection: 'column', flex: '1 1 auto', minHeight: 0, overflow: 'hidden' } },
+          createElement(WorkspaceBody, { t, locale, navigate, chrome: false, sessionId, bounded: true }),
         ),
       }),
     ) : null,
   )
 }
 
-export function Panel({ t, locale, navigate, slim }: { t: Translate; locale: LocaleRuntime | undefined; navigate: (sessionId: string) => boolean; /** true = 工作台面已挂进会话输入区上方，设置卡只留设置与指引（座位注册失败时降级为 false 保留四区） */ slim: boolean }): ReturnType<typeof createElement> {
+/** 设置卡页签键（DESIGN.md §4 设置卡页签：命令速览 / 支持矩阵 / 开关语义）；数组顺序即方向键遍历序 */
+type SettingsTab = 'cmds' | 'matrix' | 'sem'
+const SETTINGS_TABS: readonly SettingsTab[] = ['cmds', 'matrix', 'sem']
+
+export function Panel({ t, locale, navigate, slim }: { t: Translate; locale: LocaleRuntime | undefined; navigate: (sessionId: string) => boolean; /** true = 工作台面已挂进会话输入区上方，设置卡只留设置与指引（座位注册失败时降级为 false 内嵌工作台） */ slim: boolean }): ReturnType<typeof createElement> {
   useLocaleSync(locale)
   const { state, setState, error, setError, reload, generationRef } = useTakeoverPolling()
   // 每家开关的操作中态（矩阵行级禁用）
   const [busy, setBusy] = useState<string | null>(null)
-  // 新手 FAQ 显隐（头卡 [?] 按钮切换，默认隐藏不占行）
+  // 新手 FAQ 显隐（头行 [?] 按钮切换，默认隐藏不占行）
   const [showHelp, setShowHelp] = useState(false)
+  // 设置卡页签：默认停在命令速览；三面板常驻挂载、hidden 切换（切页不丢矩阵开关的操作中态，禁止长滚动）
+  const [tab, setTab] = useState<SettingsTab>('cmds')
+  // tab/panel id 前缀：同页多实例不撞 id，aria-controls / aria-labelledby 才能准确互指
+  const uid = useId()
   const panelRef = useRef<HTMLDivElement | null>(null)
+  const tabsRef = useRef<HTMLDivElement | null>(null)
 
   const toggle = (name: string, enabled: boolean): void => {
     setBusy(name)
@@ -2653,64 +2975,112 @@ export function Panel({ t, locale, navigate, slim }: { t: Translate; locale: Loc
       .finally(() => { setBusy(null) })
   }
 
+  const tabId = (k: SettingsTab): string => `${uid}tab-${k}`
+  const paneId = (k: SettingsTab): string => `${uid}pane-${k}`
+  const tabLabel: Record<SettingsTab, string> = { cmds: t('tabCmds'), matrix: t('tabMatrix'), sem: t('tabSemantics') }
+  // WAI-ARIA tabs 键盘流：←/→ 循环、Home/End 首尾；选中即切面板，焦点随之移动（roving tabindex）
+  const onTabsKeyDown = (e: { key: string; preventDefault: () => void }): void => {
+    const i = SETTINGS_TABS.indexOf(tab)
+    const n = SETTINGS_TABS.length
+    const next = e.key === 'ArrowRight' ? SETTINGS_TABS[(i + 1) % n]
+      : e.key === 'ArrowLeft' ? SETTINGS_TABS[(i - 1 + n) % n]
+        : e.key === 'Home' ? SETTINGS_TABS[0]
+          : e.key === 'End' ? SETTINGS_TABS[n - 1]
+            : undefined
+    if (next === undefined) return
+    e.preventDefault()
+    setTab(next)
+    tabsRef.current?.querySelector<HTMLElement>(`[data-tab="${next}"]`)?.focus()
+  }
+  const pane = (k: SettingsTab, ...body: Array<ReturnType<typeof createElement> | null>): ReturnType<typeof createElement> =>
+    createElement('div', {
+      key: k,
+      id: paneId(k),
+      className: `tk-pane${tab === k ? ' tk-pane-on' : ''}`,
+      role: 'tabpanel',
+      'aria-labelledby': tabId(k),
+      hidden: tab !== k,
+    }, ...body)
+
   return createElement('div', { className: 'bt-panel', ref: panelRef, style: themeVars() },
     createElement('style', null, CSS),
 
-    // 头卡：标识 + 刷新
-    createElement('div', { className: 'bt-card' },
-      createElement('div', { className: 'bt-head' },
-        createElement('span', { className: 'bt-logo', dangerouslySetInnerHTML: { __html: ICON_SVG } }),
-        createElement('span', null,
-          createElement('div', { className: 'bt-title' }, t('appTitle')),
-          createElement('div', { className: 'bt-sub' }, t('appSubtitle')),
+    // 设置卡本体（DESIGN.md §4 / 原型窗口 2）：自铺近黑画布的指挥台块；--bt-* 行内恒走暗轴
+    // （浅色宿主页里不翻白，同工作台内嵌处理）。头行 = 标识 + 分段器 + [?]/刷新；下接三段页签面板
+    createElement('div', { className: 'tk-set', style: themeVars(true) },
+      createElement('div', { className: 'tk-set-head' },
+        createElement('span', { className: 'tk-set-logo', 'aria-hidden': true, dangerouslySetInnerHTML: { __html: ICON_SVG } }),
+        createElement('span', { className: 'tk-set-text' },
+          createElement('div', { className: 'tk-set-title' }, t('appTitle')),
+          createElement('div', { className: 'tk-set-sub', title: t('appSubtitle') }, t('appSubtitle')),
         ),
-        createElement('span', { className: 'bt-spacer' }),
-        createElement('button', {
-          className: `bt-btn bt-btn-xs${showHelp ? ' bt-chip-on' : ''}`,
-          // 同浮层 [?]：打开时把帮助卡滚进视口，长页面里否则看不见变化
-          onClick: () => {
-            const next = !showHelp
-            setShowHelp(next)
-            if (next) {
-              window.setTimeout(() => {
-                panelRef.current?.querySelector('[data-help-card]')?.scrollIntoView({ block: 'start' })
-              }, 0)
-            }
-          },
-          'aria-label': 'help',
-          title: t('helpTitle'),
-          style: { minWidth: 26 },
-        }, '?'),
-        createElement('button', { className: 'bt-btn', onClick: reload, disabled: busy !== null }, t('refresh')),
+        // 分段器（3px 内距容器 + 7px 圆角页签，选中品牌渐变）：button[role=tab] + aria-selected/aria-controls
+        createElement('div', { className: 'tk-tabs', role: 'tablist', 'aria-label': t('tabsAria'), ref: tabsRef, onKeyDown: onTabsKeyDown },
+          ...SETTINGS_TABS.map((k) => createElement('button', {
+            key: k,
+            id: tabId(k),
+            className: 'tk-tab',
+            type: 'button',
+            role: 'tab',
+            'data-tab': k,
+            'aria-selected': tab === k,
+            'aria-controls': paneId(k),
+            tabIndex: tab === k ? 0 : -1,
+            onClick: () => { setTab(k) },
+          }, tabLabel[k])),
+        ),
+        createElement('span', { className: 'tk-set-acts' },
+          createElement('button', {
+            className: `bt-btn bt-btn-xs${showHelp ? ' bt-chip-on' : ''}`,
+            type: 'button',
+            // 同浮层 [?]：打开时把帮助卡滚进视口，长页面里否则看不见变化
+            onClick: () => {
+              const next = !showHelp
+              setShowHelp(next)
+              if (next) {
+                window.setTimeout(() => {
+                  panelRef.current?.querySelector('[data-help-card]')?.scrollIntoView({ block: 'start' })
+                }, 0)
+              }
+            },
+            'aria-label': 'help',
+            title: t('helpTitle'),
+            style: { minWidth: 26 },
+          }, '?'),
+          createElement('button', { className: 'bt-btn', type: 'button', onClick: reload, disabled: busy !== null }, t('refresh')),
+        ),
       ),
       error !== null ? createElement('div', { className: 'bt-banner bt-banner-err' }, error) : null,
+
+      // 命令速览：数据源不变（/handoff · /inbox · /resume-*），mono 键 + 说明文案
+      pane('cmds',
+        createElement('div', { className: 'tk-pane-lead' }, t('cmdBadge')),
+        createElement(CommandsGrid, { state, t }),
+      ),
+      // 支持矩阵（九家读取器）
+      pane('matrix',
+        state !== null
+          ? createElement(ProviderMatrix, { rows: state.providers, busy, onToggle: toggle, t })
+          : createElement('div', { className: 'bt-sub' }, t('loading')),
+      ),
+      // 开关语义：开关行为 + 状态 pill 口径（绿支持 / 黄待确认 / 黄不可用）
+      pane('sem',
+        createElement('div', { className: 'tk-sem' },
+          createElement('p', null, t('noteBody')),
+          createElement('p', null, t('noteBodyPending')),
+        ),
+      ),
     ),
 
-    // 命令速览（直接可见）
-    createElement(CommandsCard, { state, t }),
-
-    // 工作台面去留：宿主 0.2 右侧栏挂载时（slim）设置卡只留指引一行；
-    // 老宿主（无 sidebarRightTabs 服务）降级内嵌工作台，行为与旧版一致
+    // 工作台去留（页签外常驻，不留死入口）：宿主 0.2 右侧栏/composer 挂载时（slim）一行指引指向
+    // 输入框「接力」按钮；老宿主（座位缺席）降级内嵌工作台——收件箱概览在其收件箱视图，行为与旧版一致
     slim
       ? createElement('div', { className: 'bt-card' },
           createElement('div', { className: 'bt-sub' }, t('settingsPointer')),
         )
       : createElement(WorkspaceBody, { t, locale, navigate, chrome: false }),
 
-    // 支持矩阵
-    createElement('div', { className: 'bt-card' },
-      createElement('div', { className: 'bt-head' },
-        createElement('span', { className: 'bt-title-sec' }, t('matrixTitle')),
-      ),
-      state !== null
-        ? createElement(ProviderMatrix, { rows: state.providers, busy, onToggle: toggle, t })
-        : createElement('div', { className: 'bt-sub' }, t('loading')),
-      createElement('details', { className: 'bt-note' },
-        createElement('summary', null, t('noteSummary')),
-        createElement('div', { className: 'bt-note-body' }, t('noteBody'))),
-    ),
-
-    // 新手帮助 / FAQ（头卡 [?] 按钮切换，默认隐藏不占行）
+    // 新手帮助 / FAQ（头行 [?] 按钮切换，默认隐藏不占行）
     showHelp ? createElement(HelpCard, { t }) : null,
   )
 }

@@ -799,25 +799,27 @@ test('记忆卡折叠栏：图标与 hint 各渲染一次（真机实测曾双�
     'MEMORY_SVG = 定义 + 单次使用；出现第三次即折叠栏双图标回归')
 })
 
-test('两处 [?] 帮助按钮：打开即把帮助卡滚进视口（否则长列表里像没反应）', () => {
+test('两处帮助入口：帮助卡可被滚进视口（设置卡 [?]；浮层改为导航轨「上手指南」视图）', () => {
   const client = readRepoFile('src/client.ts')
   assert.ok(client.includes("'data-help-card': '1'"), 'HelpCard 根元素缺 data-help-card 挂点')
-  assert.equal((client.match(/scrollIntoView\(\{ block: 'start' \}\)/g) ?? []).length, 2,
-    '浮层与设置卡两处 [?] 都要在打开时 scrollIntoView')
+  // 0.4.5 重排后只剩设置卡 [?] 一处 scrollIntoView——浮层上手指南是独立视图，
+  // 切视图即整页滚回顶部，无需再滚（旧浮层 [?] 按钮已随标题栏移除）
+  assert.equal((client.match(/scrollIntoView\(\{ block: 'start' \}\)/g) ?? []).length, 1,
+    '设置卡 [?] 打开时要 scrollIntoView')
 })
 
 // ---------------------------------------------------------------------------
 // 0.4.0 收尾打磨回归（P2 三项 + 徽标诚实化）
 // ---------------------------------------------------------------------------
-test('双列各自滚动：bt-bounded 列内滚规则与窄容器退化都在 CSS 里', () => {
+test('视图体内滚：bt-bounded 视图体内滚规则与窄容器退化都在 CSS 里', () => {
   const client = readRepoFile('src/client.ts')
-  assert.ok(client.includes('.bt-bounded { flex: 1 1 auto; min-height: 0; overflow: hidden; }'),
+  // 0.4.5 重排：两栏拼盘 → 导航轨 + 四视图，滚动容器由 .bt-col 换成 .tk-scroll
+  assert.ok(client.includes('.bt-bounded { flex: 1 1 auto; min-height: 0; overflow: hidden;'),
     'bt-bounded 面板不吃满剩余高')
-  assert.ok(/\.bt-bounded \.bt-col \{ overflow-y: auto; min-height: 0;/.test(client),
-    '双列未各自内滚')
+  assert.ok(/\.bt-bounded \.tk-scroll \{ overflow-y: auto;/.test(client),
+    '浮层里视图体未各自内滚')
   assert.ok(client.includes('@container (max-width: 975px)'), '窄容器退化规则缺失')
-  assert.ok(!/overflowY: 'auto',\s*\n\s*background: 'var\(--bg\)'/m.test(client) === false || true)
-  // 浮层壳整体不再滚动（滚动责任下沉到列）
+  // 浮层壳整体不再滚动（滚动责任下沉到视图体）
   assert.ok(!client.includes("overflowY: 'auto',\n        background: 'var(--bg)'"),
     '浮层壳仍在整体滚动——头部固定失效')
 })
@@ -838,14 +840,17 @@ test('徽标诚实化：已存档口径 + tooltip 披露 50 张滚动保留（�
   assert.ok(!locales.includes("badgeArchived: '已消费 {n}'"), 'zh 旧口径残留')
 })
 
-test('收件箱高级化：未读强调条/统计胶囊/筛选行/滚动条样式都在 CSS 里', () => {
+test('收件箱高级化：未读强调条/概览瓦片/筛选行/滚动条样式都在 CSS 里', () => {
   const client = readRepoFile('src/client.ts')
   assert.ok(client.includes('.bt-pending-unread::before'), '未读行首强调条缺失（类名曾长期无样式）')
   assert.ok(client.includes('linear-gradient(180deg, #6366F1, #8B5CF6)'), '强调条缺品牌渐变')
-  assert.ok(client.includes('.bt-stat { font-size: 11px; color: var(--bt-mut); background: var(--bt-hover);'),
-    '统计条未胶囊化')
-  assert.ok(client.includes(".bt-filterrow"), '未读开关与来源 chips 未合并为筛选行')
-  assert.ok(client.includes('.bt-bounded .bt-col::-webkit-scrollbar-thumb'), '列滚动条未细化')
+  // 0.4.5 重排：统计胶囊 → 五枚大数字瓦片（19px tabular + 语义色左缘，DESIGN.md §4）
+  assert.ok(client.includes('.tk-tile { background: var(--tk-surface); border: 1px solid var(--tk-line); border-radius: 12px;'),
+    '概览瓦片缺样式')
+  assert.ok(client.includes('.tk-tile::after'), '瓦片缺语义色左缘条')
+  assert.ok(client.includes('font-size: 19px; font-weight: 600; letter-spacing: -.02em;'), '瓦片缺 19px 大数字')
+  assert.ok(client.includes('.bt-filterrow'), '未读开关与来源 chips 未合并为筛选行')
+  assert.ok(client.includes('.bt-bounded .tk-scroll::-webkit-scrollbar-thumb'), '滚动条未细化')
   assert.ok(!client.includes('font-variant-numeric: tabular-nums;\n  font-variant-numeric: tabular-nums;'),
     '重复声明残留')
 })
@@ -854,4 +859,51 @@ test('0.4.3 居中模态：浮层 inset:0+margin:auto 居中，不再锚定 chip
   const client = readRepoFile('src/client.ts')
   assert.ok(client.includes("inset: 0, margin: 'auto', height: 'fit-content'"), '浮层未改为视口居中模态')
   assert.ok(!client.includes("bottom: window.innerHeight - r.top + 8"), 'chip 锚定定位残留')
+})
+
+// ---------------------------------------------------------------------------
+// 0.4.5 评审修复回归：DESIGN.md 裁决落进代码（pill 字号 / 开关命中区 / primary 渐变 / token 收敛 / 模态键盘）
+// ---------------------------------------------------------------------------
+test('DESIGN.md 裁决：pill 与中文 tag 11px（§3 下限优先）；开关透明命中区 ≥24px；primary 按钮品牌渐变+glow', () => {
+  const client = readRepoFile('src/client.ts')
+  // F4：状态 pill / 行内小徽标 11px——中文文案不许 10px（DESIGN.md §3「任何场景不许更小」）
+  assert.ok(client.includes('.tk-pill { font-size: 11px;'), '状态 pill 仍是 10px')
+  assert.ok(client.includes('.bt-tag { font-size: 11px;'), '行内小徽标仍是 10px（含中文文案）')
+  // F2：开关视觉 34×19 不变，命中区透明 ::before 上下各扩 3px → 25px ≥24px（§8 优先）
+  assert.ok(client.includes('.tk-switch { cursor: pointer; width: 34px; height: 19px;'), '开关视觉尺寸漂移')
+  assert.ok(client.includes('.tk-switch::before { content: \'\'; position: absolute; left: 0; right: 0; top: -3px; bottom: -3px; }'),
+    '开关缺透明命中区伪元素')
+  // F3：primary 按钮 = 品牌渐变 + on-accent 文字 + 品牌投影（§4/§6），不再软底描边、不再裸色值
+  assert.ok(client.includes('.bt-btn-primary { color: var(--tk-on-accent); border-color: transparent; background: var(--tk-grad); font-weight: 600;\n  box-shadow: var(--tk-glow);'),
+    'primary 按钮未换品牌渐变+glow')
+  assert.ok(!client.includes('.bt-btn-primary { color: var(--bt-a-text); border-color: rgba(99,102,241,.45)'), 'primary 按钮旧软底残留')
+  // F5：品牌辉光与渐变上文字收敛进 token（--tk-glow / --tk-glow-ctl / --tk-on-accent）
+  assert.ok(client.includes("'--tk-on-accent': '#fff',"), '缺 --tk-on-accent token')
+  assert.ok(client.includes("'--tk-glow': '0 4px 14px rgba(99,102,241,.4)',"), '缺 --tk-glow token')
+  assert.ok(client.includes("'--tk-glow-ctl': '0 2px 10px rgba(99,102,241,.3)',"), '缺 --tk-glow-ctl token')
+  assert.ok(!client.includes('drop-shadow(0 4px 14px rgba(99,102,241,.4))'), 'logo 辉光仍是裸值，未走 var(--tk-glow)')
+  assert.ok(client.includes('.tk-tab[aria-selected="true"] { background: var(--tk-grad); color: var(--tk-on-accent); font-weight: 600;\n  box-shadow: var(--tk-glow-ctl); }'),
+    '选中页签未走 on-accent/glow-ctl token')
+  assert.ok(client.includes('.tk-badge-hot { background: var(--tk-grad); color: var(--tk-on-accent); }'), '热徽标未走 on-accent token')
+})
+
+test('DESIGN.md §5 契约：过滤输入 `/`/Cmd+K 聚焦、浮层真模态（焦点圈闭+Escape+归还）、导航轨 ↑/↓/Home/End、视图头 id 防撞', () => {
+  const client = readRepoFile('src/client.ts')
+  // F1：`/` 与 Cmd/Ctrl+K 聚焦过滤框；输入态放行
+  assert.ok(client.includes('const onRootKeyDown'), '缺根级键盘流处理')
+  assert.ok(client.includes('if (cmdK) { e.preventDefault(); e.stopPropagation(); focusFilter(); return }'), 'Ctrl/⌘+K 未截断')
+  assert.ok(client.includes('if (tag === \'INPUT\' || tag === \'TEXTAREA\' || tag === \'SELECT\' || el?.isContentEditable === true) return'),
+    '`/` 未对输入态放行')
+  assert.ok(client.includes('title: `${t(\'filterAria\')} · ${t(\'filterShortcut\')}`'), '过滤框 title 未带快捷键提示（可发现性）')
+  // F6：aria-modal 兑现——初始焦点入壳、Tab 圈闭、Escape 关闭、关闭归还 chip
+  assert.ok(client.includes("'aria-modal': true,"), '缺 aria-modal 声明')
+  assert.ok(client.includes("document.addEventListener('keydown', onKey)"), '模态键盘监听缺失')
+  assert.ok(client.includes("if (e.key === 'Escape') {"), 'Escape 关闭缺失')
+  assert.ok(client.includes("chipRef.current?.focus()"), '关闭后焦点未归还 chip')
+  assert.ok(client.includes(".tk-navitem[aria-pressed=\"true\"]') ?? dlg.querySelector<HTMLElement>('.tk-close')"), '初始焦点未入壳')
+  // F7：导航轨 ↑/↓ 循环 + Home/End（与设置卡页签键盘流一致）
+  assert.ok(client.includes('ArrowDown') && client.includes("e.key === 'End' ? RAIL_ORDER[n - 1]"), '导航轨缺方向键/Home/End 流')
+  // F8：视图头 h2 id 走 useId 前缀，不再是固定 tk-h-*
+  assert.ok(!client.includes("id: `tk-h-${k}`"), '视图头 h2 仍是固定 id（两实例会撞）')
+  assert.ok(client.includes('const headId = (k: WorkView): string => `${uid}h-${k}`'), '视图头 id 未走 useId 前缀')
 })

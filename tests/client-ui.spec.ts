@@ -437,4 +437,161 @@ test('HelpCard：8 条问答渲染，zh 词典齐全（en 同键）', async () =
   }
 })
 
+// ---------------------------------------------------------------- 0.4.5 评审修复回归
+
+function fireKey(el: unknown, key: string, init: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean; altKey?: boolean } = {}): boolean {
+  // 返回值 = dispatchEvent 的返回：被 preventDefault 即 false（用来断言「输入态放行」vs「截断」）
+  return (el as { dispatchEvent: (e: unknown) => boolean })
+    .dispatchEvent(new window.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...init }))
+}
+const active = (): Element | null => doc.activeElement as unknown as Element | null
+
+test('ProviderMatrix：状态 pill 分类——绿支持 / 假 0 哨兵黄待确认且行全亮 / 探测失败黄待确认 / 0 会话无哨兵灰行 / 不支持灰行黄不可用', async () => {
+  const rows = [
+    provider('claude', { sessions: 3, note: '' }),
+    provider('zcode', { sessions: 0, note: '目录存在但 0 会话（布局迁移提示）' }),
+    provider('codex', { sessions: -1, note: '' }),
+    provider('gemini', { sessions: 0, note: '' }),
+    provider('pi', { supported: false, sessions: -1, note: '' }),
+  ]
+  await render(createElement(client.ProviderMatrix, { rows, busy: null, onToggle: () => {}, t }))
+  const mx = [...container.querySelectorAll('.tk-mxr')]
+  assert.equal(mx.length, 5, '矩阵行数')
+  const pill = (i: number): string => mx[i]!.querySelector('.tk-pill')?.textContent ?? ''
+  const pillCls = (i: number): string => mx[i]!.querySelector('.tk-pill')?.className ?? ''
+  const idle = (i: number): boolean => mx[i]!.classList.contains('tk-mxr-idle')
+  // 绿「支持」= 可用且发现了会话
+  assert.equal(pill(0), '支持'); assert.ok(pillCls(0).includes('tk-pill-ok')); assert.ok(!idle(0))
+  // 假 0 哨兵（0 会话 + note 非空）：黄「待确认」且行保持全亮——旧版一律绿支持+灰行，行为已变，在此钉住
+  assert.equal(pill(1), '待确认'); assert.ok(pillCls(1).includes('tk-pill-warn')); assert.ok(!idle(1), '待确认行不许灰')
+  assert.ok(mx[1]!.querySelector('.tk-mnote')?.textContent?.includes('布局迁移'), '哨兵 note 要浮出为行内黄字')
+  // 会话数探测失败（<0）：黄「待确认」（低信息），不灰
+  assert.equal(pill(2), '待确认'); assert.ok(pillCls(2).includes('tk-pill-warn')); assert.ok(!idle(2))
+  // 0 会话且无哨兵：本机未装/暂无会话 → 灰行，pill 仍是绿「支持」
+  assert.equal(pill(3), '支持'); assert.ok(idle(3), '0 会话无哨兵应灰行')
+  // 不支持：灰行 + 黄「不可用」
+  assert.equal(pill(4), '不可用'); assert.ok(pillCls(4).includes('tk-pill-warn')); assert.ok(idle(4))
+})
+
+test('WorkspaceBody：`/` 与 Ctrl/⌘+K 聚焦过滤框（DESIGN.md §5）；输入态下 `/` 放行；其他视图下先切回收件箱', async () => {
+  await render(createElement(client.WorkspaceBody, { t, locale: undefined, navigate, chrome: false }))
+  await waitText('待取件 3')
+  const filter = container.querySelector('input[type="search"]') as HTMLInputElement | null
+  assert.ok(filter, '过滤框不存在')
+  const navInbox = container.querySelector('[data-view="inbox"]') as HTMLElement | null
+  assert.ok(navInbox, '导航项不存在')
+  // 焦点在工作台内非输入元素上按 `/` → 聚焦过滤框，且事件被截断（Firefox 快速查找不抢）
+  await act(async () => { navInbox!.focus() })
+  let passed = true
+  await act(async () => { passed = fireKey(navInbox, '/') })
+  assert.equal(passed, false, '`/` 应被 preventDefault')
+  assert.equal(active(), filter, '`/` 后焦点应落在过滤框')
+  // 输入态：在过滤框里再按 `/` 照常输入（不截断）
+  await act(async () => { passed = fireKey(filter, '/') })
+  assert.equal(passed, true, '输入态 `/` 不许截断')
+  // Ctrl+K 不分焦点一律聚焦过滤框
+  await act(async () => { navInbox!.focus() })
+  await act(async () => { passed = fireKey(navInbox, 'k', { ctrlKey: true }) })
+  assert.equal(passed, false, 'Ctrl+K 应被截断')
+  assert.equal(active(), filter, 'Ctrl+K 后焦点应落在过滤框')
+  // 其他视图下按 `/`：先切回收件箱再聚焦（display:none 的输入框 focus 会落空）
+  const navBrowse = container.querySelector('[data-view="browse"]') as HTMLElement | null
+  assert.ok(navBrowse)
+  await act(async () => { fireClick(navBrowse) })
+  await flush()
+  assert.equal(navBrowse!.getAttribute('aria-pressed'), 'true', '应已切到会话浏览器视图')
+  await act(async () => { navBrowse!.focus(); fireKey(navBrowse, '/') })
+  await flush(30)
+  assert.equal(navInbox!.getAttribute('aria-pressed'), 'true', '`/` 应把视图切回收件箱')
+  const filter2 = container.querySelector('input[type="search"]') as HTMLInputElement | null
+  assert.equal(active(), filter2, '切回后焦点应落在过滤框')
+})
+
+test('WorkspaceBody：导航轨 ↑/↓ 循环、Home/End 首尾，落焦即切视图（DESIGN.md §4）', async () => {
+  await render(createElement(client.WorkspaceBody, { t, locale: undefined, navigate, chrome: false }))
+  await waitText('待取件 3')
+  const item = (k: string): HTMLElement => container.querySelector(`[data-view="${k}"]`) as unknown as HTMLElement
+  await act(async () => { item('inbox').focus() })
+  await act(async () => { fireKey(item('inbox'), 'ArrowDown') })
+  await flush()
+  assert.equal(active(), item('browse'), '↓ 应落焦会话浏览器')
+  assert.equal(item('browse').getAttribute('aria-pressed'), 'true', '↓ 落焦即切视图')
+  await act(async () => { fireKey(item('browse'), 'End') })
+  await flush()
+  assert.equal(active(), item('guide'), 'End 应落焦上手指南')
+  assert.ok(has('三步上手'), 'End 切到指南视图应渲染帮助卡')
+  await act(async () => { fireKey(item('guide'), 'ArrowDown') })
+  await flush()
+  assert.equal(active(), item('inbox'), '↓ 从末项应循环回收件箱')
+  await act(async () => { fireKey(item('inbox'), 'ArrowUp') })
+  await flush()
+  assert.equal(active(), item('guide'), '↑ 从首项应循环到末项')
+  await act(async () => { fireKey(item('guide'), 'Home') })
+  await flush()
+  assert.equal(active(), item('inbox'), 'Home 应回首项')
+})
+
+test('ComposerChip 模态契约：打开焦点入壳、Tab/Shift+Tab 圈闭、Escape 关闭、焦点归还 chip', async () => {
+  await render(createElement(client.ComposerChip, { t, locale: undefined, navigate }))
+  await clickButton('接力')
+  await flush(30)
+  const dlg = container.querySelector('[role="dialog"]') as HTMLElement | null
+  assert.ok(dlg, '浮层不存在')
+  assert.equal(dlg!.getAttribute('aria-modal'), 'true')
+  // 打开即焦点入壳：落在当前视图的导航项（`/` 立即可用）
+  const first = dlg!.querySelector('.tk-navitem[aria-pressed="true"]') as HTMLElement | null
+  assert.ok(first, '当前视图导航项不存在')
+  assert.equal(active(), first, '打开后焦点应落在当前视图导航项')
+  // Tab 圈闭：从壳内最后一个可聚焦元素 Tab → 回到第一个；第一个 Shift+Tab → 到最后一个
+  await waitText('待取件 3')
+  const focusables = [...dlg!.querySelectorAll<HTMLElement>('a[href], button, input, select, textarea, [tabindex]')]
+    .filter((el) => !(el as { disabled?: boolean }).disabled && el.getAttribute('tabindex') !== '-1' && el.closest('[hidden]') === null)
+  assert.ok(focusables.length >= 3, `可聚焦元素过少：${focusables.length}`)
+  const head = focusables[0]!
+  const tail = focusables[focusables.length - 1]!
+  await act(async () => { tail.focus() })
+  assert.equal(active(), tail)
+  await act(async () => { fireKey(tail, 'Tab') })
+  assert.equal(active(), head, 'Tab 从末元素应回到首元素（圈闭）')
+  await act(async () => { fireKey(head, 'Tab', { shiftKey: true }) })
+  assert.equal(active(), tail, 'Shift+Tab 从首元素应到末元素（圈闭）')
+  // 过滤框有字时 Escape 先清空不关壳；再按才关
+  const filter = dlg!.querySelector('input[type="search"]') as HTMLInputElement | null
+  assert.ok(filter, '过滤框不存在')
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+  await act(async () => {
+    setter?.call(filter!, '接力卡 B')
+    filter!.dispatchEvent(new window.Event('input', { bubbles: true }))
+  })
+  assert.ok(!has('交接卡 A'), '过滤应已生效')
+  await act(async () => { filter!.focus(); fireKey(filter, 'Escape') })
+  await flush()
+  assert.ok(container.querySelector('[role="dialog"]') !== null, '有字时 Escape 不应关壳')
+  assert.ok(has('交接卡 A'), '有字时 Escape 应清空过滤')
+  await act(async () => { fireKey(dlg, 'Escape') })
+  await flush(30)
+  assert.ok(container.querySelector('[role="dialog"]') === null, '空过滤后 Escape 应关壳')
+  // 焦点归还唤出 chip
+  const chip = container.querySelector('button.bt-chip') as HTMLElement | null
+  assert.ok(chip, 'chip 不存在')
+  assert.equal(active(), chip, '关闭后焦点应归还 chip')
+})
+
+test('视图头 h2 id 走 useId：两实例同挂不撞 id，aria-labelledby 可解析', async () => {
+  await render(createElement('div', null,
+    createElement(client.WorkspaceBody, { key: 'a', t, locale: undefined, navigate, chrome: false }),
+    createElement(client.WorkspaceBody, { key: 'b', t, locale: undefined, navigate, chrome: false }),
+  ))
+  await waitText('待取件 3')
+  const heads = [...container.querySelectorAll('h2.tk-h')]
+  assert.ok(heads.length >= 8, `两实例视图头数：${heads.length}`)
+  const ids = heads.map((h) => h.id)
+  assert.equal(new Set(ids).size, ids.length, `视图头 id 撞车：${ids.join(',')}`)
+  assert.ok(ids.every((id) => id !== '' && !id.startsWith('tk-h-')), '不应再是固定 tk-h-* id')
+  for (const sec of container.querySelectorAll('section.tk-view')) {
+    const ref = sec.getAttribute('aria-labelledby') ?? ''
+    assert.ok(ref !== '' && container.querySelector(`[id="${ref}"]`) !== null, `aria-labelledby 悬空：${ref}`)
+  }
+})
+
 after(() => { try { root?.unmount() } catch { /* 已卸载 */ } })
