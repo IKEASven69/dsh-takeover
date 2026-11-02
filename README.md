@@ -4,7 +4,7 @@
 
 **把任何 agent 干到一半的活接过来继续干——九家 CLI 会话只读拉取、一键寄存、开局取件，会话和记忆都能交接。**
 
-![version](https://img.shields.io/badge/version-0.1.0-blue) ![tests](https://img.shields.io/badge/tests-327%20passing-brightgreen) ![DSH](https://img.shields.io/badge/DSH-%3E%3D0.2.0--rc.2-orange) ![Node](https://img.shields.io/badge/node-%3E%3D22-green) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
+[![npm](https://img.shields.io/npm/v/@cold777/dsh-takeover)](https://www.npmjs.com/package/@cold777/dsh-takeover) ![tests](https://img.shields.io/badge/tests-327%20passing-brightgreen) ![DSH](https://img.shields.io/badge/DSH-%3E%3D0.2.0--rc.2-orange) ![Node](https://img.shields.io/badge/node-%3E%3D22-green) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
 
 - **接过来**：Claude Code 里干到一半的任务，`/resume-claude` 一条命令——六段交接卡注入当前会话，模型直接接着干；
 - **交出去**：会话太长想换环境？`/handoff` 把当前会话寄存成一张卡，任何 agent 开局取件继续；
@@ -12,7 +12,13 @@
 
 ## 安装（30 秒）
 
-**命令行：**
+**npm 包名**（「插件 → 添加插件」对话框直接粘贴；大陆用户自动走 npmmirror 镜像）：
+
+```
+@cold777/dsh-takeover
+```
+
+**命令行（GitHub 源，即刻可用）：**
 
 ```bash
 dsh plugin --profile web add github:IKEASven69/dsh-takeover

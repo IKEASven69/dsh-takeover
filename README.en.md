@@ -4,7 +4,7 @@
 
 **Take over any agent's half-finished work and keep going — read-only session pull from nine CLIs, one-click check-in, pickup on start. Sessions and memory both hand over.**
 
-![version](https://img.shields.io/badge/version-0.1.0-blue) ![tests](https://img.shields.io/badge/tests-327%20passing-brightgreen) ![DSH](https://img.shields.io/badge/DSH-%3E%3D0.2.0--rc.2-orange) ![Node](https://img.shields.io/badge/node-%3E%3D22-green) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
+[![npm](https://img.shields.io/npm/v/@cold777/dsh-takeover)](https://www.npmjs.com/package/@cold777/dsh-takeover) ![tests](https://img.shields.io/badge/tests-327%20passing-brightgreen) ![DSH](https://img.shields.io/badge/DSH-%3E%3D0.2.0--rc.2-orange) ![Node](https://img.shields.io/badge/node-%3E%3D22-green) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
 
 - **Take over**: a task half-done in Claude Code — one `/resume-claude` injects a six-section handoff card into the current session and the model just continues;
 - **Hand off**: session too long, switching environments? `/handoff` checks the current session out as a card that any agent can pick up on start;
@@ -12,7 +12,13 @@
 
 ## Install (30 seconds)
 
-**CLI:**
+**npm package name** (paste it in the "Plugins → Add plugin" dialog; CN users resolve via npmmirror automatically):
+
+```
+@cold777/dsh-takeover
+```
+
+**CLI (GitHub source, works right now):**
 
 ```bash
 dsh plugin --profile web add github:IKEASven69/dsh-takeover
