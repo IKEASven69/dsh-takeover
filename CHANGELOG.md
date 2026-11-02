@@ -1,5 +1,12 @@
 # Changelog — dsh-takeover
 
+## [0.1.0] — 2026-11-02
+
+首发版。功能面：九家外部会话读取器（claude / codex / opencode / zcode / pi / workbuddy / cursor / grok / gemini）、`handoff: 1` 协议收件环、信封机器签名、单卡忽略、记忆快照交接、接力工作台（导航轨 + 四全宽视图指挥台）。
+
+- 文档：README 双语重写为场景驱动版——徽标 hero、三场景、30 秒安装与上手指南、工作原理速览、工具与命令参考。
+- 质量闸：测试 327 全绿、typecheck + build 干净。
+
 ## [0.4.5] — 2026-11-01
 
 指挥台版：浮层重排成导航轨 + 四全宽视图——收件箱概览瓦片化、设置卡三段页签化、`--tk-*` 语义 token 落地；设计宪法 DESIGN.md 首次引入，实现按其执行。
@@ -58,7 +65,7 @@
 
 **真机验收收尾（2026-10-23 补）**：全流程真实浏览器验收后落地——记忆卡折叠栏去重（双图标/双文案）、两处 [?] 打开帮助即滚至卡顶、导出入口合并为「导出 ▾」菜单、「只看新卡」从来源 chips 独立为复选框未读开关、浮层双列各自内滚（标题栏/横幅固定，窄容器退化为整体内滚）、已消费徽标改为「已存档」口径并在悬浮提示披露 archived/ 的 50 张滚动保留策略。收件箱组件高级化：统计条改软胶囊（热态品牌描边）、卡行卡片化（hover 描边、未读行首品牌渐变强调条——该类名此前从未有样式）、展开预览内嵌软面板、筛选行合并（未读开关与来源 chips 同行）、双列细滚动条。
 
-- **解析层**：真实会话结构克隆脱敏语料（`scripts/corpus-build.mjs`）+ 13 份 golden files 逐字节回归闸（`tests/corpus-golden.spec.ts`）+ 竞品事故回归（casr #10 一族 + BOM/CRLF 边界）+ 恢复语义故障注入（`tests/recovery.spec.ts`）。挖出并修复两个真缺陷：Windows 并发 rename 双成功击穿消费即弃保证（core 引入独占创建认领文件仲裁 + 过期自愈）、补丁孤儿崩溃窗口（清扫扩展到补丁）。
+- **解析层**：真实会话结构克隆脱敏语料（`scripts/corpus-build.mjs`）+ 13 份 golden files 逐字节回归闸（`tests/corpus-golden.spec.ts`）+ 已知生态事故回归（上游存储布局漂移 + BOM/CRLF 边界）+ 恢复语义故障注入（`tests/recovery.spec.ts`）。挖出并修复两个真缺陷：Windows 并发 rename 双成功击穿消费即弃保证（core 引入独占创建认领文件仲裁 + 过期自愈）、补丁孤儿崩溃窗口（清扫扩展到补丁）。
 - **质量层**：首个接力质量基线——50 张真实 archived 卡回测延续率 34.7%，且账本标注率高的卡延续率 50% vs 无标注 0%（`scripts/backtest-archived.mjs`）；端到端双卡接力真 host 真模型评测 PASS（`scripts/eval-e2e.mjs`）；蒸馏保真度评测器（`scripts/eval-distill.mjs`）。附带修复：`<local-command-*>`/`<command-name>` 命令回声不再冒充用户请求进 goal。
 - **安全层**：`THREAT-MODEL.md` 六类威胁 + 红队套件 8 组进 CI（`tests/redteam.spec.ts`）。修复红队驱动出的缺口：补丁 diff 密钥走私（diff 现过密钥闸）、赋值规则短口令漏网（值下限 14→8 带字符混合要求）。
 - **协议层**：`conformance/`——handoff: 1 可执行符合性套件（11 条要求推导自 SPEC 原文，零依赖）。参考实现与独立第二实现（实现者只读 SPEC，与两仓代码零接触）双双 9/9 MUST 符合；第二实现暴露的 10 条规范歧义记录在 `conformance/SPEC-NOTES.md`。
