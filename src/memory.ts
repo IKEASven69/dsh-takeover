@@ -4,6 +4,7 @@
  * 扫描只读、清单确定（已知路径逐个 existsSync，绝不猜测目录内容）；
  * 出卡走 pushHandoff（密钥闸/空壳守门/覆盖率/机器信封整套纪律原样生效），
  * 卡的「建议加载」段装记忆正文，取件方按卡吸收进自己的记忆文件。
+ * 四轴 IR 立约：本轴卡 extras.axis='memory'、extras.payload='files'（原文件正文随卡）。
  * @module dsh-takeover/memory
  */
 
@@ -225,7 +226,12 @@ export function pushMemoryCard(
       title,
       to: target,
       project: '',
-    }, { dir: deps?.dir })
+    }, {
+      dir: deps?.dir,
+      // 四轴 IR 立约：记忆卡是 memory 轴载荷，形态为 files（原文件正文随卡，
+      // 取件方原样吸收整份——蒸馏条目形态用 payload='distilled'，本工具不产）
+      extras: { axis: 'memory', payload: 'files' },
+    })
     if (!result.ok) return result
     return { ok: true, id: result.id, path: result.path, sources: picks.length }
   } catch (e) {

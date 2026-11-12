@@ -7,6 +7,7 @@
  * @module dsh-takeover/tools
  */
 
+import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { hostname } from 'node:os'
@@ -145,6 +146,107 @@ export function renderCoverageLine(coverage: unknown): string | null {
   const c = normalizeCoverage(coverage)
   if (c === undefined) return null
   return `账本覆盖：${c.marked}/${c.statements} 条已标注状态（${c.unmarked} 条未标——取件方按 HISTORY_REPORTED 处理）`
+}
+
+// ---------------------------------------------------------------------------
+// A2. 四轴 IR 立约 + 仓库基线
+// ---------------------------------------------------------------------------
+
+/**
+ * 四轴 IR 立约——axis：这张卡是哪根轴的载荷。
+ * 'session'=会话轴（工作交接卡，六段接续工作）；'memory'=记忆轴（记忆快照卡，按条目吸收）；
+ * 'config'=环境配置轴（环境/配置交接卡，预留）。取件方据此决定消费姿态。
+ * 走 extras 通道持久化：core parseCard 把顶层未知键收进 extras，extras 殿后渲染回 frontmatter——
+ * 不认识 axis 的旧实现按未知字段原样保留，round-trip 不丢（既有版本纪律）。
+ */
+export type CardAxis = 'session' | 'memory' | 'config'
+
+/**
+ * 四轴 IR 立约——payload：载荷形态。
+ * 'files'=原文件正文（卡里带原始文件内容，取件方原样吸收整份）；
+ * 'distilled'=蒸馏条目（卡里带甄别过的条目，取件方按条目入库）。
+ */
+export type CardPayload = 'files' | 'distilled'
+
+/**
+ * 寄存时刻的仓库基线：remote/head/branch 三元组。取件方据此在新机器上
+ * clone → checkout → apply 补丁 → 跑测试，复原寄存时的代码现场。
+ * 各字段如实缺省（拿不到就是 null/空串），绝不用占位值冒充。
+ * （type 别名而非 interface：命名别名才有隐式索引签名，过 defineTool 的 JsonValue 契约——SyncToolValue 同款）
+ */
+export type RepoBaseline = {
+  /** origin 远端 URL；无 origin（纯本地仓）/ 非 git 仓为 null */
+  remote: string | null
+  /** 寄存时刻 HEAD commit；unborn 分支（无提交）/ 命令失败为 null */
+  head: string | null
+  /** 寄存时刻分支名（复用 GitSnapshot.branch，同一次采集；非 git 仓为空串） */
+  branch: string
+}
+
+/** 基线采集单命令超时（毫秒）：cwd 是外来输入，挂死的 git / 慢盘不能拖垮寄存主流程 */
+const GIT_BASELINE_TIMEOUT_MS = 15_000
+
+/**
+ * 基线采集：origin URL 与 HEAD commit。两条命令各自 try/catch + 15s 超时，
+ * 失败/空输出如实 null，绝不 throw（基线拿不到不阻塞寄存）。
+ * `-c core.fsmonitor=false` 与 core 同款纪律：卡片 cwd 是外来输入，仓库本地
+ * fsmonitor 钩子是卡片作者可布置的命令执行面，基线采集一样不豁免。
+ */
+function collectRepoBaseline(cwd: string): { remote: string | null; head: string | null } {
+  const one = (args: string[]): string | null => {
+    try {
+      const out = execFileSync('git', ['-C', cwd, '-c', 'core.fsmonitor=false', ...args], {
+        encoding: 'utf-8',
+        timeout: GIT_BASELINE_TIMEOUT_MS,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }).trim()
+      return out === '' ? null : out
+    } catch {
+      return null
+    }
+  }
+  return {
+    remote: one(['remote', 'get-url', 'origin']),
+    head: one(['rev-parse', 'HEAD']),
+  }
+}
+
+/** 从卡片 extras 防御式取基线（core parseCard 把顶层未知键收进 extras；外来卡/坏数据一律 undefined） */
+export function baselineFromExtras(extras: unknown): RepoBaseline | undefined {
+  if (extras === null || typeof extras !== 'object') return undefined
+  const b = (extras as Record<string, unknown>).baseline
+  if (b === null || typeof b !== 'object' || Array.isArray(b)) return undefined
+  const { remote, head, branch } = b as Record<string, unknown>
+  if (typeof remote !== 'string' && remote !== null) return undefined
+  if (typeof head !== 'string' && head !== null) return undefined
+  if (typeof branch !== 'string') return undefined
+  return { remote, head, branch }
+}
+
+/** 恢复指引单值净化：控制字符压成空格 + 截断——多行/超长的外来值不打碎四步行结构 */
+function guidanceValue(v: string): string {
+  return v.replace(/[\r\n\u0000-\u001F]+/g, ' ').slice(0, 300)
+}
+
+/** 「🧭 基线恢复指引」四步（clone → checkout → apply 补丁 → 跑测试）。
+ * baseline 与 patch/testCommand 任一缺席都如实降级为说明行，不渲染空壳步骤。 */
+export function renderBaselineGuidance(baseline: RepoBaseline, patchPath: string | undefined, testCommand: string | undefined): string[] {
+  const lines = ['🧭 基线恢复指引（extras.baseline）：']
+  const remote = typeof baseline.remote === 'string' && baseline.remote !== '' ? guidanceValue(baseline.remote) : null
+  lines.push(remote !== null
+    ? `  1. git clone ${remote} <目标目录>`
+    : '  1. git clone：卡片未带 origin 远端（remote 缺省），先向寄存方要仓库地址')
+  const head = typeof baseline.head === 'string' && baseline.head !== '' ? guidanceValue(baseline.head) : null
+  lines.push(head !== null
+    ? `  2. git checkout ${head}（寄存时刻 HEAD）`
+    : '  2. git checkout：卡片未带 HEAD（unborn 分支或采集失败），clone 后按分支看工作区')
+  lines.push(patchPath !== undefined
+    ? `  3. git apply ${patchPath}（复原未提交改动）`
+    : '  3. git apply：本卡无随卡补丁，跳过')
+  lines.push(typeof testCommand === 'string' && testCommand !== ''
+    ? `  4. 跑测试（${testCommand}）对比寄存基线，漂移即 MISMATCH 处理`
+    : '  4. 跑测试：信封未带基线测试命令，按项目惯例自跑并记录')
+  return lines
 }
 
 // ---------------------------------------------------------------------------
@@ -365,6 +467,7 @@ export function renderInbox(_args: unknown, value: unknown): Array<{ type: 'text
     testCommand?: string
     supersedes?: string
     crossOS?: { source: string; local: string }
+    baseline?: RepoBaseline
     error?: unknown
   }
   if (v?.ok !== true) {
@@ -394,6 +497,10 @@ export function renderInbox(_args: unknown, value: unknown): Array<{ type: 'text
   }
   if (v.crossOS !== undefined) {
     lines.push(`🖥️ 跨 OS 接手：源卡来自 ${v.crossOS.source}，本机是 ${v.crossOS.local}——卡内路径需人工映射后才能执行`)
+  }
+  // 基线恢复指引（extras.baseline 在场才渲染）：clone → checkout → apply → 跑测试
+  if (v.baseline !== undefined) {
+    lines.push('', ...renderBaselineGuidance(v.baseline, patchPath, typeof v.testCommand === 'string' ? v.testCommand : undefined))
   }
   const coverageLine = renderCoverageLine(v.coverage)
   if (coverageLine !== null) lines.push('', coverageLine)
@@ -527,8 +634,10 @@ export function factsToSections(facts: SessionFacts, skipped: boolean, note: str
  * 外来段落净化（ANSI/控制字符剥离、伪标题解除形态）并限量（单段 128K 字符，
  * 标量 500）——共享收件箱的卡会被 inboxList/buildState 每次全量重读，不设上限
  * 就是把宿主内存/CPU 交给任意一次 push。
+ * opts.extras 是插件侧内部出卡通道（pushMemoryCard 等程序化调用方覆盖 axis/payload
+ * 立约缺省）：不进 handoff_push 工具入参面，模型输入到不了 extras，密钥闸不旁路。
  */
-export function pushHandoff(session: unknown, args: PushArgs, opts?: { dir?: string }): PushResult {
+export function pushHandoff(session: unknown, args: PushArgs, opts?: { dir?: string; extras?: Record<string, unknown> }): PushResult {
   try {
     const probe = probeSessionEvents(session)
     const facts = probe.skipped
@@ -619,6 +728,15 @@ ${honest}`
     // 四态覆盖率：只统计不强制（纪律见 coverageOfDone 注释），随卡进 extras 持久化，
     // 取件侧 parseCard 后可从 extras.coverage 读回
     const coverage = coverageOfDone(sections.done)
+    // git 快照一次采集两处用：card.git 与基线 branch（同一次采集口径一致，不会各说各话）
+    const gitSnapshot = collectGitSnapshot(cwd)
+    // 仓库基线（四轴 IR 立约）：remote/head/branch 三元组进 extras.baseline，取件方据此
+    // clone → checkout → apply → 跑测试复原有现场。remote 与 head 都拿不到
+    //（非 git 仓 / unborn 且无远端）→ 整字段如实缺省，不写空壳假基线
+    const baselineSrc = collectRepoBaseline(cwd)
+    const baseline: RepoBaseline | undefined = baselineSrc.remote !== null || baselineSrc.head !== null
+      ? { remote: baselineSrc.remote, head: baselineSrc.head, branch: gitSnapshot.branch }
+      : undefined
     const card: Card = {
       handoff: 1,
       id: generateId(),
@@ -627,12 +745,16 @@ ${honest}`
       project: scalar(args.project, ''),
       cwd,
       pushed_at: localIso(new Date()),
-      git: collectGitSnapshot(cwd),
+      git: gitSnapshot,
       tasks: todoToTasks(facts).filter((t): t is TaskSnapshot => true),
       sections,
       extras: {
+        // 四轴 IR 立约缺省：会话卡。内部出卡通道（opts.extras）可覆盖为 memory/config
+        axis: 'session' satisfies CardAxis,
         coverage,
         ...(secretHits.length > 0 && args.allowSecrets === true ? { secretsBypass: secretHits.map((h) => `${h.rule}@${h.section}`) } : {}),
+        ...(baseline !== undefined ? { baseline } : {}),
+        ...(opts?.extras ?? {}),
       },
     }
     const path = writeCard(card, opts?.dir)
@@ -754,6 +876,8 @@ export type InboxLoadResult =
       supersedes?: string
       /** 跨 OS 接手：源卡 OS 与本机不同（路径体系需人工映射） */
       crossOS?: { source: string; local: string }
+      /** 卡内 extras.baseline 的仓库基线（防御式提取，外来卡/坏数据缺省） */
+      baseline?: RepoBaseline
       /** 信封验签结论：unsigned=无签名（旧卡/外写卡），no-key=有签名但本机无对应密钥 */
       sig?: SigVerdict
     }
@@ -779,6 +903,7 @@ export function inboxLoad(id: string, opts?: { dir?: string }): InboxLoadResult 
     // 物质层随卡：补丁 sidecar 与 .md 同步搬去 archived/
     const patchArchived = consumePatch(trimmed, opts?.dir)
     const coverage = coverageFromExtras(card.extras)
+    const baseline = baselineFromExtras(card.extras)
     // 信封验签：sig 缺席（旧卡/外写卡）不算异常；mac 不合或卡面哈希与签名面不符 = 篡改/损坏，进警告 + 死亡地图
     const sigVerdict: SigVerdict = envelope?.data !== undefined
       ? verifyEnvelopeSig(envelope.data, opts?.dir, cardShaBeforeLoad)
@@ -802,6 +927,7 @@ export function inboxLoad(id: string, opts?: { dir?: string }): InboxLoadResult 
       recordLifecycleEvent({ stage: 'pickup', reason: 'git_unavailable', target: card.id, detail: check.unavailable.slice(0, 120) }, opts?.dir)
     }
     if (coverage !== undefined) out.coverage = coverage
+    if (baseline !== undefined) out.baseline = baseline
     if (envelopeChars !== undefined) out.envelopeChars = envelopeChars
     if (patchArchived !== undefined) {
       out.patchPath = patchArchived
@@ -905,7 +1031,7 @@ function safeUserQuestions(ctx: Context): unknown {
 export function registerPushTool(ctx: Context): void {
   ctx.tools.register(defineTool({
     name: 'handoff_push',
-    description: '把当前 DSH 会话寄存为一张 handoff: 1 交接卡片到共享收件箱 ~/.handoff/pending/（任何 agent 可取件）。六段文本（goal/files/done/remaining/stopped/warnings）+ 可选 suggested（建议加载段，非协议段）可选传入；留空段从会话事件流确定性兜底，不调 LLM。内置两道守门：密钥扫描（云厂商 key/私钥头/高熵赋值，命中拒绝并回喂理由，allowSecrets 留痕旁路）与空壳卡守门（六段全是兜底占位时拒绝，confirmSkeleton 旁路）。若源目录是 git 仓库且有未提交改动，同步落补丁 <id>.patch（取件方 git apply 可复原；diff 超上限整体拒带不截断）。另落机器信封 <id>.envelope.json（含源机标识/未跟踪清单/基线测试提示，协议扩展提案）并对 done 段产出四态覆盖率统计 coverage（只统计不强制）。返回 { ok, id, path, coverage, patch? } 规范值。',
+    description: '把当前 DSH 会话寄存为一张 handoff: 1 交接卡片到共享收件箱 ~/.handoff/pending/（任何 agent 可取件）。六段文本（goal/files/done/remaining/stopped/warnings）+ 可选 suggested（建议加载段，非协议段）可选传入；留空段从会话事件流确定性兜底，不调 LLM。内置两道守门：密钥扫描（云厂商 key/私钥头/高熵赋值，命中拒绝并回喂理由，allowSecrets 留痕旁路）与空壳卡守门（六段全是兜底占位时拒绝，confirmSkeleton 旁路）。若源目录是 git 仓库且有未提交改动，同步落补丁 <id>.patch（取件方 git apply 可复原；diff 超上限整体拒带不截断）。另落机器信封 <id>.envelope.json（含源机标识/未跟踪清单/基线测试提示，协议扩展提案）并对 done 段产出四态覆盖率统计 coverage（只统计不强制）。卡片 extras 带四轴立约标记 axis（本工具恒为 session）与仓库基线 baseline（origin/HEAD/分支，拿不到如实缺省）。返回 { ok, id, path, coverage, patch? } 规范值。',
     parameters: {
       goal: { type: 'string', description: '「目标」段：会话在做什么、最后一条用户请求' },
       files: { type: 'string', description: '「涉及文件」段：碰过的文件/命令；计划文档只写路径' },
@@ -956,7 +1082,7 @@ export function registerPushTool(ctx: Context): void {
 export function registerInboxTool(ctx: Context): void {
   ctx.tools.register(defineTool({
     name: 'handoff_inbox',
-    description: '交接卡片收件箱：action=list 列 ~/.handoff/pending/ 待取件（id/来源/项目/时间）；action=load + id 取件（消费即弃，卡片移到 archived/，随卡消费机器信封，附 git 核验 MISMATCH/UNAVAILABLE 警告与四态覆盖率）。返回 { ok, ... } 规范值。',
+    description: '交接卡片收件箱：action=list 列 ~/.handoff/pending/ 待取件（id/来源/项目/时间）；action=load + id 取件（消费即弃，卡片移到 archived/，随卡消费机器信封，附 git 核验 MISMATCH/UNAVAILABLE 警告与四态覆盖率；卡带仓库基线 baseline 时输出 clone → checkout → apply → 跑测试四步恢复指引）。返回 { ok, ... } 规范值。',
     parameters: {
       action: { type: 'string', required: true, enum: ['list', 'load'], description: 'list 列待取件；load 取件（消费即弃）' },
       id: { type: 'string', description: 'load 必填：卡片 id' },
@@ -974,6 +1100,7 @@ export function registerInboxTool(ctx: Context): void {
           mismatches: { type: 'json', description: 'load：git 核验冲突（MISMATCH）' },
           unavailable: { type: 'string', description: 'load：无法核验说明（UNAVAILABLE）' },
           coverage: { type: 'json', description: 'load：卡片 extras.coverage 的四态覆盖率统计（无则缺省）' },
+          baseline: { type: 'json', description: 'load：卡片 extras.baseline 的仓库基线 { remote, head, branch }（无则缺省）' },
           envelopeChars: { type: 'number', description: 'load：随卡消费的机器信封 JSON 字符数（卡无信封时缺省）' },
           error: { type: 'json', description: '失败原因' },
         },

@@ -76,6 +76,39 @@ interface CoverageStats {
   unmarked: number;
   [k: string]: number;
 }
+/**
+ * 四轴 IR 立约——axis：这张卡是哪根轴的载荷。
+ * 'session'=会话轴（工作交接卡，六段接续工作）；'memory'=记忆轴（记忆快照卡，按条目吸收）；
+ * 'config'=环境配置轴（环境/配置交接卡，预留）。取件方据此决定消费姿态。
+ * 走 extras 通道持久化：core parseCard 把顶层未知键收进 extras，extras 殿后渲染回 frontmatter——
+ * 不认识 axis 的旧实现按未知字段原样保留，round-trip 不丢（既有版本纪律）。
+ */
+type CardAxis = 'session' | 'memory' | 'config';
+/**
+ * 四轴 IR 立约——payload：载荷形态。
+ * 'files'=原文件正文（卡里带原始文件内容，取件方原样吸收整份）；
+ * 'distilled'=蒸馏条目（卡里带甄别过的条目，取件方按条目入库）。
+ */
+type CardPayload = 'files' | 'distilled';
+/**
+ * 寄存时刻的仓库基线：remote/head/branch 三元组。取件方据此在新机器上
+ * clone → checkout → apply 补丁 → 跑测试，复原寄存时的代码现场。
+ * 各字段如实缺省（拿不到就是 null/空串），绝不用占位值冒充。
+ * （type 别名而非 interface：命名别名才有隐式索引签名，过 defineTool 的 JsonValue 契约——SyncToolValue 同款）
+ */
+type RepoBaseline = {
+  /** origin 远端 URL；无 origin（纯本地仓）/ 非 git 仓为 null */
+  remote: string | null;
+  /** 寄存时刻 HEAD commit；unborn 分支（无提交）/ 命令失败为 null */
+  head: string | null;
+  /** 寄存时刻分支名（复用 GitSnapshot.branch，同一次采集；非 git 仓为空串） */
+  branch: string;
+};
+/** 从卡片 extras 防御式取基线（core parseCard 把顶层未知键收进 extras；外来卡/坏数据一律 undefined） */
+export declare function baselineFromExtras(extras: unknown): RepoBaseline | undefined;
+/** 「🧭 基线恢复指引」四步（clone → checkout → apply 补丁 → 跑测试）。
+ * baseline 与 patch/testCommand 任一缺席都如实降级为说明行，不渲染空壳步骤。 */
+export declare function renderBaselineGuidance(baseline: RepoBaseline, patchPath: string | undefined, testCommand: string | undefined): string[];
 /** handoff_push 参数：六段文本可选，缺省段走事件流确定性兜底 */
 interface PushArgs {
   goal?: string;
@@ -127,9 +160,12 @@ export declare function factsToSections(facts: SessionFacts, skipped: boolean, n
  * 外来段落净化（ANSI/控制字符剥离、伪标题解除形态）并限量（单段 128K 字符，
  * 标量 500）——共享收件箱的卡会被 inboxList/buildState 每次全量重读，不设上限
  * 就是把宿主内存/CPU 交给任意一次 push。
+ * opts.extras 是插件侧内部出卡通道（pushMemoryCard 等程序化调用方覆盖 axis/payload
+ * 立约缺省）：不进 handoff_push 工具入参面，模型输入到不了 extras，密钥闸不旁路。
  */
 export declare function pushHandoff(session: unknown, args: PushArgs, opts?: {
   dir?: string;
+  extras?: Record<string, unknown>;
 }): PushResult;
 interface InboxItem {
   id: string;
@@ -177,6 +213,8 @@ type InboxLoadResult = {
     source: string;
     local: string;
   };
+  /** 卡内 extras.baseline 的仓库基线（防御式提取，外来卡/坏数据缺省） */
+  baseline?: RepoBaseline;
   /** 信封验签结论：unsigned=无签名（旧卡/外写卡），no-key=有签名但本机无对应密钥 */
   sig?: SigVerdict;
 } | {
@@ -924,5 +962,5 @@ export declare const name = "dsh-takeover";
 export declare const inject: string[];
 export declare function apply(ctx: Context): void;
 //#endregion
-export type { ApplyResult, BackupResult, BackupRow, DryRunResult, ForeignCandidate, ForeignEnv, ForeignListResult, ForeignListRow, ForeignPreviewResult, ForeignProvider, ForeignReadArgs, ForeignReadResult, ForeignReaders, ForeignResolve, ForeignSkeleton, ForeignSummary, ForeignTurn, InboxItem, InboxListResult, InboxLoadResult, MemoryPushArgs, MemoryPushResult, MemorySourceDef, MemorySourceRow, OutboundTarget, PendingRow, ProbeResult, ProviderRow, PushArgs, PushResult, RestoreDiffRow, ResumeSkillSpec, ScopeFile, SessionControllerLike, SessionFacts, SyncConfig, SyncOutcome, SyncStatus, TakeoverMode, TakeoverOutcome, TakeoverState, TakeoverSwitches };
+export type { ApplyResult, BackupResult, BackupRow, CardAxis, CardPayload, DryRunResult, ForeignCandidate, ForeignEnv, ForeignListResult, ForeignListRow, ForeignPreviewResult, ForeignProvider, ForeignReadArgs, ForeignReadResult, ForeignReaders, ForeignResolve, ForeignSkeleton, ForeignSummary, ForeignTurn, InboxItem, InboxListResult, InboxLoadResult, MemoryPushArgs, MemoryPushResult, MemorySourceDef, MemorySourceRow, OutboundTarget, PendingRow, ProbeResult, ProviderRow, PushArgs, PushResult, RepoBaseline, RestoreDiffRow, ResumeSkillSpec, ScopeFile, SessionControllerLike, SessionFacts, SyncConfig, SyncOutcome, SyncStatus, TakeoverMode, TakeoverOutcome, TakeoverState, TakeoverSwitches };
 //# sourceMappingURL=index.d.ts.map
