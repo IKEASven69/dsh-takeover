@@ -11,8 +11,10 @@ docs/测试会话全量档案-*.md
 docs/测试报告-*.md
 docs/全场景测试文档.md
 
-# 本地文档：不入库
-docs/
+# 本地文档：不入库（用 docs/* 而非 docs/——目录整体排除会让 ! 白名单永不生效）
+docs/*
+# 例外：开发路线图入库（跨机同步靠 git，另一台机器要能拿到）
+!docs/ROADMAP-2026Q4.md
 benchmark.cases.json
 
 # 本地工具脚本：不入库
