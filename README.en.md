@@ -73,7 +73,7 @@ Works out of the box (built artifacts are committed — no local toolchain). Pin
 
 ## Cross-machine relay
 
-Point `HANDOFF_HOME` at a synced-drive folder or a git repository and the inbox is shared: `handoff_push` on machine A, `/inbox` pickup on machine B. One environment variable, zero code. Cards are readable from any phone's file viewer too.
+Point `HANDOFF_HOME` at a synced-drive folder or a git repository and the inbox is shared: `handoff_push` on machine A, `/inbox` pickup on machine B. One environment variable, zero code. Cards are readable from any phone's file viewer too. Sync-service conflict copies never become phantom cards: same-id copies are deduplicated to one entry, late copies whose original is gone land in the inbox's visible rejection list (with reasons), and so do half-written files.
 
 ## Quality & evidence
 

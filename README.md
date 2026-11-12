@@ -73,7 +73,7 @@ dsh plugin --profile web add github:IKEASven69/dsh-takeover
 
 ## 跨机器接力
 
-`HANDOFF_HOME` 指向同步盘目录或 git 仓库，收件箱即多机共享：A 机 `handoff_push` 寄存，B 机开局 `/inbox` 取件。一句环境变量，零代码。同步盘里的卡片在手机文件查看器里同样可读。
+`HANDOFF_HOME` 指向同步盘目录或 git 仓库，收件箱即多机共享：A 机 `handoff_push` 寄存，B 机开局 `/inbox` 取件。一句环境变量，零代码。同步盘里的卡片在手机文件查看器里同样可读。同步服务的冲突副本不会变成幽灵卡：同 id 自动去重只显示一次，原件已取走的迟到副本进收件箱的拒收清单（有因可见），半截文件同理。
 
 ## 质量与证据
 
