@@ -696,7 +696,8 @@ test('trimArchived：archived 里的 *.md 目录不再卡死滚动（延迟取�
 // ---------------------------------------------------------------------------
 
 function readRepoFile(name: string): string {
-  return readFileSync(new URL(`../${name}`, import.meta.url), 'utf-8')
+  // 归一化 CRLF→LF：断言里有 `\n` 字面量（多行 CSS 块），不能随 checkout 行尾漂移
+  return readFileSync(new URL(`../${name}`, import.meta.url), 'utf-8').replace(/\r\n/g, '\n')
 }
 
 test('README：不再引用重置版本序列里不存在的 0.2.2（#v0.2.2 固定安装必失败）', () => {

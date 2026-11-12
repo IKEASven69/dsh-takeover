@@ -1,3 +1,7 @@
+# All text sources check out with LF everywhere (Windows included): the test
+# suite asserts multi-line CSS blocks in src/client.ts with `\n` literals, so a
+# CRLF working tree (core.autocrlf=true) breaks them on Windows-only checkouts.
+* text=auto eol=lf
 # Byte-frozen corpora and goldens: golden tests compare byte-for-byte.
 # A CRLF checkout (core.autocrlf=true on Windows) breaks them — pin line endings.
 tests/fixtures/** text eol=lf
