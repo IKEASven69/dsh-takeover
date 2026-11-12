@@ -15,6 +15,7 @@ import { isLowInfoCardMarkdown } from './lowinfo.ts'
 import { readLifecycleEvents, reasonFromCoreSkip, LIFECYCLE_STATE_MAX } from './lifecycle.ts'
 import { FOREIGN_PROVIDERS, PROVIDER_TO_ADAPTER, type ForeignProvider, type ForeignReaders } from './foreign.ts'
 import { syncStatusOf, type SyncStatus } from './sync.ts'
+import { listBackups, type BackupRow } from './envbackup.ts'
 
 // 停用规范错误值文案在 foreign.ts（disabledError），本模块只管开关存取与状态组装
 
@@ -155,6 +156,8 @@ export interface TakeoverState {
   /** 0.2.0 换机同步状态（零网络：sync.json + sync-state.json + 本地脏计数）。
    * 未启用时缺省——客户端整个换机块不渲染。 */
   syncStatus?: SyncStatus
+  /** 0.2.0 环境备份清单（env-backup/ 目录只读枚举，不解密）；无备份缺省 */
+  envBackup?: { backups: BackupRow[] }
 }
 /**
  * 组装设置卡状态（纯函数核心，读取层与目录都可注入）：
@@ -311,6 +314,8 @@ export function buildState(readers: ForeignReaders, dir?: string): TakeoverState
     : undefined
   // 换机同步状态（0.2.0）：未启用缺省；内部自带 try/catch，不拖垮 state 组装
   const syncStatus = syncStatusOf(dir)
+  // 环境备份清单（只读目录枚举，listBackups 自带容错，不拖垮 state）
+  const backups = listBackups(dir)
   return {
     home: resolveHome(dir),
     pending,
@@ -323,6 +328,7 @@ export function buildState(readers: ForeignReaders, dir?: string): TakeoverState
     providers,
     ...(rejections !== undefined ? { rejections } : {}),
     ...(syncStatus !== undefined ? { syncStatus } : {}),
+    ...(backups.length > 0 ? { envBackup: { backups } } : {}),
   }
 }
 

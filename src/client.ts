@@ -2952,6 +2952,77 @@ export function ComposerChip({ t, locale, navigate, sessionId }: {
   )
 }
 
+/** 环境备份卡（0.2.0 wave2）：口令加密打包全家桶 → 预演 diff → 确认还原 → 可回滚。
+ * 动作经 /dsh-takeover/env-backup（同队列串行）；清单来自 state.envBackup（目录枚举）。 */
+function EnvPane({ t, backups, reload, setError }: {
+  t: Translate
+  backups: NonNullable<TakeoverState['envBackup']>['backups']
+  reload: () => void
+  setError: (e: string | null) => void
+}): ReturnType<typeof createElement> {
+  const [pass, setPass] = useState('')
+  const [busy, setBusy] = useState('')
+  const [notice, setNotice] = useState<string | null>(null)
+  const [dry, setDry] = useState<{ file: string; creates: number; overwrites: number; same: number } | null>(null)
+
+  const act = (action: 'create' | 'dry' | 'apply' | 'rollback', extra?: Record<string, unknown>): void => {
+    setBusy(action)
+    void post<{ ok: boolean; detail?: string; error?: string; creates?: number; overwrites?: number; same?: number; file?: string; checkpointDir?: string }>(
+      '/dsh-takeover/env-backup', { action, passphrase: pass, ...extra })
+      .then((r) => {
+        if (!r.ok) { setError(r.error ?? t('syncLastError')); return }
+        setError(null)
+        if (action === 'dry' && typeof r.creates === 'number') {
+          setDry({ file: String(extra?.['file'] ?? ''), creates: r.creates, overwrites: r.overwrites ?? 0, same: r.same ?? 0 })
+          setNotice(r.detail ?? null)
+        } else {
+          if (action === 'apply' || action === 'rollback' || action === 'create') setDry(null)
+          setNotice(r.detail ?? null)
+        }
+        reload()
+      })
+      .catch((e: unknown) => { setError(e instanceof Error ? e.message : String(e)) })
+      .finally(() => { setBusy('') })
+  }
+
+  return createElement('div', { className: 'tk-sem' },
+    createElement('p', null, t('envLead')),
+    createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
+      createElement('input', {
+        className: 'bt-filter', type: 'password', value: pass,
+        placeholder: t('envPassPlaceholder'),
+        'aria-label': t('envPassLabel'),
+        onChange: (e: { target: { value: string } }) => { setPass(e.target.value) },
+        style: { flex: '1 1 260px' },
+      }),
+      createElement('button', {
+        className: 'bt-btn bt-btn-primary', type: 'button',
+        disabled: busy !== '' || pass.length < 8,
+        title: pass.length < 8 ? t('envPassPlaceholder') : undefined,
+        onClick: () => { setNotice(null); setDry(null); act('create') },
+      }, busy !== '' ? t('envBusy') : t('envBackupNow')),
+    ),
+    notice !== null ? createElement('div', { className: 'bt-banner', style: { marginTop: 8 } }, notice) : null,
+    createElement('div', { className: 'tk-pane-lead', style: { marginTop: 10 } }, t('envBackupsTitle')),
+    backups.length === 0
+      ? createElement('p', { className: 'bt-sub' }, t('envNoBackups'))
+      : backups.map((b) => createElement('div', { key: b.file, style: { display: 'flex', gap: 8, alignItems: 'center', padding: '3px 0', flexWrap: 'wrap' } },
+          createElement('span', { style: { flex: '1 1 220px', fontVariantNumeric: 'tabular-nums' } },
+            `${b.at} · ${t('envSize', { n: (b.bytes / 1024 / 1024).toFixed(1) })}`),
+          dry !== null && dry.file === b.file
+            ? createElement('span', { className: 'bt-sub' }, t('envDrySummary', { n1: dry.creates, n2: dry.overwrites, n3: dry.same }))
+            : null,
+          dry !== null && dry.file === b.file
+            ? createElement('button', { className: 'bt-btn bt-btn-danger bt-btn-confirm', type: 'button', disabled: busy !== '', onClick: () => { setNotice(null); act('apply', { file: b.file, confirm: true }) } }, busy === 'apply' ? t('envBusy') : t('envApply'))
+            : createElement('button', { className: 'bt-btn', type: 'button', disabled: busy !== '' || pass.length < 8, onClick: () => { setNotice(null); setDry(null); act('dry', { file: b.file }) } }, busy === 'dry' ? t('envBusy') : t('envDry')),
+          dry !== null && dry.file === b.file
+            ? createElement('button', { className: 'bt-btn', type: 'button', disabled: busy !== '', onClick: () => setDry(null) }, t('envCancel'))
+            : null,
+        )),
+    createElement('p', { className: 'bt-sub', style: { marginTop: 8 } }, t('envScopeNote')),
+  )
+}
+
 /** 换机卡（0.2.0）：同步状态一目了然 + 仓库地址启用 + 立即同步。
  * 状态数据全部来自 state.syncStatus（零网络组装），动作经 /dsh-takeover/sync（同队列串行）。 */
 function SyncCard({ t, status, setState, setError, generationRef }: {
@@ -3024,8 +3095,8 @@ function SyncCard({ t, status, setState, setError, generationRef }: {
 }
 
 /** 设置卡页签键（DESIGN.md §4 设置卡页签：命令速览 / 支持矩阵 / 开关语义 / 换机）；数组顺序即方向键遍历序 */
-type SettingsTab = 'cmds' | 'matrix' | 'sem' | 'sync'
-const SETTINGS_TABS: readonly SettingsTab[] = ['cmds', 'matrix', 'sem', 'sync']
+type SettingsTab = 'cmds' | 'matrix' | 'sem' | 'sync' | 'env'
+const SETTINGS_TABS: readonly SettingsTab[] = ['cmds', 'matrix', 'sem', 'sync', 'env']
 
 export function Panel({ t, locale, navigate, slim }: { t: Translate; locale: LocaleRuntime | undefined; navigate: (sessionId: string) => boolean; /** true = 工作台面已挂进会话输入区上方，设置卡只留设置与指引（座位注册失败时降级为 false 内嵌工作台） */ slim: boolean }): ReturnType<typeof createElement> {
   useLocaleSync(locale)
@@ -3058,7 +3129,7 @@ export function Panel({ t, locale, navigate, slim }: { t: Translate; locale: Loc
 
   const tabId = (k: SettingsTab): string => `${uid}tab-${k}`
   const paneId = (k: SettingsTab): string => `${uid}pane-${k}`
-  const tabLabel: Record<SettingsTab, string> = { cmds: t('tabCmds'), matrix: t('tabMatrix'), sem: t('tabSemantics'), sync: t('tabSync') }
+  const tabLabel: Record<SettingsTab, string> = { cmds: t('tabCmds'), matrix: t('tabMatrix'), sem: t('tabSemantics'), sync: t('tabSync'), env: t('tabEnv') }
   // WAI-ARIA tabs 键盘流：←/→ 循环、Home/End 首尾；选中即切面板，焦点随之移动（roving tabindex）
   const onTabsKeyDown = (e: { key: string; preventDefault: () => void }): void => {
     const i = SETTINGS_TABS.indexOf(tab)
@@ -3154,6 +3225,10 @@ export function Panel({ t, locale, navigate, slim }: { t: Translate; locale: Loc
       // 换机（0.2.0）：卡同步状态一目了然 + 仓库地址启用 + 立即同步
       pane('sync',
         createElement(SyncCard, { t, status: state?.syncStatus, setState, setError, generationRef }),
+      ),
+      // 环境备份（0.2.0 wave2）：全家桶加密备份 + 预演还原 + 回滚
+      pane('env',
+        createElement(EnvPane, { t, backups: state?.envBackup?.backups ?? [], reload, setError }),
       ),
     ),
 

@@ -23,6 +23,7 @@ import { writeRelayProvenance } from './relay-records.ts'
 import { pushMemoryCard, scanMemorySources } from './memory.ts'
 import { buildState, clearArchived, dismissPending, isProviderEnabled, setProviderEnabled } from './settings.ts'
 import { syncNow, syncPull, syncPush, syncSetup, type SyncOutcome } from './sync.ts'
+import { applyRestore, createBackup, dryRunRestore, listBackups, rollbackRestore } from './envbackup.ts'
 
 function sendJson(response: ServerResponse, code: number, body: unknown): void {
   response.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
@@ -664,7 +665,54 @@ export function registerTakeoverRoutes(
           return
         }
 
-        sendJson(response, 404, { error: `未知路由：/dsh-takeover/${sub}（支持 state / sessions / session-preview / takeover / provider / clear-archived / dismiss-pending / sync）` })
+        if (sub === 'env-backup') {
+          if (request.method !== 'POST') {
+            response.writeHead(405, { allow: 'POST' })
+            response.end()
+            return
+          }
+          if (!sameOrigin(request)) {
+            sendJson(response, 403, { error: '仅接受同源请求' })
+            return
+          }
+          void readJsonBody(request).then(
+            (body) => {
+              // 写盘动作与 provider/sync 同队列串行：备份/还原都是重 I/O，不并发
+              providerWriteQueue = providerWriteQueue.then(async () => {
+                const action = String(body['action'] ?? '')
+                const passphrase = String(body['passphrase'] ?? '')
+                const file = String(body['file'] ?? '')
+                try {
+                  if (action === 'create') {
+                    const r = createBackup(passphrase)
+                    sendJson(response, 200, { ...r, backups: listBackups() })
+                  } else if (action === 'dry') {
+                    sendJson(response, 200, dryRunRestore(file, passphrase))
+                  } else if (action === 'apply') {
+                    if (body['confirm'] !== true) {
+                      sendJson(response, 400, { ok: false, error: '还原是覆盖性动作：先 dry 预演，再带 confirm:true 落盘' })
+                      return
+                    }
+                    const r = applyRestore(file, passphrase)
+                    sendJson(response, 200, { ...r, backups: listBackups() })
+                  } else if (action === 'rollback') {
+                    sendJson(response, 200, rollbackRestore(file))
+                  } else if (action === 'list') {
+                    sendJson(response, 200, { ok: true, backups: listBackups() })
+                  } else {
+                    sendJson(response, 400, { ok: false, error: `未知动作：${action}（支持 create / dry / apply / rollback / list）` })
+                  }
+                } catch (e) {
+                  sendJson(response, 400, { ok: false, error: e instanceof Error ? e.message : String(e) })
+                }
+              })
+            },
+            (error: unknown) => { sendJson(response, 400, { ok: false, error: error instanceof Error ? error.message : String(error) }) },
+          )
+          return
+        }
+
+        sendJson(response, 404, { error: `未知路由：/dsh-takeover/${sub}（支持 state / sessions / session-preview / takeover / provider / clear-archived / dismiss-pending / sync / env-backup）` })
       },
     }))
   })

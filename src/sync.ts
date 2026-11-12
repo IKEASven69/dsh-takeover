@@ -32,8 +32,8 @@ const execFile = promisify(execFileCb)
 /** git 网络命令超时：push/pull 可能慢，但绝不挂死（脚本侧先例 15s，网络面放宽） */
 export const SYNC_GIT_TIMEOUT_MS = 30_000
 
-/** 同步范围：卡的宇宙 + 签名密钥 + 同步配置（远端 URL 随目录走，B 机启用时可直接采纳） */
-const SYNC_PATHS = ['pending', 'archived', '.signing-key.json', 'sync.json'] as const
+/** 同步范围：卡的宇宙 + 签名密钥 + 同步配置（远端 URL 随目录走）+ 环境备份包（append-only，无合并冲突） */
+const SYNC_PATHS = ['pending', 'archived', '.signing-key.json', 'sync.json', 'env-backup'] as const
 
 /** GITIGNORE：机器本地记录不入库（生命周期日志/取件溯源/插件开关各自为本机事实） */
 const SYNC_GITIGNORE = [

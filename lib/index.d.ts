@@ -490,6 +490,74 @@ type SyncStatus = {
 /** 组装同步状态（buildState 调用；未启用 → undefined，客户端整个块不渲染） */
 export declare function syncStatusOf(dir?: string): SyncStatus | undefined;
 //#endregion
+//#region src/envbackup.d.ts
+/** 相对路径合法性：正斜杠、无 .. 段、非绝对、无盘符（恢复路径的穿越硬闸） */
+export declare function validateRelPath(p: string): string;
+interface ScopeFile {
+  path: string;
+  category: string;
+  secret: boolean;
+  bytes: number;
+}
+/** 收集备份清单：scope 命中且磁盘上真实存在的文件（缺失容错——没有就跳过，不算错） */
+export declare function collectScopeFiles(root?: string): ScopeFile[];
+export declare function envBackupDir(dir?: string): string;
+/** type 别名：工具/客户端 JSON 值面需要隐式索引签名（interface 会挂 defineTool） */
+type BackupRow = {
+  file: string;
+  bytes: number;
+  /** 文件名内嵌的时间戳（yyyyMMdd-HHMM） */
+  at: string;
+};
+/** 列备份文件（只读目录，不解密） */
+export declare function listBackups(dir?: string): BackupRow[];
+interface BackupResult {
+  ok: true;
+  file: string;
+  bytes: number;
+  files: number;
+  secretCount: number;
+  secretHits: number;
+  detail: string;
+}
+/** 立即备份：收集 → 加密 → 落 env-backup/ → 修剪留 3 */
+export declare function createBackup(passphrase: string, dir?: string, root?: string): BackupResult;
+type RestoreDiffRow = {
+  path: string;
+  action: 'create' | 'overwrite' | 'same';
+  category: string;
+  diskBytes?: number;
+  packBytes: number;
+};
+interface DryRunResult {
+  ok: true;
+  file: string;
+  createdAt: string;
+  host: string;
+  secretCount: number;
+  diff: RestoreDiffRow[];
+  creates: number;
+  overwrites: number;
+  same: number;
+}
+/** 还原预演：解密 + 与磁盘逐文件比对（三态：新建/覆盖/相同）——不写任何盘 */
+export declare function dryRunRestore(file: string, passphrase: string, dir?: string, root?: string): DryRunResult;
+interface ApplyResult {
+  ok: true;
+  file: string;
+  applied: number;
+  checkpointDir: string;
+  detail: string;
+}
+/** 确认还原：checkpoint 被覆盖原物 → 逐文件 tmp+rename 落盘 → 报告 */
+export declare function applyRestore(file: string, passphrase: string, dir?: string, root?: string): ApplyResult;
+/** 回滚：把 checkpoint 里的原物写回去 */
+export declare function rollbackRestore(checkpointDir: string, dir?: string, root?: string): {
+  ok: true;
+  restored: number;
+  detail: string;
+};
+//#endregion
 //#region src/settings.d.ts
 /** 开关文件形态：只记停用名单（默认全开，未知条目载入时丢弃） */
 interface TakeoverSwitches {
@@ -575,6 +643,10 @@ interface TakeoverState {
   /** 0.2.0 换机同步状态（零网络：sync.json + sync-state.json + 本地脏计数）。
    * 未启用时缺省——客户端整个换机块不渲染。 */
   syncStatus?: SyncStatus;
+  /** 0.2.0 环境备份清单（env-backup/ 目录只读枚举，不解密）；无备份缺省 */
+  envBackup?: {
+    backups: BackupRow[];
+  };
 }
 /**
  * 组装设置卡状态（纯函数核心，读取层与目录都可注入）：
@@ -852,5 +924,5 @@ export declare const name = "dsh-takeover";
 export declare const inject: string[];
 export declare function apply(ctx: Context): void;
 //#endregion
-export type { ForeignCandidate, ForeignEnv, ForeignListResult, ForeignListRow, ForeignPreviewResult, ForeignProvider, ForeignReadArgs, ForeignReadResult, ForeignReaders, ForeignResolve, ForeignSkeleton, ForeignSummary, ForeignTurn, InboxItem, InboxListResult, InboxLoadResult, MemoryPushArgs, MemoryPushResult, MemorySourceDef, MemorySourceRow, OutboundTarget, PendingRow, ProbeResult, ProviderRow, PushArgs, PushResult, ResumeSkillSpec, SessionControllerLike, SessionFacts, SyncConfig, SyncOutcome, SyncStatus, TakeoverMode, TakeoverOutcome, TakeoverState, TakeoverSwitches };
+export type { ApplyResult, BackupResult, BackupRow, DryRunResult, ForeignCandidate, ForeignEnv, ForeignListResult, ForeignListRow, ForeignPreviewResult, ForeignProvider, ForeignReadArgs, ForeignReadResult, ForeignReaders, ForeignResolve, ForeignSkeleton, ForeignSummary, ForeignTurn, InboxItem, InboxListResult, InboxLoadResult, MemoryPushArgs, MemoryPushResult, MemorySourceDef, MemorySourceRow, OutboundTarget, PendingRow, ProbeResult, ProviderRow, PushArgs, PushResult, RestoreDiffRow, ResumeSkillSpec, ScopeFile, SessionControllerLike, SessionFacts, SyncConfig, SyncOutcome, SyncStatus, TakeoverMode, TakeoverOutcome, TakeoverState, TakeoverSwitches };
 //# sourceMappingURL=index.d.ts.map

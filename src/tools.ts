@@ -15,6 +15,7 @@ import { scanSecrets } from './secretscan.ts'
 import { recordLifecycleEvent } from './lifecycle.ts'
 import { loadOrCreateSigningKey, signEnvelope, verifyEnvelopeSig, type SigVerdict } from './signing.ts'
 import { syncNow, syncPull, syncPush, syncSetup, syncStatusLine, syncStatusOf, type SyncOutcome, type SyncStatus } from './sync.ts'
+import { applyRestore, createBackup, dryRunRestore, listBackups, rollbackRestore, type BackupRow, type RestoreDiffRow } from './envbackup.ts'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -1073,6 +1074,95 @@ function withSyncStatus(r: SyncOutcome): SyncToolValue {
 function renderSync(_args: unknown, value: unknown): Array<{ type: 'text'; text: string }> {
   const v = value as { ok?: boolean; action?: string; detail?: string; error?: string }
   const head = v.ok === true ? `[handoff_sync ${String(v.action)}] ok` : `[handoff_sync ${String(v.action)}] 失败`
+  const lines = [head]
+  if (typeof v.detail === 'string' && v.detail !== '') lines.push(v.detail)
+  if (typeof v.error === 'string' && v.error !== '') lines.push(v.error)
+  return [{ type: 'text', text: lines.join('\n') }]
+}
+
+/**
+ * 环境备份/恢复（0.2.0 wave2）：DSH 全家桶单文件加密备份 + 跨机还原。
+ * apply 必须先 dry 预演再 confirm（覆盖性动作两步确认）；口令永不落盘（工具入参会
+ * 进会话转录，敏感场景用面板输入）。凭据类文件只存在于加密包内。
+ */
+export function registerEnvBackupTool(ctx: Context): void {
+  ctx.tools.register(defineTool({
+    name: 'handoff_env',
+    description: '环境备份/恢复：把 DSH 全家桶（settings/插件登记/会话库/用户 skills/工作区登记）打包成单个 AES-256-GCM 加密文件（口令 scrypt 派生，口令不落盘），随换机同步跨机；新机器 dry 预演（新建/覆盖/相同三态 diff）→ confirm 还原 → 可 rollback 回滚到还原前。凭据类文件（credentials/typesafe-key 等）只存在于加密包内。返回 { ok, ... } 规范值。',
+    parameters: {
+      action: { type: 'string', required: true, enum: ['backup', 'dry', 'apply', 'rollback', 'list'], description: 'backup 打包加密备份（passphrase 必填 ≥8 位）；dry 还原预演（file+passphrase）；apply 确认还原（file+passphrase+confirm:true）；rollback 回滚 checkpoint（file=checkpoint 目录名）；list 列备份' },
+      passphrase: { type: 'string', description: 'backup/dry/apply 必填：加密口令（≥8 位，永不落盘；注意会进本会话转录——敏感场景用面板输入）' },
+      file: { type: 'string', description: 'dry/apply：备份文件名；rollback：checkpoint 目录名（restore-checkpoint-*）' },
+      confirm: { type: 'boolean', description: 'apply 必须显式 true（覆盖性动作的两步确认）' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: true,
+        properties: {
+          ok: { type: 'boolean', description: '操作是否成功' },
+          action: { type: 'string', description: '实际执行的动作' },
+          detail: { type: 'string', description: '结果摘要' },
+          file: { type: 'string', description: '备份文件名 / checkpoint 目录名' },
+          creates: { type: 'number', description: 'dry：将新建的文件数' },
+          overwrites: { type: 'number', description: 'dry：将覆盖的文件数' },
+          same: { type: 'number', description: 'dry：内容相同的文件数' },
+          diff: { type: 'json', description: 'dry：三态 diff 明细' },
+          applied: { type: 'number', description: 'apply：实际落盘文件数' },
+          checkpointDir: { type: 'string', description: 'apply：checkpoint 目录（回滚入口）' },
+          backups: { type: 'json', description: 'list：备份清单' },
+          error: { type: 'string', description: '失败原因' },
+        },
+      },
+      render: renderEnv,
+    },
+    async execute(args: { action?: string; passphrase?: string; file?: string; confirm?: boolean }): Promise<EnvToolValue> {
+      const action = args.action ?? 'list'
+      try {
+        if (action === 'backup') {
+          const r = createBackup(args.passphrase ?? '')
+          return { ok: true, action, file: r.file, detail: r.detail }
+        }
+        if (action === 'dry') {
+          const r = dryRunRestore(args.file ?? '', args.passphrase ?? '')
+          return { ok: true, action, file: r.file, creates: r.creates, overwrites: r.overwrites, same: r.same, diff: r.diff, detail: `预演：将新建 ${r.creates} / 覆盖 ${r.overwrites} / 相同 ${r.same}（备份来自 ${r.host}，${r.createdAt.slice(0, 16)}）——确认无误后带 confirm:true 执行 apply` }
+        }
+        if (action === 'apply') {
+          if (args.confirm !== true) return { ok: false, action, error: '还原是覆盖性动作：先 dry 预演，确认 diff 后带 confirm:true 再执行' }
+          const r = applyRestore(args.file ?? '', args.passphrase ?? '')
+          return { ok: true, action, file: r.file, applied: r.applied, checkpointDir: r.checkpointDir, detail: r.detail }
+        }
+        if (action === 'rollback') {
+          const r = rollbackRestore(args.file ?? '')
+          return { ok: true, action, detail: r.detail }
+        }
+        if (action === 'list') return { ok: true, action, backups: listBackups(), detail: `共 ${listBackups().length} 个备份（保留最新 3 个）` }
+        return { ok: false, action, error: `未知 action：${action}（支持 backup / dry / apply / rollback / list）` }
+      } catch (e) {
+        return { ok: false, action, error: e instanceof Error ? e.message : String(e) }
+      }
+    },
+  }))
+}
+
+type EnvToolValue = {
+  ok?: boolean
+  action?: string
+  detail?: string
+  file?: string
+  creates?: number
+  overwrites?: number
+  same?: number
+  applied?: number
+  checkpointDir?: string
+  diff?: RestoreDiffRow[]
+  backups?: BackupRow[]
+  error?: string
+}
+
+function renderEnv(_args: unknown, value: unknown): Array<{ type: 'text'; text: string }> {
+  const v = value as { ok?: boolean; action?: string; detail?: string; error?: string }
+  const head = v.ok === true ? `[handoff_env ${String(v.action)}] ok` : `[handoff_env ${String(v.action)}] 失败`
   const lines = [head]
   if (typeof v.detail === 'string' && v.detail !== '') lines.push(v.detail)
   if (typeof v.error === 'string' && v.error !== '') lines.push(v.error)

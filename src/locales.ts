@@ -253,6 +253,22 @@ export const zh: Record<string, string> = {
   syncRemoteNow: '远端 {remote}',
   tileSync: '同步',
   tileSyncTitle: '换机同步状态：点设置卡「换机」页查看与操作',
+  // 环境备份（0.2.0 wave2）：设置卡第五页签
+  tabEnv: '环境',
+  envLead: '把 DSH 全家桶（设置/插件登记/会话库/用户 skills/工作区登记）打包成单个加密文件，随「换机」同步走：旧机器备份，新机器预演后还原，可回滚。',
+  envPassLabel: '加密口令',
+  envPassPlaceholder: '≥8 位，永不落盘；忘了救不回备份',
+  envBackupNow: '立即备份',
+  envBusy: '处理中…（打包+加密）',
+  envBackupsTitle: '备份（保留最新 3 个）',
+  envNoBackups: '还没有备份。填好口令点「立即备份」。',
+  envDry: '预演',
+  envDrySummary: '将新建 {n1} / 覆盖 {n2} / 相同 {n3}',
+  envApply: '确认还原',
+  envCancel: '取消',
+  envRollback: '回滚此还原',
+  envScopeNote: '范围：DSH settings/插件登记/会话库/登记 + ~/.agents/skills + ZCode 用户层；node_modules/缓存/日志不备（可重植）。凭据类文件只存在于加密包内；口令永不落盘，忘了就救不回。备份包随换机同步（保留最新 3 个）。',
+  envSize: '大小 {n} MB',
 }
 
 export const en: Record<string, string> = {
@@ -494,6 +510,22 @@ export const en: Record<string, string> = {
   syncRemoteNow: 'Remote {remote}',
   tileSync: 'Sync',
   tileSyncTitle: 'Machine-switch sync status: open the "Switch" tab to act on it',
+  // Environment backup (0.2.0 wave2): settings card fifth tab
+  tabEnv: 'Env',
+  envLead: 'Pack the whole DSH family (settings / plugin registrations / session library / user skills / workspace registries) into one encrypted file that rides machine-switch sync: back up on the old machine, preview-then-restore on the new one, rollback if unhappy.',
+  envPassLabel: 'Encryption passphrase',
+  envPassPlaceholder: '≥8 chars, never stored; if forgotten the backup is unrecoverable',
+  envBackupNow: 'Back up now',
+  envBusy: 'Working… (pack + encrypt)',
+  envBackupsTitle: 'Backups (latest 3 kept)',
+  envNoBackups: 'No backups yet. Enter a passphrase and hit "Back up now".',
+  envDry: 'Preview',
+  envDrySummary: 'Would create {n1} / overwrite {n2} / identical {n3}',
+  envApply: 'Restore',
+  envCancel: 'Cancel',
+  envRollback: 'Roll back this restore',
+  envScopeNote: 'Scope: DSH settings/plugin registrations/session library/registries + ~/.agents/skills + ZCode user layer; node_modules/caches/logs excluded (replantable). Credential files exist only inside the encrypted archive; the passphrase is never stored — forget it and the backup is unrecoverable. Archives ride machine-switch sync (latest 3 kept).',
+  envSize: '{n} MB',
 }
 
 /** 全部内置语言词典（register 时逐一交宿主） */

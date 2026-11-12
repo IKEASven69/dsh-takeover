@@ -9,11 +9,12 @@
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: pulls the Context.skills merge（skills 服务声明由 dsh-skill 提供）。
 import type {} from '@deepseek-ai/dsh-skill'
-import { registerInboxTool, registerPushTool, registerSyncTool } from './tools.ts'
+import { registerEnvBackupTool, registerInboxTool, registerPushTool, registerSyncTool } from './tools.ts'
 import { registerForeignTool } from './foreign.ts'
 import { registerMemoryTool } from './memory.ts'
 import { registerTakeoverRoutes } from './server.ts'
 import { isProviderEnabled } from './settings.ts'
+import { createBackup, dryRunRestore, applyRestore, rollbackRestore, listBackups } from './envbackup.ts'
 import { skillRegistrations } from '../skills/index.ts'
 
 export const name = 'dsh-takeover'
@@ -26,9 +27,10 @@ export function apply(ctx: Context): void {
   registerForeignTool(ctx, { isEnabled: (p) => isProviderEnabled(p) })
   registerMemoryTool(ctx)
   registerSyncTool(ctx)
+  registerEnvBackupTool(ctx)
   registerTakeoverRoutes(ctx)
   for (const reg of skillRegistrations()) ctx.skills.register(reg)
-  ctx.logger.info('dsh-takeover: 会话接管已加载（工具 handoff_push / handoff_inbox / handoff_memory / handoff_sync / foreign_session_read + slash /handoff /inbox /resume-*×8 + 设置卡 API /dsh-takeover/*）')
+  ctx.logger.info('dsh-takeover: 会话接管已加载（工具 handoff_push / handoff_inbox / handoff_memory / handoff_sync / handoff_env / foreign_session_read + slash /handoff /inbox /resume-*×8 + 设置卡 API /dsh-takeover/*）')
 }
 
 export { pushHandoff, inboxList, inboxLoad, factsToSections, handoffHostNotice } from './tools.ts'
@@ -75,6 +77,8 @@ export {
   validateRemoteUrl,
 } from './sync.ts'
 export type { SyncConfig, SyncOutcome, SyncStatus } from './sync.ts'
+export { createBackup, dryRunRestore, applyRestore, rollbackRestore, listBackups, collectScopeFiles, envBackupDir, validateRelPath } from './envbackup.ts'
+export type { BackupRow, ScopeFile, BackupResult, DryRunResult, ApplyResult, RestoreDiffRow } from './envbackup.ts'
 export { registerTakeoverRoutes, admitTakeover, sessionControllerOf } from './server.ts'
 export type { SessionControllerLike, TakeoverMode, TakeoverOutcome } from './server.ts'
 export { scanMemorySources, pushMemoryCard, registerMemoryTool, renderMemory, MEMORY_SOURCES } from './memory.ts'
