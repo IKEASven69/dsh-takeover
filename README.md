@@ -8,7 +8,7 @@
 
 - **接过来**：Claude Code 里干到一半的任务，`/resume-claude` 一条命令——六段交接卡注入当前会话，模型直接接着干；
 - **交出去**：会话太长想换环境？`/handoff` 把当前会话寄存成一张卡，任何 agent 开局取件继续；
-- **跨机器**：`HANDOFF_HOME` 指向同步盘，公司机器寄存、家里机器取件，手机上也能看卡。
+- **跨机器**：`handoff_sync` 一条命令把收发件箱经你的 git 仓库搬到另一台机器，已消费的卡不重放；`HANDOFF_HOME` 指向同步盘的免配置路径继续可用，手机上也能看卡。
 
 ## 安装（30 秒）
 
@@ -61,6 +61,8 @@ dsh plugin --profile web add github:IKEASven69/dsh-takeover
 | `foreign_session_read` | 只读拉取九家会话。`action=list` 列候选（标题/时间/轮数）；`action=show` 按引用（空/latest/id/前缀/路径/标题关键词，歧义返回候选不猜）返回结构化摘要：标题、轮数、首条请求、尾部进展、涉及文件 top15、六段卡素材。原文仅在显式传 `limit` 时分页给出；探测/解析失败返回 `{ ok: false, error }` 不抛 |
 | `handoff_push` | 当前会话寄存为协议卡。六段文本可选传入，留空段从会话事件流确定性兜底（不调 LLM）；未提交改动自动附补丁；返回 `{ ok, id, path, coverage, patch? }` |
 | `handoff_inbox` | `action=list` 列待取件；`action=load` 取件（消费即弃，附签名与 git 核验的 MISMATCH / UNAVAILABLE 警告） |
+| `handoff_sync` | 换机同步：`action=setup` 启用（git 仓库地址，凭据走系统 git 不入插件）；`action=now` 拉推一步到位；`push`/`pull`/`status` 单向与只读。已消费的卡经 archived tombstone 不在另一台机器重放 |
+| `handoff_env` | 环境备份/恢复：全家桶（设置/插件登记/会话库/用户 skills/工作区登记）打包成单个 AES-256-GCM 加密文件随同步跨机；`dry` 预演三态 diff → `apply`（confirm 确认，被覆盖原物自动 checkpoint）→ `rollback` 可逆 |
 | `handoff_memory` | 记忆快照。`action=scan` 只读列各 agent 记忆文件（含大小/预览）；`action=push` 勾选打包成卡寄存，取件方按「建议加载」吸收 |
 
 **slash 命令（用户敲，agent 按指引执行）**
@@ -74,6 +76,8 @@ dsh plugin --profile web add github:IKEASven69/dsh-takeover
 ## 跨机器接力
 
 `HANDOFF_HOME` 指向同步盘目录或 git 仓库，收件箱即多机共享：A 机 `handoff_push` 寄存，B 机开局 `/inbox` 取件。一句环境变量，零代码。同步盘里的卡片在手机文件查看器里同样可读。同步服务的冲突副本不会变成幽灵卡：同 id 自动去重只显示一次，原件已取走的迟到副本进收件箱的拒收清单（有因可见），半截文件同理。
+
+**内置同步（0.2.0）**：设置卡「换机」页填一个私有 git 仓库地址即可——A 机 `handoff_sync`（setup + now），B 机同址 setup 后 now，卡就出现在收件箱里。凭据完全交给系统 git（插件零存储凭据，地址带 `user:pass@` 直接拒收）；同步范围 = pending/archived 全部卡与机器信封 + 签名密钥 + 环境备份包，机器本地记录（生命周期日志/取件溯源/插件开关）不参与；合并冲突中止并诚实报错，本地文件原样保留。
 
 ## 质量与证据
 
@@ -89,7 +93,7 @@ dsh plugin --profile web add github:IKEASven69/dsh-takeover
 
 AI 编码的「延续上下文」需求由三层各管一段：spec 工具（spec-kit / OpenSpec 一类）管**设计态**——要做什么、验收是什么；记忆层（mem0 / Letta / dsh-hippo 一类）管**偏好态**——项目约定与对话事实的沉淀；dsh-takeover 管**运行态**——实际跑到哪、停在哪、哪些陈述是当下观察、哪些只是历史转述、卡出自哪台机器。三层互补，不互相替代。
 
-同类机制的一句话区分：**他们做「转换后换一家 CLI 原生续跑」「跨设备同步」「导航搜索」「运行时编排」或「任务状态搬运」，我们做 harness 内接管。**
+同类机制的一句话区分：**他们做「转换后换一家 CLI 原生续跑」「环境配置备份」「导航搜索」「运行时编排」或「任务状态搬运」，我们做 harness 内接管 + 换机上下文同步（卡与备份随你的 git 仓库走，交接语义与账本不换人）。**
 
 ## 协议采用
 
@@ -97,7 +101,7 @@ AI 编码的「延续上下文」需求由三层各管一段：spec 工具（spe
 
 ## 权限范围
 
-写 `~/.handoff/`（`HANDOFF_HOME` 可覆盖）、读 git 状态、只读九家 agent 的本地会话库（zcode 与 cursor 走 sqlite readonly，随开随关；`HANDOFF_ROOT_<家>` 可覆盖各家根路径）。cursor 只导入支持的 transcript / store 记录，grok 只读可见 updates.jsonl 流（永不读 chat_history.jsonl 原始模型上下文），gemini 只读本地 chats/ 会话文件。不访问网络，不复活外部进程，不回放历史工具调用，原文不进卡片。
+写 `~/.handoff/`（`HANDOFF_HOME` 可覆盖）、读 git 状态、只读九家 agent 的本地会话库（zcode 与 cursor 走 sqlite readonly，随开随关；`HANDOFF_ROOT_<家>` 可覆盖各家根路径）。cursor 只导入支持的 transcript / store 记录，grok 只读可见 updates.jsonl 流（永不读 chat_history.jsonl 原始模型上下文），gemini 只读本地 chats/ 会话文件。0.2.0 起两个显式例外：①`handoff_sync` 经系统 git 与**你显式配置**的仓库通信（插件进程内不构造网络连接，零存储凭据）；②`handoff_env` 备份/恢复读写全家桶配置路径——恢复必须先 dry 预演再 confirm 落盘，被覆盖原物自动 checkpoint 可回滚，凭据类文件只存在于加密包内（详见 THREAT-MODEL T6/T7）。不复活外部进程，不回放历史工具调用，原文不进卡片。
 
 ## 开发
 

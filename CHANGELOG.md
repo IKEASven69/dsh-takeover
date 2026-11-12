@@ -1,5 +1,16 @@
 # Changelog — dsh-takeover
 
+## [0.2.0] — 2026-11-12
+
+换机版：收发件箱与环境全家桶跨机搬运——「寄存 A 机、取件 B 机」从一句文档变成两条命令。卡同步走用户自己的 git 仓库（零存储凭据），环境备份是单文件加密包随同步走。
+
+- **换机上下文同步 `handoff_sync`**：设置卡「换机」页填一个私有 git 仓库地址即启用；`setup` / `now`（拉推一步到位）/`push`/`pull`/`status`。HANDOFF_HOME 即工作树：pending/archived 全部卡与机器信封 + 签名密钥 + 环境备份包随仓库走，机器本地记录（生命周期日志/取件溯源/插件开关）经 .gitignore 不入版本库。已消费的卡经 archived tombstone 不在另一台机器重放；合并冲突中止并诚实报错，本地文件原样保留。安全面：插件零存储凭据（userinfo 形态 URL 入口拒收），git 子进程超时硬杀 + 禁交互，仓库本地强制 autocrlf=false（卡字节是信封签名面）。state 路径零网络——30s 轮询不碰任何网。
+- **环境备份/恢复 `handoff_env`**：DSH 全家桶（settings/插件登记五件套/会话库/智能中枢登记/~/.agents/skills/ZCode 用户层）打包单个 .dshenv 加密文件（纯 node 容器，scrypt+AES-256-GCM，口令永不落盘），随同步跨机。恢复三段纪律：`dry` 预演（新建/覆盖/相同三态 diff）→ `apply`（confirm 确认，被覆盖原物自动 checkpoint）→ `rollback` 一键回滚。凭据类文件只存在于加密包内；路径穿越硬闸；node_modules/缓存/日志排除（5.9G 压到 <60M）。
+- **同步盘换机契约**：五条不变量钉死——Syncthing/OneDrive 冲突副本同 id 去重不幻影、原件已消费的迟到副本进可见拒收清单、半截文件拒收可见不塌收件箱、HANDOFF_HOME 链接目录全链穿透、消费即弃跨机不重放。
+- **设置卡**：「换机」「环境」两枚新页签（五页签 + 方向键导航不变）；概览新增同步状态瓦片（落后数即待办）。
+- **Windows 4 红清零**：vendor readers 陈旧链 bump（gemini 适配器落地本机）+ .gitattributes 全仓源码钉 LF + 文档断言行尾归一化。
+- 质量闸：测试 **344** 全绿（+17）、typecheck+build 干净；双 home + 裸远端真 git 集成测试六场景；THREAT-MODEL 新增 T7（环境备份面）并修订 T6（网络面唯一例外）。
+
 ## [0.1.0] — 2026-11-02
 
 首发版。功能面：九家外部会话读取器（claude / codex / opencode / zcode / pi / workbuddy / cursor / grok / gemini）、`handoff: 1` 协议收件环、信封机器签名、单卡忽略、记忆快照交接、接力工作台（导航轨 + 四全宽视图指挥台）。

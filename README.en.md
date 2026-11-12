@@ -8,7 +8,7 @@
 
 - **Take over**: a task half-done in Claude Code — one `/resume-claude` injects a six-section handoff card into the current session and the model just continues;
 - **Hand off**: session too long, switching environments? `/handoff` checks the current session out as a card that any agent can pick up on start;
-- **Across machines**: point `HANDOFF_HOME` at a synced drive — check out at the office, pick up at home, read cards from your phone.
+- **Across machines**: `handoff_sync` moves the inbox over your own git repo in one command — consumed cards never replay on the other machine; the zero-setup `HANDOFF_HOME`-on-a-synced-drive path still works, and cards stay readable from your phone.
 
 ## Install (30 seconds)
 
@@ -61,6 +61,8 @@ Works out of the box (built artifacts are committed — no local toolchain). Pin
 | `foreign_session_read` | Read-only pull across nine agents. `action=list` lists candidates (title/time/turns); `action=show` resolves a reference (empty/`latest`, id, prefix, path, title keyword — ambiguity returns candidates, never guesses) into a structured summary: title, turns, first user message, recent progress, top-15 files, six-section card material. Raw turns only when `limit` is passed explicitly; probe/parse failures return `{ ok: false, error }` instead of throwing |
 | `handoff_push` | Check the current session out as a protocol card. Sections left empty are deterministically backfilled from the session event stream (no LLM call); uncommitted changes attach as a patch; returns `{ ok, id, path, coverage, patch? }` |
 | `handoff_inbox` | `action=list` pending cards; `action=load` picks one up (consume-and-archive, with signature and git-verified MISMATCH / UNAVAILABLE warnings) |
+| `handoff_sync` | Machine-switch sync: `action=setup` enables (git repo URL; credentials stay with system git, never in the plugin); `action=now` pulls and pushes in one step; `push`/`pull`/`status` for one-way and read-only. Consumed cards do not replay on the other machine — archived/ is the tombstone |
+| `handoff_env` | Environment backup/restore: packs the DSH family (settings / plugin registrations / session library / user skills / workspace registries) into one AES-256-GCM-encrypted file that rides sync across machines; `dry` previews a three-state diff → `apply` (confirm-gated, overwritten originals auto-checkpointed) → `rollback` |
 | `handoff_memory` | Memory snapshot. `action=scan` read-only lists each agent's memory files (size/preview); `action=push` packs selections into a card the receiver absorbs via "suggested loads" |
 
 **Slash commands (user types, agent follows the playbook)**
@@ -74,6 +76,8 @@ Works out of the box (built artifacts are committed — no local toolchain). Pin
 ## Cross-machine relay
 
 Point `HANDOFF_HOME` at a synced-drive folder or a git repository and the inbox is shared: `handoff_push` on machine A, `/inbox` pickup on machine B. One environment variable, zero code. Cards are readable from any phone's file viewer too. Sync-service conflict copies never become phantom cards: same-id copies are deduplicated to one entry, late copies whose original is gone land in the inbox's visible rejection list (with reasons), and so do half-written files.
+
+**Built-in sync (0.2.0)**: enter a private git repo URL on the settings card's "Switch" tab — machine A runs `handoff_sync` (setup + now), machine B sets up the same URL and runs now, and the cards are in its inbox. Credentials stay entirely with system git (zero stored credentials; URLs embedding `user:pass@` are rejected outright); scope = every card and machine envelope in pending/archived + the signing key + environment backups, while machine-local records (lifecycle log, relay provenance, plugin switches) never sync; merge conflicts abort with an honest error and local files stay untouched.
 
 ## Quality & evidence
 
@@ -89,7 +93,7 @@ Relay quality is not vibes — it is numbers, tests, and third-party-checkable p
 
 The "continuable context" need in AI coding splits into three layers: spec tools (spec-kit / OpenSpec and friends) own the **design state**; memory layers (mem0 / Letta / dsh-hippo and friends) own the **preference state**; dsh-takeover owns the **run state** — how far work actually got, where it stopped, which statements are present observations versus secondhand retellings, which machine a card came from. The three layers complement each other.
 
-The one-sentence mechanical distinction: **they do "convert, then natively resume in another CLI", "cross-device sync", "navigation/search", "runtime orchestration", or "task-state transport"; we do in-harness takeover.**
+The one-sentence mechanical distinction: **they do "convert, then natively resume in another CLI", "environment backup", "navigation/search", "runtime orchestration", or "task-state transport"; we do in-harness takeover plus machine-switch context sync — cards and backups ride your own git repo, and the handoff semantics and ledgers never change hands.**
 
 ## Protocol adoption
 
@@ -97,7 +101,7 @@ The one-sentence mechanical distinction: **they do "convert, then natively resum
 
 ## Permission scope
 
-Writes `~/.handoff/` (override via `HANDOFF_HOME`), reads git status, read-only access to the nine agents' local session stores (zcode and cursor via sqlite readonly, opened on demand; per-agent roots overridable via `HANDOFF_ROOT_<agent>`). cursor imports only supported transcript / store records; grok reads only the visible updates.jsonl stream (never the raw chat_history.jsonl model context); gemini reads only local chats/ session files. No network access, no reviving external processes, no replaying historical tool calls, raw text never enters cards.
+Writes `~/.handoff/` (override via `HANDOFF_HOME`), reads git status, read-only access to the nine agents' local session stores (zcode and cursor via sqlite readonly, opened on demand; per-agent roots overridable via `HANDOFF_ROOT_<agent>`). cursor imports only supported transcript / store records; grok reads only the visible updates.jsonl stream (never the raw chat_history.jsonl model context); gemini reads only local chats/ session files. Two explicit exceptions since 0.2.0: (1) `handoff_sync` talks to the git repository **you explicitly configure**, via system git (the plugin process builds no network connection and stores no credentials); (2) `handoff_env` backs up and restores family-wide config paths — restore requires a dry preview then explicit confirm before anything is written, overwritten originals are auto-checkpointed for rollback, and credential files exist only inside the encrypted archive (see THREAT-MODEL T6/T7). No reviving external processes, no replaying historical tool calls, raw text never enters cards.
 
 ## Development
 
