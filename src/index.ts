@@ -9,7 +9,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: pulls the Context.skills merge（skills 服务声明由 dsh-skill 提供）。
 import type {} from '@deepseek-ai/dsh-skill'
-import { registerInboxTool, registerPushTool } from './tools.ts'
+import { registerInboxTool, registerPushTool, registerSyncTool } from './tools.ts'
 import { registerForeignTool } from './foreign.ts'
 import { registerMemoryTool } from './memory.ts'
 import { registerTakeoverRoutes } from './server.ts'
@@ -25,9 +25,10 @@ export function apply(ctx: Context): void {
   // 设置卡停用闸：每次调用现读 config.json（开关改动即刻生效，无需重启）
   registerForeignTool(ctx, { isEnabled: (p) => isProviderEnabled(p) })
   registerMemoryTool(ctx)
+  registerSyncTool(ctx)
   registerTakeoverRoutes(ctx)
   for (const reg of skillRegistrations()) ctx.skills.register(reg)
-  ctx.logger.info('dsh-takeover: 会话接管已加载（工具 handoff_push / handoff_inbox / handoff_memory / foreign_session_read + slash /handoff /inbox /resume-*×8 + 设置卡 API /dsh-takeover/*）')
+  ctx.logger.info('dsh-takeover: 会话接管已加载（工具 handoff_push / handoff_inbox / handoff_memory / handoff_sync / foreign_session_read + slash /handoff /inbox /resume-*×8 + 设置卡 API /dsh-takeover/*）')
 }
 
 export { pushHandoff, inboxList, inboxLoad, factsToSections, handoffHostNotice } from './tools.ts'
@@ -61,6 +62,19 @@ export {
   switchesPath,
 } from './settings.ts'
 export type { TakeoverState, TakeoverSwitches, PendingRow, ProviderRow } from './settings.ts'
+export {
+  loadSyncConfig,
+  saveSyncConfig,
+  syncConfigPath,
+  syncNow,
+  syncPull,
+  syncPush,
+  syncSetup,
+  syncStatusOf,
+  redactRemote,
+  validateRemoteUrl,
+} from './sync.ts'
+export type { SyncConfig, SyncOutcome, SyncStatus } from './sync.ts'
 export { registerTakeoverRoutes, admitTakeover, sessionControllerOf } from './server.ts'
 export type { SessionControllerLike, TakeoverMode, TakeoverOutcome } from './server.ts'
 export { scanMemorySources, pushMemoryCard, registerMemoryTool, renderMemory, MEMORY_SOURCES } from './memory.ts'

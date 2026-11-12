@@ -22,6 +22,7 @@ import { depositCommand, outboundCommand, OUTBOUND_LABELS, takeoverCommand, type
 import { writeRelayProvenance } from './relay-records.ts'
 import { pushMemoryCard, scanMemorySources } from './memory.ts'
 import { buildState, clearArchived, dismissPending, isProviderEnabled, setProviderEnabled } from './settings.ts'
+import { syncNow, syncPull, syncPush, syncSetup, type SyncOutcome } from './sync.ts'
 
 function sendJson(response: ServerResponse, code: number, body: unknown): void {
   response.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
@@ -628,7 +629,42 @@ export function registerTakeoverRoutes(
           return
         }
 
-        sendJson(response, 404, { error: `未知路由：/dsh-takeover/${sub}（支持 state / sessions / session-preview / takeover / provider / clear-archived / dismiss-pending）` })
+        if (sub === 'sync') {
+          if (request.method !== 'POST') {
+            response.writeHead(405, { allow: 'POST' })
+            response.end()
+            return
+          }
+          if (!sameOrigin(request)) {
+            sendJson(response, 403, { error: '仅接受同源请求' })
+            return
+          }
+          void readJsonBody(request).then(
+            (body) => {
+              // 与 provider 写同队列串行：git index.lock 不容并发动作（两次同时 push 会互相锁）
+              providerWriteQueue = providerWriteQueue.then(async () => {
+                try {
+                  const action = String(body['action'] ?? 'now')
+                  const url = typeof body['url'] === 'string' ? body['url'] : ''
+                  let r: SyncOutcome
+                  if (action === 'setup') r = await syncSetup(url)
+                  else if (action === 'now') r = await syncNow()
+                  else if (action === 'push') r = await syncPush()
+                  else if (action === 'pull') r = await syncPull()
+                  else r = { ok: false, action, error: `未知动作：${action}（支持 setup / now / push / pull）` }
+                  // 带全量 state：同步状态就地刷新，免等 30s 轮询（provider 端点同款）
+                  sendJson(response, r.ok ? 200 : 400, { ...r, state: await stateBody() })
+                } catch (e) {
+                  sendJson(response, 500, { ok: false, error: e instanceof Error ? e.message : String(e) })
+                }
+              })
+            },
+            (error: unknown) => { sendJson(response, 400, { ok: false, error: error instanceof Error ? error.message : String(error) }) },
+          )
+          return
+        }
+
+        sendJson(response, 404, { error: `未知路由：/dsh-takeover/${sub}（支持 state / sessions / session-preview / takeover / provider / clear-archived / dismiss-pending / sync）` })
       },
     }))
   })

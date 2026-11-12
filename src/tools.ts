@@ -14,6 +14,7 @@ import { isLowInfoCardMarkdown } from './lowinfo.ts'
 import { scanSecrets } from './secretscan.ts'
 import { recordLifecycleEvent } from './lifecycle.ts'
 import { loadOrCreateSigningKey, signEnvelope, verifyEnvelopeSig, type SigVerdict } from './signing.ts'
+import { syncNow, syncPull, syncPush, syncSetup, syncStatusLine, syncStatusOf, type SyncOutcome, type SyncStatus } from './sync.ts'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -993,4 +994,87 @@ export function registerInboxTool(ctx: Context): void {
       return { ok: false, error: `未知 action：${String(args.action)}（支持 list / load）` }
     },
   }))
+}
+
+/**
+ * 换机上下文同步（0.2.0）：HANDOFF_HOME 的卡与签名密钥经 git 仓库端点跨机同步。
+ * setup 启用（url 必填）；now = pull→push 一步闭环；status 只读零网络。
+ * 凭据永不入参不入盘（userinfo 形态 URL 直接拒收），凭据走系统 git。
+ */
+export function registerSyncTool(ctx: Context): void {
+  ctx.tools.register(defineTool({
+    name: 'handoff_sync',
+    description: '换机上下文同步：把 ~/.handoff 的待取件/已归档卡与签名密钥经用户配置的 git 仓库跨机同步（A 机寄存+now，B 机 now 后 /inbox 取件即接续）。action=setup 首次启用（url 必填，https / ssh / 本地裸仓库路径，拒绝 user:pass@ 形态）；action=now 拉推一步到位；push / pull 单向；status 只读状态（零网络）。返回 { ok, ... } 规范值。',
+    parameters: {
+      action: { type: 'string', required: true, enum: ['setup', 'now', 'push', 'pull', 'status'], description: 'setup 首次启用（url 必填）；now 拉推闭环；push/pull 单向；status 只读' },
+      url: { type: 'string', description: 'setup 必填：git 仓库地址（https://… / git@host:path / 本地裸仓库路径）' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: true,
+        properties: {
+          ok: { type: 'boolean', description: '操作是否成功' },
+          action: { type: 'string', description: '实际执行的动作' },
+          detail: { type: 'string', description: '动作后状态摘要' },
+          ahead: { type: 'number', description: '待推送提交数' },
+          behind: { type: 'number', description: '待拉取提交数' },
+          status: { type: 'json', description: '同步状态对象（每次返回都附最新）' },
+          error: { type: 'string', description: '失败原因' },
+        },
+      },
+      render: renderSync,
+    },
+    async execute(args: { action?: string; url?: string }): Promise<SyncToolValue> {
+      const action = args.action ?? 'status'
+      try {
+        if (action === 'setup') return withSyncStatus(await syncSetup(args.url ?? ''))
+        if (action === 'now') return withSyncStatus(await syncNow())
+        if (action === 'push') return withSyncStatus(await syncPush())
+        if (action === 'pull') return withSyncStatus(await syncPull())
+        if (action === 'status') {
+          const st = syncStatusOf()
+          if (st === undefined) return { ok: false, action, error: '换机同步未启用：先执行 action=setup 并给 url' }
+          return { ok: true, action, status: st, detail: syncStatusLine(st) }
+        }
+        return { ok: false, action, error: `未知 action：${action}（支持 setup / now / push / pull / status）` }
+      } catch (e) {
+        return { ok: false, action, error: e instanceof Error ? e.message : String(e) }
+      }
+    },
+  }))
+}
+
+/** 工具返回面形状（对齐 output.schema：全部字段 JSON 值；type 别名才有隐式索引签名，interface 会挂 defineTool） */
+type SyncToolValue = {
+  ok?: boolean
+  action?: string
+  detail?: string
+  ahead?: number
+  behind?: number
+  status?: SyncStatus
+  error?: string
+}
+
+/** 动作结果附最新状态（工具返回面统一带 status，agent 一次调用看全貌） */
+function withSyncStatus(r: SyncOutcome): SyncToolValue {
+  const st = syncStatusOf()
+  return {
+    ok: r.ok,
+    action: r.action,
+    detail: r.detail ?? (st !== undefined ? syncStatusLine(st) : undefined),
+    ahead: r.ahead,
+    behind: r.behind,
+    error: r.error,
+    ...(st !== undefined ? { status: st } : {}),
+  }
+}
+
+function renderSync(_args: unknown, value: unknown): Array<{ type: 'text'; text: string }> {
+  const v = value as { ok?: boolean; action?: string; detail?: string; error?: string }
+  const head = v.ok === true ? `[handoff_sync ${String(v.action)}] ok` : `[handoff_sync ${String(v.action)}] 失败`
+  const lines = [head]
+  if (typeof v.detail === 'string' && v.detail !== '') lines.push(v.detail)
+  if (typeof v.error === 'string' && v.error !== '') lines.push(v.error)
+  return [{ type: 'text', text: lines.join('\n') }]
 }

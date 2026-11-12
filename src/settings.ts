@@ -14,6 +14,7 @@ import { archivedDir, listPendingReport, resolveHome } from '@agent-handoff/core
 import { isLowInfoCardMarkdown } from './lowinfo.ts'
 import { readLifecycleEvents, reasonFromCoreSkip, LIFECYCLE_STATE_MAX } from './lifecycle.ts'
 import { FOREIGN_PROVIDERS, PROVIDER_TO_ADAPTER, type ForeignProvider, type ForeignReaders } from './foreign.ts'
+import { syncStatusOf, type SyncStatus } from './sync.ts'
 
 // 停用规范错误值文案在 foreign.ts（disabledError），本模块只管开关存取与状态组装
 
@@ -151,6 +152,9 @@ export interface TakeoverState {
     persisted: Array<{ at: string; stage: string; reason: string; target: string; detail: string }>
     persistedTotal: number
   }
+  /** 0.2.0 换机同步状态（零网络：sync.json + sync-state.json + 本地脏计数）。
+   * 未启用时缺省——客户端整个换机块不渲染。 */
+  syncStatus?: SyncStatus
 }
 /**
  * 组装设置卡状态（纯函数核心，读取层与目录都可注入）：
@@ -305,7 +309,21 @@ export function buildState(readers: ForeignReaders, dir?: string): TakeoverState
   const rejections = live.length > 0 || persistedAll.length > 0
     ? { live, persisted: persistedAll.slice(-LIFECYCLE_STATE_MAX), persistedTotal: persistedAll.length }
     : undefined
-  return { home: resolveHome(dir), pending, pendingSkipped, pendingDuplicates, inboxError, archivedCount: countArchived(dir), coverage, envelopeChars, providers, ...(rejections !== undefined ? { rejections } : {}) }
+  // 换机同步状态（0.2.0）：未启用缺省；内部自带 try/catch，不拖垮 state 组装
+  const syncStatus = syncStatusOf(dir)
+  return {
+    home: resolveHome(dir),
+    pending,
+    pendingSkipped,
+    pendingDuplicates,
+    inboxError,
+    archivedCount: countArchived(dir),
+    coverage,
+    envelopeChars,
+    providers,
+    ...(rejections !== undefined ? { rejections } : {}),
+    ...(syncStatus !== undefined ? { syncStatus } : {}),
+  }
 }
 
 

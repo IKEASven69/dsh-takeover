@@ -425,6 +425,71 @@ export declare function renderForeign(_args: unknown, value: unknown): Array<{
 /** 注册 foreign_session_read 工具；env.isEnabled 缺省则不闸（纯库用法） */
 export declare function registerForeignTool(ctx: Context, env?: ForeignEnv): void;
 //#endregion
+//#region src/sync.d.ts
+interface SyncConfig {
+  enabled: boolean;
+  /** 用户配置的 git 仓库地址（https / ssh / git@host:path / 本地路径），永不存凭据 */
+  remote: string;
+}
+/** sync.json 路径（HANDOFF_HOME 内，随同步分发——B 机启用时可直接采纳同地址） */
+export declare function syncConfigPath(dir?: string): string;
+/** 读同步配置：文件缺失/损坏 fail-open 回未启用（同 loadSwitches 纪律），损坏必 console.warn */
+export declare function loadSyncConfig(dir?: string): SyncConfig;
+/** 写同步配置：tmp + rename 原子替换（saveSwitches 同模板）；写入前校验地址 */
+export declare function saveSyncConfig(cfg: SyncConfig, dir?: string): void;
+/**
+ * 仓库地址校验：拒绝 userinfo 形态（`user:pass@`）——secretscan 对 URL 内嵌凭据
+ * 零覆盖，插件也永不存储凭据，凭据交给系统 git credential helper / ssh agent。
+ * 允许：https://、ssh://、git://、file://、git@host:path（scp 形态）、本地路径。
+ * 返回 trim 后的地址；不合法抛中文错。
+ */
+export declare function validateRemoteUrl(url: string): string;
+/** 红折展示：userinfo 段打码（防御性——保存时已拒绝，展示仍再折一次） */
+export declare function redactRemote(url: string): string;
+interface SyncOutcome {
+  ok: boolean;
+  action: string;
+  /** 动作后状态摘要（供面板/工具直显） */
+  detail?: string;
+  ahead?: number;
+  behind?: number;
+  error?: string;
+}
+/** 启用同步：init/收编 + remote + 本地先提交 + 远端非空先合并再推（远端空仓直接首推） */
+export declare function syncSetup(url: string, dir?: string, opts?: {
+  timeoutMs?: number;
+}): Promise<SyncOutcome>;
+/** pull：本地先提交 → fetch → 合并（冲突 abort 诚实报错） */
+export declare function syncPull(dir?: string, opts?: {
+  timeoutMs?: number;
+}): Promise<SyncOutcome>;
+/** push：本地提交 + 推送 */
+export declare function syncPush(dir?: string, opts?: {
+  timeoutMs?: number;
+}): Promise<SyncOutcome>;
+/** 立即同步 = pull（拿别人的）→ push（给别人的），一步到位 */
+export declare function syncNow(dir?: string, opts?: {
+  timeoutMs?: number;
+}): Promise<SyncOutcome>;
+/** 同步状态（type 别名：客户端与工具面都要把它当 JSON 值传递，interface 缺隐式索引签名会挂 defineTool） */
+type SyncStatus = {
+  enabled: true;
+  /** 红折后的仓库地址 */
+  remote: string;
+  /** 待推提交数（上次同步记录） */
+  ahead: number;
+  /** 待拉提交数（上次同步记录） */
+  behind: number;
+  lastSyncAt?: string;
+  lastError?: string;
+  /** 同步范围内本地未提交文件数（现算，git status，零网络） */
+  dirtyFiles: number;
+  /** home 是否已是仓库（未 init 前无从谈脏计数） */
+  repoReady: boolean;
+};
+/** 组装同步状态（buildState 调用；未启用 → undefined，客户端整个块不渲染） */
+export declare function syncStatusOf(dir?: string): SyncStatus | undefined;
+//#endregion
 //#region src/settings.d.ts
 /** 开关文件形态：只记停用名单（默认全开，未知条目载入时丢弃） */
 interface TakeoverSwitches {
@@ -507,6 +572,9 @@ interface TakeoverState {
     }>;
     persistedTotal: number;
   };
+  /** 0.2.0 换机同步状态（零网络：sync.json + sync-state.json + 本地脏计数）。
+   * 未启用时缺省——客户端整个换机块不渲染。 */
+  syncStatus?: SyncStatus;
 }
 /**
  * 组装设置卡状态（纯函数核心，读取层与目录都可注入）：
@@ -784,5 +852,5 @@ export declare const name = "dsh-takeover";
 export declare const inject: string[];
 export declare function apply(ctx: Context): void;
 //#endregion
-export type { ForeignCandidate, ForeignEnv, ForeignListResult, ForeignListRow, ForeignPreviewResult, ForeignProvider, ForeignReadArgs, ForeignReadResult, ForeignReaders, ForeignResolve, ForeignSkeleton, ForeignSummary, ForeignTurn, InboxItem, InboxListResult, InboxLoadResult, MemoryPushArgs, MemoryPushResult, MemorySourceDef, MemorySourceRow, OutboundTarget, PendingRow, ProbeResult, ProviderRow, PushArgs, PushResult, ResumeSkillSpec, SessionControllerLike, SessionFacts, TakeoverMode, TakeoverOutcome, TakeoverState, TakeoverSwitches };
+export type { ForeignCandidate, ForeignEnv, ForeignListResult, ForeignListRow, ForeignPreviewResult, ForeignProvider, ForeignReadArgs, ForeignReadResult, ForeignReaders, ForeignResolve, ForeignSkeleton, ForeignSummary, ForeignTurn, InboxItem, InboxListResult, InboxLoadResult, MemoryPushArgs, MemoryPushResult, MemorySourceDef, MemorySourceRow, OutboundTarget, PendingRow, ProbeResult, ProviderRow, PushArgs, PushResult, ResumeSkillSpec, SessionControllerLike, SessionFacts, SyncConfig, SyncOutcome, SyncStatus, TakeoverMode, TakeoverOutcome, TakeoverState, TakeoverSwitches };
 //# sourceMappingURL=index.d.ts.map

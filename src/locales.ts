@@ -233,6 +233,26 @@ export const zh: Record<string, string> = {
   qa7a: '全程只读本机文件；数据只落在本机 ~/.handoff/ 目录（是否放同步盘由你决定），不上传任何服务器。面板 API 只接受本机回环连接。',
   qa8q: '三步上手？',
   qa8a: '① 右栏点一家外部 agent（如 Claude Code）看它的会话；② 点「接管」，新会话自动接续；③ 干完点「交接出去」，把活寄存给下一棒。',
+  // 换机同步（0.2.0）：设置卡第四页签 + 概览瓦片
+  tabSync: '换机',
+  syncLead: '把收发件箱（待取件/已归档卡与签名密钥）经 git 仓库跨机搬运：旧机器寄存后「立即同步」，新机器启用同一仓库地址后「立即同步」，卡就出现在收件箱里。',
+  syncNotConfigured: '尚未启用：填一个 git 仓库地址（私有仓库；凭据走系统 git，不进插件）。',
+  syncRemoteLabel: '仓库地址',
+  syncRemotePlaceholder: 'https://github.com/you/handoff.git · git@host:path · 本地路径',
+  syncEnable: '启用同步',
+  syncUpdate: '更新地址',
+  syncNowLabel: '立即同步',
+  syncBusy: '同步中…（git 网络操作，最长约 1 分钟）',
+  syncScopeNote: '同步范围：pending/ 与 archived/ 全部卡与机器信封 + 签名密钥；机器本地记录（生命周期日志/取件溯源/插件开关）不参与。已消费的卡经归档 tombstone 不在另一台机器重放。',
+  syncStateUpToDate: '已与远端对齐',
+  syncStateBehind: '落后 {n} 个提交',
+  syncStateAhead: '领先 {n} 个提交',
+  syncStateDirty: '{n} 个文件待提交',
+  syncLastSync: '上次同步 {at}',
+  syncLastError: '上次同步出错',
+  syncRemoteNow: '远端 {remote}',
+  tileSync: '同步',
+  tileSyncTitle: '换机同步状态：点设置卡「换机」页查看与操作',
 }
 
 export const en: Record<string, string> = {
@@ -454,6 +474,26 @@ export const en: Record<string, string> = {
   qa7a: 'Everything reads local files only; data stays in ~/.handoff/ (synced drive is your choice). Nothing is uploaded to any server, and the panel API accepts loopback connections only.',
   qa8q: 'Three steps to start?',
   qa8a: '① Click a vendor (e.g. Claude Code) in the right column to browse its sessions; ② click "Take over" — a new session continues it; ③ when done, click "Send out" to hand it to the next runner.',
+  // Machine switching (0.2.0): settings card fourth tab + overview tile
+  tabSync: 'Switch',
+  syncLead: 'Move the inbox (pending/archived cards plus the signing key) across machines via a git repository: deposit on the old machine and hit "Sync now"; enable the same repo URL on the new machine and hit "Sync now" — the cards appear in its inbox.',
+  syncNotConfigured: 'Not enabled yet: enter a git repository URL (private repo; credentials stay with system git, never inside the plugin).',
+  syncRemoteLabel: 'Repository URL',
+  syncRemotePlaceholder: 'https://github.com/you/handoff.git · git@host:path · local path',
+  syncEnable: 'Enable sync',
+  syncUpdate: 'Update URL',
+  syncNowLabel: 'Sync now',
+  syncBusy: 'Syncing… (git network operations, up to ~1 minute)',
+  syncScopeNote: 'Scope: every card and machine envelope in pending/ and archived/ plus the signing key; machine-local records (lifecycle log, relay provenance, plugin switches) never sync. Consumed cards do not replay on the other machine — archived/ acts as the tombstone.',
+  syncStateUpToDate: 'Up to date with remote',
+  syncStateBehind: '{n} commits behind',
+  syncStateAhead: '{n} commits ahead',
+  syncStateDirty: '{n} files to commit',
+  syncLastSync: 'Last sync {at}',
+  syncLastError: 'Last sync failed',
+  syncRemoteNow: 'Remote {remote}',
+  tileSync: 'Sync',
+  tileSyncTitle: 'Machine-switch sync status: open the "Switch" tab to act on it',
 }
 
 /** 全部内置语言词典（register 时逐一交宿主） */

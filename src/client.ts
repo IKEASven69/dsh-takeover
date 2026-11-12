@@ -2637,6 +2637,16 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
         (state.pendingDuplicates ?? 0) > 0
           ? tile('dup', String(state.pendingDuplicates), t('tileDup'), 'var(--tk-warn)', 'warn', t('pendingDupTitle'))
           : null,
+        // 换机同步瓦片（0.2.0）：仅启用时出现——落后数即待办（点设置卡「换机」页处理）
+        state.syncStatus !== undefined
+          ? (() => {
+              const sy = state.syncStatus!
+              const tone = sy.lastError !== undefined ? 'err' : sy.behind > 0 ? 'warn' : 'ok'
+              return tile('sync', sy.behind > 0 ? String(sy.behind) : '✓', t('tileSync'),
+                tone === 'err' ? 'var(--tk-err)' : tone === 'warn' ? 'var(--tk-warn)' : 'var(--tk-ok)', tone,
+                sy.lastError !== undefined ? `${t('syncLastError')}：${sy.lastError}` : t('tileSyncTitle'))
+            })()
+          : null,
       )
 
   // ---- 收件箱视图级动作：即时过滤（`/` 与 Cmd/Ctrl+K 聚焦，见 onRootKeyDown）+ 清空已消费（二次确认）+ 导出▾菜单 ----
@@ -2942,9 +2952,80 @@ export function ComposerChip({ t, locale, navigate, sessionId }: {
   )
 }
 
-/** 设置卡页签键（DESIGN.md §4 设置卡页签：命令速览 / 支持矩阵 / 开关语义）；数组顺序即方向键遍历序 */
-type SettingsTab = 'cmds' | 'matrix' | 'sem'
-const SETTINGS_TABS: readonly SettingsTab[] = ['cmds', 'matrix', 'sem']
+/** 换机卡（0.2.0）：同步状态一目了然 + 仓库地址启用 + 立即同步。
+ * 状态数据全部来自 state.syncStatus（零网络组装），动作经 /dsh-takeover/sync（同队列串行）。 */
+function SyncCard({ t, status, setState, setError, generationRef }: {
+  t: Translate
+  status?: TakeoverState['syncStatus']
+  setState: (s: TakeoverState) => void
+  setError: (e: string | null) => void
+  generationRef: { current: number }
+}): ReturnType<typeof createElement> {
+  const [url, setUrl] = useState('')
+  const [busy, setBusy] = useState<'' | 'setup' | 'now'>('')
+  const [notice, setNotice] = useState<string | null>(null)
+
+  const act = (action: 'setup' | 'now'): void => {
+    setBusy(action)
+    const gen = ++generationRef.current
+    void post<{ ok: boolean; detail?: string; error?: string; state: TakeoverState }>('/dsh-takeover/sync', { action, url: url.trim() })
+      .then((r) => {
+        if (gen !== generationRef.current) return
+        setState(r.state)
+        if (r.ok) { setNotice(r.detail ?? t('syncStateUpToDate')); setError(null) } else { setNotice(null); setError(r.error ?? t('syncLastError')) }
+      })
+      .catch((e: unknown) => {
+        if (gen !== generationRef.current) return
+        setNotice(null); setError(e instanceof Error ? e.message : String(e))
+      })
+      .finally(() => { setBusy('') })
+  }
+
+  const stateLine: string[] = []
+  if (status !== undefined) {
+    if (status.behind > 0) stateLine.push(t('syncStateBehind', { n: status.behind }))
+    if (status.ahead > 0) stateLine.push(t('syncStateAhead', { n: status.ahead }))
+    if (status.dirtyFiles > 0) stateLine.push(t('syncStateDirty', { n: status.dirtyFiles }))
+    if (stateLine.length === 0 && status.lastError === undefined) stateLine.push(t('syncStateUpToDate'))
+    if (status.lastError !== undefined) stateLine.push(`${t('syncLastError')}：${status.lastError}`)
+    if (status.lastSyncAt !== undefined) stateLine.push(t('syncLastSync', { at: status.lastSyncAt.slice(0, 16).replace('T', ' ') }))
+  }
+
+  return createElement('div', { className: 'tk-sem' },
+    createElement('p', null, t('syncLead')),
+    status === undefined
+      ? createElement('p', { className: 'bt-sub' }, t('syncNotConfigured'))
+      : createElement('div', { className: 'tk-tiles', style: { margin: '8px 0' } },
+          createElement('div', { className: 'tk-tile tk-tile-ok', style: { '--tk-tc': 'var(--tk-a)' } as Record<string, string> },
+            createElement('span', { className: 'tk-tile-lab' }, t('syncRemoteNow', { remote: status.remote })),
+          ),
+          ...stateLine.map((s, i) => createElement('div', { key: i, className: 'bt-sub', style: { margin: '2px 0' } }, s)),
+        ),
+    createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
+      createElement('input', {
+        className: 'bt-filter',
+        type: 'text',
+        value: url,
+        placeholder: t('syncRemotePlaceholder'),
+        onChange: (e: { target: { value: string } }) => { setUrl(e.target.value) },
+        style: { flex: '1 1 260px' },
+        'aria-label': t('syncRemoteLabel'),
+      }),
+      status === undefined
+        ? createElement('button', { className: 'bt-btn bt-btn-primary', type: 'button', disabled: busy !== '' || url.trim() === '', onClick: () => act('setup') }, busy === 'setup' ? t('syncBusy') : t('syncEnable'))
+        : createElement('button', { className: 'bt-btn', type: 'button', disabled: busy !== '' || url.trim() === '', onClick: () => act('setup') }, busy === 'setup' ? t('syncBusy') : t('syncUpdate')),
+      status !== undefined
+        ? createElement('button', { className: 'bt-btn bt-btn-primary', type: 'button', disabled: busy !== '', onClick: () => { setNotice(null); act('now') } }, busy === 'now' ? t('syncBusy') : t('syncNowLabel'))
+        : null,
+    ),
+    notice !== null ? createElement('div', { className: 'bt-banner', style: { marginTop: 8 } }, notice) : null,
+    createElement('p', { className: 'bt-sub', style: { marginTop: 8 } }, t('syncScopeNote')),
+  )
+}
+
+/** 设置卡页签键（DESIGN.md §4 设置卡页签：命令速览 / 支持矩阵 / 开关语义 / 换机）；数组顺序即方向键遍历序 */
+type SettingsTab = 'cmds' | 'matrix' | 'sem' | 'sync'
+const SETTINGS_TABS: readonly SettingsTab[] = ['cmds', 'matrix', 'sem', 'sync']
 
 export function Panel({ t, locale, navigate, slim }: { t: Translate; locale: LocaleRuntime | undefined; navigate: (sessionId: string) => boolean; /** true = 工作台面已挂进会话输入区上方，设置卡只留设置与指引（座位注册失败时降级为 false 内嵌工作台） */ slim: boolean }): ReturnType<typeof createElement> {
   useLocaleSync(locale)
@@ -2977,7 +3058,7 @@ export function Panel({ t, locale, navigate, slim }: { t: Translate; locale: Loc
 
   const tabId = (k: SettingsTab): string => `${uid}tab-${k}`
   const paneId = (k: SettingsTab): string => `${uid}pane-${k}`
-  const tabLabel: Record<SettingsTab, string> = { cmds: t('tabCmds'), matrix: t('tabMatrix'), sem: t('tabSemantics') }
+  const tabLabel: Record<SettingsTab, string> = { cmds: t('tabCmds'), matrix: t('tabMatrix'), sem: t('tabSemantics'), sync: t('tabSync') }
   // WAI-ARIA tabs 键盘流：←/→ 循环、Home/End 首尾；选中即切面板，焦点随之移动（roving tabindex）
   const onTabsKeyDown = (e: { key: string; preventDefault: () => void }): void => {
     const i = SETTINGS_TABS.indexOf(tab)
@@ -3069,6 +3150,10 @@ export function Panel({ t, locale, navigate, slim }: { t: Translate; locale: Loc
           createElement('p', null, t('noteBody')),
           createElement('p', null, t('noteBodyPending')),
         ),
+      ),
+      // 换机（0.2.0）：卡同步状态一目了然 + 仓库地址启用 + 立即同步
+      pane('sync',
+        createElement(SyncCard, { t, status: state?.syncStatus, setState, setError, generationRef }),
       ),
     ),
 
