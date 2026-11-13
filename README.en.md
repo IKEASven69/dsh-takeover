@@ -52,6 +52,17 @@ Works out of the box (built artifacts are committed — no local toolchain). Pin
 
 **Read-only promise.** No writes to any foreign agent's session store, no network access, no replaying historical tool calls; raw text never enters the card — only pointers.
 
+## All in one · Four axes, one chain
+
+Handover is never one thing — it is four. All four share the same `handoff: 1` card format, the same `~/.handoff` bus, and the same git sync chain; on the user's side it is always a single command:
+
+- **Session axis**: `/handoff` distills a half-finished session into a six-section card; any agent picks it up with `/inbox` and keeps going;
+- **Context axis**: uncommitted changes ride along as a patch and the repo baseline (origin / HEAD / branch) travels on the card — a new machine restores the exact scene via clone → checkout → apply → run tests;
+- **Memory axis**: CLAUDE.md / AGENTS.md and friends are packed into a card; the receiver absorbs them into its own memory files via the "suggested loads" section;
+- **Config axis**: the manifest + pointer of the encrypted family backup rides the card while the encrypted blob travels with the sync — restore on a new machine with a dry preview → confirm apply → rollback.
+
+What does one card carry? After one `handoff_sync` command, the other machine's inbox holds not just "where the chat left off" but the entire scene needed to keep working: the six-section session, uncommitted code, accumulated memory, and a restorable environment. The `axis` / `payload` contract markers on the card tell the receiver at a glance whether to continue working, absorb per entry, or preview before writing — four axes, all in one, one chain.
+
 ## Tools & commands reference
 
 **Agent tools (model-callable)**

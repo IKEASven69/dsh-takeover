@@ -5,7 +5,7 @@
 > 节奏（与 dsh-hippo 同款）：**每两周一个可演示状态，任何时刻拿得出手。**
 > 协议纪律：`handoff: 1` 的正典是 [agent-handoff](https://github.com/IKEASven69/agent-handoff) 仓的 SPEC，本仓是实现与消费方，**不自定义卡片格式**。
 >
-> **版本纪律（用户 2026-11-12 定）**：0.2.0 = 本路线 Q1–Q4 / M1–M4，**版本号以此为准**。执行中先行落地的「卡同步」并入 Q4（跨机器），「环境备份」撞「不碰配置面」边界、单列待裁决（见 §七），「救生艇」为下版本方向（见 §六·下版本方向）——三者都不另立版本号。
+> **版本纪律（用户 2026-11-12 定）**：0.2.0 = 本路线 Q1–Q4 / M1–M4，**版本号以此为准**。执行中先行落地的「卡同步」并入 Q4（跨机器），「环境备份」撞「不碰配置面」边界、单列待裁决（见 §七），「救生艇」为下版本方向（见 §九）——三者都不另立版本号。
 
 ---
 
@@ -178,24 +178,26 @@
 
 ---
 
-## 九、下版本方向（0.3.0 候选）：救生艇 —— 上下文炸了换机接着开发
+## 九、下版本方向：四个 HIGH 缺口已解决（0.2），0.25 候选见文末
 
 > **来源（真实需求）**：用户 2026-11-12 亲历——会话上下文出问题（降级/满了/卡死），被迫换台台式机继续项目的开发。这是**热需求**（会话当场失效、不换机干不下去），比 config-manager/FerryCat 的冷需求「搬环境」更硬，是「会话+跨机器带走」主题的最强验证。
 >
-> **架构已正对，缺口明确**：`pushHandoff` 六段确定性兜底零模型依赖（`src/collect.ts`/`src/tools.ts`），`admitTakeover` 的 `deps.sessions.get` 能拿 session 对象（`src/server.ts:221`）——「无模型旁路抢救」架构上可行。
+> **兑现（2026-11-14 核）**：下表四个 HIGH 缺口全部在 0.2.0 兑现并随 0.2 版本交付；唯一未随行的是「事前 contextHealth 预警」（事件条数代理）——列入 0.25 候选。
 
-**四个 HIGH 缺口 → 方向**：
+**四个 HIGH 缺口 → 兑现落点**：
 
-| # | 缺口 | 方向 |
-|---|---|---|
-| 1 | **无救生艇**：上下文炸了模型吐不出工具调用，所有抓取入口都经模型回合，救不走 | `POST /dsh-takeover/lifeboat`：`sessions.get` 取 session → 无模型直接 `pushHandoff` → 落卡 + `syncNow`；设置卡「🛟 救生艇」一键按钮；事前 contextHealth 预警（事件条数代理） |
-| 2 | **卡缺 repo 基线**：不记 remote+HEAD，新机器不知去哪 clone/checkout | `pushHandoff` 补抓 remote URL + HEAD sha → `extras.baseline`；恢复侧给 clone/checkout/apply/test 指引 |
-| 3 | **untracked 新文件内容不旅行**：长会话新建没 `git add` 的文件换机直接丢 | 小 untracked 文件（<64KB）内容并进补丁边车（过 secretscan），大件列清单+提示 |
-| 4 | **补丁 512KB 整份拒带**：最需要带走的时刻（大量未提交改动）反而带不走 | 补丁边车 gzip 压缩突破上限，超限拆 `.patch.N` 分块，不再整份丢 |
+| # | 缺口 | 兑现落点 | 状态 |
+|---|---|---|---|
+| 1 | **无救生艇**：上下文炸了模型吐不出工具调用，所有抓取入口都经模型回合，救不走 | `POST /dsh-takeover/lifeboat`：`sessions.get` 取 session → 无模型直接 `pushHandoff`（空壳闸按救生艇语义放行）→ 落卡 + 同步启用自动 `syncNow`；设置卡「🛟 救生艇」一键按钮（`src/server.ts` / `src/client.ts`，测试 `tests/lifeboat.spec.ts`）。事前 contextHealth 预警未随行 → 0.25 候选 | ✅ 已解决（0.2） |
+| 2 | **卡缺 repo 基线**：不记 remote+HEAD，新机器不知去哪 clone/checkout | `pushHandoff` 采集 origin/HEAD/分支三元组 → `extras.baseline`（`src/tools.ts` collectRepoBaseline）；恢复侧渲染 clone → checkout → apply → 跑测试四步指引（renderBaselineGuidance，缺 remote/head 如实降级不写空壳假基线） | ✅ 已解决（0.2） |
+| 3 | **untracked 新文件内容不旅行**：长会话新建没 `git add` 的文件换机直接丢 | 单件 <64KB 的 untracked 文件手拼新增 diff 并进补丁边车（同过密钥闸），超大/二进制只列清单+提示（`src/patchpack.ts` augmentPatchWithUntracked） | ✅ 已解决（0.2） |
+| 4 | **补丁 512KB 整份拒带**：最需要带走的时刻（大量未提交改动）反而带不走 | 补丁边车 gzip 压缩突破上限，压缩后仍超则 480KB 分块 `.patch.NNN.gz`，不再整份丢；取件侧按 gzip magic 自动解压重组（`src/patchpack.ts`） | ✅ 已解决（0.2） |
 
-**恢复侧「接得顺」**：结构化 `nextCommand`（clone/checkout/apply/test）+ 跨机路径映射提示。
+**恢复侧「接得顺」**：结构化四步指引（clone/checkout/apply/test）随 baseline 渲染 + 跨 OS 路径映射提示（源卡与取件机平台不同时如实提示人工映射）——已随 #2 落地。
 
-**边界（诚实）**：项目源码本体的 clone/push 是用户自己项目仓的事，只带「基线指针+补丁」不替用户管项目仓；host 无 token API，用事件条数代理并如实标注。
+**边界（诚实）**：项目源码本体的 clone/push 是用户自己项目仓的事，只带「基线指针+补丁」不替用户管项目仓。
+
+**0.25 方向**：**Tier2 十三家适配器** / **云端门内通路（teleport/gRPC）** / **写回（需拍板）**；随行候选：救生艇事前 contextHealth 预警（事件条数代理）。
 
 ---
 

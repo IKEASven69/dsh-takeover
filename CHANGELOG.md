@@ -2,14 +2,22 @@
 
 ## [0.2.0] — 2026-11-12
 
-换机版：收发件箱与环境全家桶跨机搬运——「寄存 A 机、取件 B 机」从一句文档变成两条命令。卡同步走用户自己的 git 仓库（零存储凭据），环境备份是单文件加密包随同步走。
+四轴贯通完整版：会话 / 上下文 / 记忆 / 配置四轴在一张卡上立约、经同一根同步链跨机——「寄存 A 机、取件 B 机」从一句文档变成两条命令。卡同步走用户自己的 git 仓库（零存储凭据），环境备份是单文件加密包随同步走。
 
+- **四轴 IR 立约**：卡片 extras 的 `axis`（session / memory / config）与 `payload`（files / distilled / manifest）协议内立约——会话卡、记忆卡、配置卡各归其位，取件方按标记决定「接着干 / 按条目吸收 / 先预演再落盘」；旧卡无标记按会话卡处理，round-trip 不丢。
+- **repo 基线**：寄存时采集 origin / HEAD / 分支三元组进 `extras.baseline`，取件方按 clone → checkout → apply → 跑测试四步复原寄存现场（remote/head 拿不到如实降级为说明行，不写空壳假基线）。
+- **上下文物质层**：未跟踪新文件（单件 <64KB）手拼新增 diff 随补丁走，超大/二进制只列清单；补丁超 512KB 先 gzip 压缩随卡、压缩后仍超则 480KB 分块 `.patch.NNN.gz`——最需要带走的时刻也带得走，取件侧按 gzip magic 自动解压重组，解压失败原样归档并如实警告。
+- **救生艇**：设置卡「🛟」一键——上下文炸了模型吐不出工具调用时，`POST /dsh-takeover/lifeboat` 不经模型把当前会话事件流确定性抢出成卡（空壳闸按救生艇语义放行，密钥闸不旁路），同步已启用时自动 syncNow 推走；出卡记生命周期 `lifeboat` 事件留痕。
+- **配置载荷卡**：`handoff_env action=card` 把最近一次备份的清单（path/category/sha256 + backupFile 指针 + bytes）写成 axis='config' 载荷卡寄存进收件箱——writeCard + 信封签名全套纪律，密文 blob 仍在 env-backup/ 随同步盘走，口令永不进卡。
+- **记忆轴贯通**：记忆卡 `payload='files'` 立约随卡；引擎型记忆库（hippo 等）走通用 MEMORY_STORES 掏取契约——条目 JSONL 在场掏条目进「建议加载」段、缺席退回指引；取件即出「记忆已随卡注入」吸收回执（生命周期账本新记 `memory-absorbed`）。
+- **卡链检索**：`handoff_inbox action=history` 按 project / cwd 回查 archived/ 已归档卡（id/标题/寄存时刻/停点摘要/接替 supersedes，时间正序尾 50 条）——接力链可溯，supersedes 走卡面 extras 持久通道。
+- **provider 注册表收敛**：`src/providers.ts` 单一真源，消灭读取器名表/适配器映射/skill 规格四份平行表的漂移面。
 - **换机上下文同步 `handoff_sync`**：设置卡「换机」页填一个私有 git 仓库地址即启用；`setup` / `now`（拉推一步到位）/`push`/`pull`/`status`。HANDOFF_HOME 即工作树：pending/archived 全部卡与机器信封 + 签名密钥 + 环境备份包随仓库走，机器本地记录（生命周期日志/取件溯源/插件开关）经 .gitignore 不入版本库。已消费的卡经 archived tombstone 不在另一台机器重放；合并冲突中止并诚实报错，本地文件原样保留。安全面：插件零存储凭据（userinfo 形态 URL 入口拒收），git 子进程超时硬杀 + 禁交互，仓库本地强制 autocrlf=false（卡字节是信封签名面）。state 路径零网络——30s 轮询不碰任何网。
 - **环境备份/恢复 `handoff_env`**：DSH 全家桶（settings/插件登记五件套/会话库/智能中枢登记/~/.agents/skills/ZCode 用户层）打包单个 .dshenv 加密文件（纯 node 容器，scrypt+AES-256-GCM，口令永不落盘），随同步跨机。恢复三段纪律：`dry` 预演（新建/覆盖/相同三态 diff）→ `apply`（confirm 确认，被覆盖原物自动 checkpoint）→ `rollback` 一键回滚。凭据类文件只存在于加密包内；路径穿越硬闸；node_modules/缓存/日志排除（5.9G 压到 <60M）。
 - **同步盘换机契约**：五条不变量钉死——Syncthing/OneDrive 冲突副本同 id 去重不幻影、原件已消费的迟到副本进可见拒收清单、半截文件拒收可见不塌收件箱、HANDOFF_HOME 链接目录全链穿透、消费即弃跨机不重放。
 - **设置卡**：「换机」「环境」两枚新页签（五页签 + 方向键导航不变）；概览新增同步状态瓦片（落后数即待办）。
 - **Windows 4 红清零**：vendor readers 陈旧链 bump（gemini 适配器落地本机）+ .gitattributes 全仓源码钉 LF + 文档断言行尾归一化。
-- 质量闸：测试 **344** 全绿（+17）、typecheck+build 干净；双 home + 裸远端真 git 集成测试六场景；THREAT-MODEL 新增 T7（环境备份面）并修订 T6（网络面唯一例外）。
+- 质量闸：测试 **386** 全绿、typecheck+build 干净；双 home + 裸远端真 git 集成测试（换机六场景 + 四轴贯通全链）；THREAT-MODEL 新增 T7（环境备份面）并修订 T6（网络面唯一例外 + 救生艇无模型旁路）。
 
 ## [0.1.0] — 2026-11-02
 
