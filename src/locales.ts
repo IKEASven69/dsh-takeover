@@ -215,6 +215,13 @@ export const zh: Record<string, string> = {
   memoryPushBtnTitle: '勾选的记忆打包成一张交接卡寄存进收件箱（敏感信息检查与进展标注规则与会话卡相同）',
   memoryPushing: '出卡中…',
   memoryPushedNotice: '记忆交接卡已进收件箱（{n} 份来源）。',
+  // 救生艇（lifeboat）：不经模型把当前会话运行态抢出成卡（收件箱工具行；有 sessionId 座位才渲染）
+  lifeboatBtn: '🛟 救生艇',
+  lifeboatBusy: '抢出中…',
+  lifeboatTitle: '上下文炸了也不怕：不经模型，把当前会话的事件流确定性蒸馏成一张交接卡寄存进收件箱（事件流读不出时寄兜底骨架卡）',
+  lifeboatNotice: '🛟 已抢出：当前会话已寄存成卡 {id}（见收件箱）',
+  lifeboatSynced: '；换机同步已完成',
+  lifeboatSyncFail: '换机同步失败',
   // 新手帮助 / FAQ
   helpTitle: '新手帮助 / FAQ',
   qa1q: '这是干什么的？',
@@ -472,6 +479,13 @@ export const en: Record<string, string> = {
   memoryPushBtnTitle: 'Pack the selected memories into one handoff card in the inbox (secret gate and coverage discipline apply, same as session cards)',
   memoryPushing: 'Packing…',
   memoryPushedNotice: 'Memory card is in the inbox ({n} sources).',
+  // Lifeboat: salvage the running session state without the model (inbox toolbar; rendered only with a sessionId seat)
+  lifeboatBtn: '🛟 Lifeboat',
+  lifeboatBusy: 'Salvaging…',
+  lifeboatTitle: "Context blown? Salvage without the model: distill this session's event stream deterministically into one handoff card and deposit it to the inbox (a fallback skeleton card is deposited when the event stream is unreadable)",
+  lifeboatNotice: '🛟 Salvaged: this session is deposited as card {id} (see inbox)',
+  lifeboatSynced: '; cross-machine sync done',
+  lifeboatSyncFail: 'cross-machine sync failed',
   // Help / FAQ
   helpTitle: 'Help / FAQ',
   qa1q: 'What is this?',

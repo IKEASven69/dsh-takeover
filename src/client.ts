@@ -2381,7 +2381,7 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
   bounded?: boolean
 }): ReturnType<typeof createElement> {
   useLocaleSync(locale)
-  const { state, error, setError, reload } = useTakeoverPolling()
+  const { state, setState, error, setError, reload, generationRef } = useTakeoverPolling()
   const lang: Lang = langOf(locale)
   // 新手引导条：知道了之后 localStorage 记住不再出现
   const [onboardGone, setOnboardGone] = useState(() => { try { return localStorage.getItem('dsh-takeover-onboard') === '1' } catch { return true } })
@@ -2449,6 +2449,36 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setTakeBusyId(null))
+  }
+  // 救生艇（lifeboat）：上下文炸了也不经模型把运行态抢出来——POST 直调 host 半的
+  // pushHandoff（事件流确定性蒸馏，不调 LLM）。有 sessionId 座位才渲染（设置卡无座位
+  // 不出现）；响应带全量 state 就地采纳（provider/sync 端点同款），同步结果随通知横幅如实带出
+  const [lifeboatBusy, setLifeboatBusy] = useState(false)
+  const lifeboat = (): void => {
+    if (lifeboatBusy || sessionId === undefined || sessionId === '') return
+    setLifeboatBusy(true)
+    const gen = ++generationRef.current
+    void post<{ ok: true; id: string; detail?: string; synced?: { ok: boolean; detail?: string; error?: string }; state?: TakeoverState } | { ok: false; error: string }>(
+      '/dsh-takeover/lifeboat',
+      { sessionId },
+    )
+      .then((r) => {
+        if (gen !== generationRef.current) return
+        if (!r.ok) throw new Error(r.error)
+        if (r.state !== undefined) { setState(r.state); setError(null) }
+        showNotice(
+          t('lifeboatNotice', { id: r.id })
+          + (r.synced !== undefined
+            ? (r.synced.ok === true ? t('lifeboatSynced') : `；${t('lifeboatSyncFail')}：${r.synced.error ?? ''}`)
+            : ''),
+        )
+        return undefined
+      })
+      .catch((e: unknown) => {
+        if (gen !== generationRef.current) return
+        setError(e instanceof Error ? e.message : String(e))
+      })
+      .finally(() => setLifeboatBusy(false))
   }
   const clear = (): void => {
     if (!confirmClear) {
@@ -2649,7 +2679,7 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
           : null,
       )
 
-  // ---- 收件箱视图级动作：即时过滤（`/` 与 Cmd/Ctrl+K 聚焦，见 onRootKeyDown）+ 清空已消费（二次确认）+ 导出▾菜单 ----
+  // ---- 收件箱视图级动作：即时过滤（`/` 与 Cmd/Ctrl+K 聚焦，见 onRootKeyDown）+ 救生艇（有座位才出现）+ 清空已消费（二次确认）+ 导出▾菜单 ----
   const inboxActions: Node[] = [
     state !== null
       ? createElement('input', {
@@ -2669,6 +2699,18 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
             if (e.key === 'Escape' && query !== '') { e.preventDefault(); e.stopPropagation(); setQuery('') }
           },
         })
+      : null,
+    // 🛟 救生艇：只挂有 sessionId 座位的工作台（composer 浮层）——设置卡/老宿主内嵌无座位，
+    // 救生艇要的就是「当前会话」，没有座位即没有语义，整钮不渲染
+    sessionId !== undefined && sessionId !== ''
+      ? createElement('button', {
+          key: 'lifeboat',
+          className: 'bt-btn',
+          type: 'button',
+          disabled: lifeboatBusy,
+          onClick: lifeboat,
+          title: t('lifeboatTitle'),
+        }, lifeboatBusy ? t('lifeboatBusy') : t('lifeboatBtn'))
       : null,
     createElement('button', {
       key: 'clear',

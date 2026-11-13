@@ -594,4 +594,42 @@ test('视图头 h2 id 走 useId：两实例同挂不撞 id，aria-labelledby 可
   }
 })
 
+// ---------------------------------------------------------------- 救生艇（lifeboat）
+
+test('WorkspaceBody：有 sessionId 座位才出「🛟 救生艇」——点击 POST lifeboat 带 sessionId，采纳全量 state 并出成功横幅', async () => {
+  stubPlan['/dsh-takeover/lifeboat'] = { body: { ok: true, id: 'ho-lb-0001', detail: '', state: stateFixture() } }
+  await render(createElement(client.WorkspaceBody, { t, locale: undefined, navigate, chrome: false, sessionId: 'sess-cur-9' }))
+  await waitText('待取件 3')
+  assert.ok(has('🛟 救生艇'), '有座位的工作台应渲染救生艇按钮')
+  resetCalls()
+  await clickButton('🛟 救生艇')
+  await flush()
+  assert.deepEqual(lastBody('/dsh-takeover/lifeboat'), { sessionId: 'sess-cur-9' }, 'POST 应带当前会话 id')
+  await waitText('已抢出')
+  assert.ok(has('ho-lb-0001'), '成功横幅应带卡 id')
+  assert.ok(!has('抢出中…'), 'busy 文案应随响应结束复位')
+  delete stubPlan['/dsh-takeover/lifeboat']
+})
+
+test('WorkspaceBody：救生艇失败走错误横幅（不吞错）；无 sessionId 座位整钮不渲染', async () => {
+  stubPlan['/dsh-takeover/lifeboat'] = { body: { ok: false, error: '会话 sess-gone 不在场（宿主会话服务未挂载或会话已关闭）——救生艇需要活的会话事件流' } }
+  await render(createElement(client.WorkspaceBody, { t, locale: undefined, navigate, chrome: false, sessionId: 'sess-gone' }))
+  await waitText('待取件 3')
+  await clickButton('🛟 救生艇')
+  await waitText('救生艇需要活的会话事件流')
+  assert.ok(has('bt-banner-err') || container.querySelector('.bt-banner-err') !== null, '失败应进错误横幅')
+  delete stubPlan['/dsh-takeover/lifeboat']
+  // 无座位（老宿主/无 sessionId props）：整钮不渲染——救生艇要的就是「当前会话」，没有座位即没有语义
+  await render(createElement(client.WorkspaceBody, { t, locale: undefined, navigate, chrome: false }))
+  await waitText('待取件 3')
+  assert.ok(!has('🛟 救生艇'), '无 sessionId 座位不应渲染救生艇按钮')
+})
+
+test('Panel（设置卡，无座位）：不出救生艇按钮', async () => {
+  await render(createElement(client.Panel, { t, locale: undefined, navigate, slim: false }))
+  await waitText('收件箱概览')
+  assert.ok(has('收件箱概览'))
+  assert.ok(!has('🛟 救生艇'), '设置卡内嵌工作台无 sessionId 座位，救生艇不出现')
+})
+
 after(() => { try { root?.unmount() } catch { /* 已卸载 */ } })

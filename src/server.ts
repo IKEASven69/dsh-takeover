@@ -7,6 +7,8 @@
  *   POST /dsh-takeover/provider        切 provider 开关 {provider, enabled}
  *   POST /dsh-takeover/clear-archived  清空 archived/
  *   POST /dsh-takeover/dismiss-pending 忽略一张待取件卡 {id}——原样移入 archived/（审计轨迹保留，不计消费）
+ *   POST /dsh-takeover/lifeboat        救生艇：{sessionId}——不经模型把当前会话事件流确定性抢出成卡
+ *                                      （pushHandoff 直调，空壳闸放行；同步启用时自动 syncNow）
  * POST 一律过同源守卫；响应 { ok, ... } 规范值，失败不抛异常。
  * @module dsh-takeover/server
  */
@@ -21,8 +23,10 @@ import { defaultForeignReaders, foreignResolveOne, foreignSessionPreview, foreig
 import { depositCommand, outboundCommand, OUTBOUND_LABELS, takeoverCommand, type Lang, type SessionRowLike } from './browser-view.ts'
 import { writeRelayProvenance } from './relay-records.ts'
 import { pushMemoryCard, scanMemorySources } from './memory.ts'
+import { pushHandoff } from './tools.ts'
+import { recordLifecycleEvent } from './lifecycle.ts'
 import { buildState, clearArchived, dismissPending, isProviderEnabled, setProviderEnabled } from './settings.ts'
-import { syncNow, syncPull, syncPush, syncSetup, type SyncOutcome } from './sync.ts'
+import { loadSyncConfig, syncNow, syncPull, syncPush, syncSetup, type SyncOutcome } from './sync.ts'
 import { applyRestore, createBackup, dryRunRestore, listBackups, rollbackRestore } from './envbackup.ts'
 
 function sendJson(response: ServerResponse, code: number, body: unknown): void {
@@ -712,7 +716,83 @@ export function registerTakeoverRoutes(
           return
         }
 
-        sendJson(response, 404, { error: `未知路由：/dsh-takeover/${sub}（支持 state / sessions / session-preview / takeover / provider / clear-archived / dismiss-pending / sync / env-backup）` })
+        if (sub === 'lifeboat') {
+          // 救生艇：上下文炸了也不经模型把运行态抢出来——按 sessionId 取当前会话，
+          // 直接 pushHandoff 做事件流确定性蒸馏（不调 LLM），空壳闸按救生艇语义放行
+          //（confirmSkeleton: true，PushArgs 已有参数）。会话缺席回规范错误；
+          // 事件流不可读走 probeSessionEvents 的 fail-open 降级（兜底骨架照常出卡）。
+          if (request.method !== 'POST') {
+            response.writeHead(405, { allow: 'POST' })
+            response.end()
+            return
+          }
+          if (!sameOrigin(request)) {
+            sendJson(response, 403, { error: '仅接受同源请求' })
+            return
+          }
+          void readJsonBody(request).then(
+            (body) => {
+              void (async () => {
+                try {
+                  const sessionId = String(body['sessionId'] ?? '').trim()
+                  if (sessionId === '') {
+                    sendJson(response, 200, { ok: false, error: '缺少 sessionId（老宿主座位不带当前会话 id，面板不出救生艇按钮）' })
+                    return
+                  }
+                  // 会话查找与 admitTakeover 同款（rootSessionsOf().get）；get 自身抛错也按缺席处理
+                  const sessions = rootSessionsOf()
+                  let session: unknown
+                  try {
+                    session = sessions?.get?.(sessionId)
+                  } catch { /* 注入纪律代理可能抛：视作会话缺席 */ }
+                  if (session === undefined || session === null) {
+                    sendJson(response, 200, { ok: false, error: `会话 ${sessionId} 不在场（宿主会话服务未挂载或会话已关闭）——救生艇需要活的会话事件流` })
+                    return
+                  }
+                  const result = pushHandoff(session, { confirmSkeleton: true })
+                  if (!result.ok) {
+                    // 写侧闸拒收（密钥闸等）：规范错误值原样回，拦截理由不隐瞒
+                    //（闸内已自记 lifecycle 事件，这里不重复记）
+                    sendJson(response, 200, result)
+                    return
+                  }
+                  // 死亡地图：救生艇出卡也是写侧事件（reason 闭集新增 'lifeboat'，target 落卡 id）
+                  recordLifecycleEvent({
+                    stage: 'write',
+                    reason: 'lifeboat',
+                    target: result.id,
+                    detail: result.skipped ? '事件流降级——兜底骨架卡（空壳闸放行）' : '面板一键抢出（不经模型）',
+                  })
+                  // 换机同步已启用 → 自动拉推一步闭环（与 sync 路由同队列串行：
+                  // git index.lock 不容并发动作）；同步失败不吞卡——ok:true 照回，synced 带失败详情
+                  let synced: SyncOutcome | undefined
+                  if (loadSyncConfig().enabled) {
+                    const queued = providerWriteQueue.then(async () => { synced = await syncNow() }).catch(() => { /* 队列健康优先；syncNow 内部已转规范值 */ })
+                    providerWriteQueue = queued
+                    await queued
+                  }
+                  // 带全量 state：新卡即刻在收件箱可见，免等 30s 轮询（provider/sync 端点同款）；
+                  // state 组装失败不吞卡——state 缺席由前端退回 30s 轮询补
+                  let state: ReturnType<typeof buildState> | undefined
+                  try { state = await stateBody() } catch { /* 降级：不带 state */ }
+                  sendJson(response, 200, {
+                    ok: true,
+                    id: result.id,
+                    detail: result.note,
+                    ...(synced !== undefined ? { synced } : {}),
+                    ...(state !== undefined ? { state } : {}),
+                  })
+                } catch (e) {
+                  sendJson(response, 500, { ok: false, error: e instanceof Error ? e.message : String(e) })
+                }
+              })()
+            },
+            (error: unknown) => { sendJson(response, 400, { ok: false, error: error instanceof Error ? error.message : String(error) }) },
+          )
+          return
+        }
+
+        sendJson(response, 404, { error: `未知路由：/dsh-takeover/${sub}（支持 state / sessions / session-preview / takeover / provider / clear-archived / dismiss-pending / sync / env-backup / lifeboat）` })
       },
     }))
   })

@@ -27,6 +27,7 @@ export type LifecycleStage = 'write' | 'read' | 'pickup'
 export const LIFECYCLE_REASONS = [
   'secret_gate', // 写侧：密钥闸命中（未旁路）
   'skeleton_gate', // 写侧：空壳卡守门（未确认）
+  'lifeboat', // 写侧：救生艇一键抢出成功（面板不经模型出卡，含事件流降级的兜底骨架）
   'oversize', // 读侧：超 MAX_CARD_BYTES 尺寸闸
   'parse_error', // 读侧：frontmatter/正文解析失败
   'drift_mismatch', // 取侧：git 核验 MISMATCH
