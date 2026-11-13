@@ -8,6 +8,8 @@
  * @module dsh-takeover/browser-view
  */
 
+import { PROVIDERS } from './providers.ts'
+
 export type Lang = 'zh' | 'en'
 
 /** 会话行（服务端 /dsh-takeover/sessions 的 sessions[] 元素；轻量——不含轮数与内容） */
@@ -81,22 +83,25 @@ export function depositTail(lang: Lang): string {
 // 蒸馏寄存；对面按 pickupCommand 的指引取卡。全部纯文案，无 I/O。
 // ---------------------------------------------------------------------------
 
-/** 交接出去的接收方（any = 不指定，任何 agent 可取） */
-export const OUTBOUND_TARGETS = ['any', 'claude', 'codex', 'opencode', 'zcode', 'pi', 'workbuddy', 'cursor', 'grok'] as const
-export type OutboundTarget = (typeof OUTBOUND_TARGETS)[number]
+/** 交接出去的接收方（any = 不指定，任何 agent 可取）——providers.ts 注册表派生：
+ * outboundEligible 的 provider 依声明序排在 any 之后。交接目标与读取器两轴独立
+ * （gemini 是读取器但不进交接目标，注册表显式声明）。 */
+export const OUTBOUND_TARGETS = [
+  'any',
+  ...PROVIDERS.filter((p) => p.outboundEligible).map((p) => p.name),
+] as readonly OutboundTarget[]
 
-/** 接收方展示名（与 PROVIDER_LABEL 同风格；any 是协议词不是 provider） */
+/** 交接轴的 provider 名并集（类型级过滤：仅 outboundEligible=true 的字面量名） */
+type OutboundEligibleName = Extract<(typeof PROVIDERS)[number], { readonly outboundEligible: true }>['name']
+export type OutboundTarget = 'any' | OutboundEligibleName
+
+/** 接收方展示名（注册表 label 派生，与 PROVIDER_LABEL 同源；any 是协议词不是 provider） */
 export const OUTBOUND_LABELS: Record<OutboundTarget, { zh: string; en: string }> = {
   any: { zh: '任意 agent', en: 'Any agent' },
-  claude: { zh: 'Claude Code', en: 'Claude Code' },
-  codex: { zh: 'Codex CLI', en: 'Codex CLI' },
-  opencode: { zh: 'OpenCode', en: 'OpenCode' },
-  zcode: { zh: 'ZCode', en: 'ZCode' },
-  pi: { zh: 'Pi', en: 'Pi' },
-  workbuddy: { zh: 'WorkBuddy', en: 'WorkBuddy' },
-  cursor: { zh: 'Cursor', en: 'Cursor' },
-  grok: { zh: 'Grok CLI', en: 'Grok CLI' },
-}
+  ...Object.fromEntries(
+    PROVIDERS.filter((p) => p.outboundEligible).map((p) => [p.name, { zh: p.label, en: p.label }] as const),
+  ),
+} as Record<OutboundTarget, { zh: string; en: string }>
 
 /** 投进当前会话的寄存指令（queue 模式打给本会话的 agent）。
  * 两行式（同 depositCommand 的换行纪律）：引用/命令行在前，指示行在后；

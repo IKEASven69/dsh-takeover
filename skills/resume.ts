@@ -1,12 +1,15 @@
 /**
- * /resume-<provider> 九条 slash skill（数组驱动、单一模板）：
+ * /resume-<provider> 九条 slash skill（注册表驱动、单一模板）：
  * 解析引用 → 调 foreign_session_read → inert-history 边界 → 证据账本四态 →
  * 生成六段协议卡注入当轮 → verify-then-continue → 末尾问一句要不要寄存进收件箱。
  * userInvocable 而非 modelInvocable（slash 纪律），模型不可自行触发。
+ * 九家规格不再手抄：id / 产品名 / 描述 / 恢复边界全部取自 providers.ts 注册表的
+ * resume 段（单一真源派生，曾经的手抄数组与 foreign.ts 名单靠注释口头约定一致）。
  * @module dsh-takeover/skills/resume
  */
 
 import type { SkillRegistration } from '@deepseek-ai/dsh-skill'
+import { PROVIDERS } from '../src/providers.ts'
 import type { ForeignProvider } from '../src/foreign.ts'
 
 export interface ResumeSkillSpec {
@@ -18,72 +21,15 @@ export interface ResumeSkillSpec {
   readonly recoveryBoundary: string
 }
 
-/** 九家注册规格：单一出处，content 由模板函数生成 */
-export const RESUME_SKILL_SPECS = [
-  {
-    name: 'resume-claude',
-    provider: 'claude',
-    product: 'Claude Code',
-    description: '把一条 Claude Code 会话拉进当前会话，生成六段交接卡接手工作；可附会话 id、记录路径或标题关键词。',
-    recoveryBoundary: '读取器全量读取本地记录（含被替换/放弃分支的条目，thinking 块以 [thinking] 标记保留）；不复活 CLI、不回放工具调用。',
-  },
-  {
-    name: 'resume-codex',
-    provider: 'codex',
-    product: 'Codex',
-    description: '把一条 Codex 会话拉进当前会话，生成六段交接卡接手工作；可附会话 id、记录路径或标题关键词。',
-    recoveryBoundary: '读取器排除 Codex 的 system / developer / reasoning / world-state / 跨 agent 记录。',
-  },
-  {
-    name: 'resume-opencode',
-    provider: 'opencode',
-    product: 'OpenCode',
-    description: '把一条 OpenCode 会话拉进当前会话，生成六段交接卡接手工作；可附会话 id 或标题关键词。',
-    recoveryBoundary: '读取器只读 OpenCode 本地存储的会话记录；不复活进程、不回放存储的调用。',
-  },
-  {
-    name: 'resume-zcode',
-    provider: 'zcode',
-    product: 'ZCode',
-    description: '把一条 ZCode 会话拉进当前会话，生成六段交接卡接手工作；可附会话 id（支持短前缀）或标题关键词。',
-    recoveryBoundary: '读取器只读 ZCode 的 sqlite 库（readonly、随开随关，需 Node ≥22）；不回放调用、不复活 CLI；压缩段只是摘要标记，仍在库里的旧行保留。',
-  },
-  {
-    name: 'resume-pi',
-    provider: 'pi',
-    product: 'Pi',
-    description: '把一条 Pi 会话拉进当前会话，生成六段交接卡接手工作；可附会话 id、JSONL 路径或标题关键词。',
-    recoveryBoundary: '读取器只沿 Pi 当前活跃叶子读取，排除 thinking、hooks、system 消息与扩展注入的记录。',
-  },
-  {
-    name: 'resume-workbuddy',
-    provider: 'workbuddy',
-    product: 'WorkBuddy',
-    description: '把一条 WorkBuddy 会话拉进当前会话，生成六段交接卡接手工作；可附会话 id、记录路径或标题关键词。',
-    recoveryBoundary: '读取器只导入受支持的 WorkBuddy transcript / 存储记录，永不回放存储的调用。',
-  },
-  {
-    name: 'resume-cursor',
-    provider: 'cursor',
-    product: 'Cursor',
-    description: '把一条 Cursor 会话拉进当前会话，生成六段交接卡接手工作；可附会话 id、记录路径或标题关键词。',
-    recoveryBoundary: '读取器只导入受支持的 Cursor transcript / store 记录，永不回放存储的调用。',
-  },
-  {
-    name: 'resume-grok',
-    provider: 'grok',
-    product: 'Grok',
-    description: '把一条 Grok 会话拉进当前会话，生成六段交接卡接手工作；可附会话 id、会话目录、记录路径或标题关键词。',
-    recoveryBoundary: '读取器只用 Grok 可见的 updates.jsonl 流，永不读 chat_history.jsonl 原始模型上下文。',
-  },
-  {
-    name: 'resume-gemini',
-    provider: 'gemini',
-    product: 'Gemini CLI',
-    description: '把一条 Gemini CLI 会话拉进当前会话，生成六段交接卡接手工作；本地记录是新旧双格式 JSONL/JSON，子代理会话单独存盘，可附会话 id（记录路径）、记录路径或标题关键词。',
-    recoveryBoundary: '读取器只读 Gemini CLI 本地 chats/ 下的会话文件（JSONL 新格式 / 整块 JSON 旧格式，含子代理会话目录）；info/error/warning CLI 提示与斜杠命令行不进对话流；只读不写、不复活 Gemini CLI 进程。',
-  },
-] as const satisfies readonly ResumeSkillSpec[]
+/** 九家注册规格：providers.ts 注册表 × 本文件模板函数生成（顺序即注册表声明序） */
+export const RESUME_SKILL_SPECS: readonly ResumeSkillSpec[] = PROVIDERS.map((p) => ({
+  // resume.id 与 name 严格一一对应（resume-<provider>），注册表一致性测试钉死等式
+  name: p.resume.id as ResumeSkillSpec['name'],
+  provider: p.name,
+  product: p.resume.product,
+  description: p.resume.description,
+  recoveryBoundary: p.resume.recoveryBoundary,
+}))
 
 /** 单条 skill 内容模板：九条共用一个模板函数 */
 export function resumeSkillContent(spec: ResumeSkillSpec): string {
@@ -183,7 +129,7 @@ export function resumeSkillRegistration(spec: ResumeSkillSpec): SkillRegistratio
   }
 }
 
-/** 九条注册项（数组驱动，与 RESUME_SKILL_SPECS 一一对应） */
+/** 九条注册项（注册表驱动，与 RESUME_SKILL_SPECS 一一对应） */
 export function resumeSkillRegistrations(): SkillRegistration[] {
   return RESUME_SKILL_SPECS.map(resumeSkillRegistration)
 }

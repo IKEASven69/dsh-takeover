@@ -13,23 +13,16 @@ import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-skill'
 import type { SessionRef, Turn } from '@agent-handoff/readers'
+import { PROVIDERS, type ProviderName } from './providers.ts'
 
-/** 面向用户的九家提供方名 → readers 适配器名（claude 是 claude-code 的别名） */
-export const FOREIGN_PROVIDERS = ['claude', 'codex', 'opencode', 'zcode', 'pi', 'workbuddy', 'cursor', 'grok', 'gemini'] as const
-export type ForeignProvider = (typeof FOREIGN_PROVIDERS)[number]
+/** 面向用户的九家提供方名（providers.ts 注册表派生，顺序即注册表声明序） */
+export const FOREIGN_PROVIDERS: readonly ForeignProvider[] = PROVIDERS.map((p) => p.name)
+export type ForeignProvider = ProviderName
 
-/** 面向用户的 provider 名 → readers 适配器名（设置卡支持矩阵同用） */
-export const PROVIDER_TO_ADAPTER: Record<ForeignProvider, string> = {
-  claude: 'claude-code',
-  codex: 'codex',
-  opencode: 'opencode',
-  zcode: 'zcode',
-  pi: 'pi',
-  workbuddy: 'workbuddy',
-  cursor: 'cursor',
-  grok: 'grok',
-  gemini: 'gemini',
-}
+/** 面向用户的 provider 名 → readers 适配器名（注册表派生；claude 是 claude-code 的别名，设置卡支持矩阵同用） */
+export const PROVIDER_TO_ADAPTER: Record<ForeignProvider, string> = Object.fromEntries(
+  PROVIDERS.map((p) => [p.name, p.adapter] as const),
+) as Record<ForeignProvider, string>
 
 /** 引用解析结果（与 readers ResolveResult 同构，解耦后单测可手写） */
 export type ForeignResolve =

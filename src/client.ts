@@ -28,6 +28,7 @@ import type { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
 import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
 import { BRAND_FULL_SVG, BRAND_MARKS, PROVIDER_LABEL } from './brand-icons.ts'
 import type { BrandMark } from './brand-icons.ts'
+import { RESUME_PROVIDERS } from './providers.ts'
 import { DICTS, NS, interpolate } from './locales.ts'
 import {
   cardMarkdown,
@@ -2235,11 +2236,10 @@ export function ForeignBrowser({ state, t, lang, onError, onNotice, navigate, ba
 
 // ---------------------------------------------------------------------------
 // 命令速览：设置卡「命令速览」页签的网格体（mono 键 + 说明文案，DESIGN.md §3/§4）。
-// provider 与 foreign.ts 的 FOREIGN_PROVIDERS 保持一致——不直接 import
-// （值引入会把 host 半的 cordis/dsh-tools 拖进客户端包）。
+// provider 名单来自 providers.ts 注册表（纯数据叶，不把 host 半的 cordis/dsh-tools
+// 拖进客户端包；旧版本地手抄 RESUME_PROVIDERS 靠注释口头约定与 foreign.ts 一致，
+// 现由注册表统一派生）。
 // ---------------------------------------------------------------------------
-
-const RESUME_PROVIDERS = ['claude', 'codex', 'opencode', 'zcode', 'pi', 'workbuddy', 'cursor', 'grok', 'gemini'] as const
 
 export function CommandsGrid({ state, t }: { state: TakeoverState | null; t: Translate }): ReturnType<typeof createElement> {
   const disabled = new Set<string>(
