@@ -22,7 +22,10 @@ const withHome = <T>(fn: (home: string) => T): T => {
 }
 
 const pushCard = (home: string, goal: string) => {
-  const r = pushHandoff(null, { goal, warnings: '' }, { dir: home })
+  // cwd 指向非 git 的系统临时目录：本测试只管签名/搬运机制，不能隐式依赖仓库自身
+  // 的脏树（0.4.x 起 >512KB 脏树 push 会落 gzip 补丁边车，多出的伴生文件会污染
+  // dismiss 计数类断言——夹具与被测机制解耦）
+  const r = pushHandoff(null, { goal, warnings: '', cwd: tmpdir() }, { dir: home })
   assert.equal(r.ok, true)
   if (!r.ok) throw new Error('push failed')
   return r

@@ -109,6 +109,19 @@ export declare function baselineFromExtras(extras: unknown): RepoBaseline | unde
 /** 「🧭 基线恢复指引」四步（clone → checkout → apply 补丁 → 跑测试）。
  * baseline 与 patch/testCommand 任一缺席都如实降级为说明行，不渲染空壳步骤。 */
 export declare function renderBaselineGuidance(baseline: RepoBaseline, patchPath: string | undefined, testCommand: string | undefined): string[];
+/**
+ * 补丁随卡信息（PushResult / 信封 extra / HandoffEnvelope.patch 三处共用）。
+ * patchFormat/chunks 是 0.4.x gzip/分块扩展：patchFormat='gzip' = 补丁以 gzip 压缩形态
+ * 随卡（.patch.gz 或分块 .patch.NNN.gz），chunks>1 = 分块数；旧消费者天然忽略，
+ * bytes 恒为未压缩补丁全文的字节数（压缩块字节数进取件面 patchBytes）。
+ */
+type PatchInfo = {
+  bytes: number;
+  truncated: boolean;
+  sidecar: boolean;
+  patchFormat?: 'gzip';
+  chunks?: number;
+};
 /** handoff_push 参数：六段文本可选，缺省段走事件流确定性兜底 */
 interface PushArgs {
   goal?: string;
@@ -137,11 +150,7 @@ type PushResult = {
   note: string;
   coverage: CoverageStats;
   /** 未提交改动补丁随卡情况；undefined = 源目录非 git 仓库 */
-  patch?: {
-    bytes: number;
-    truncated: boolean;
-    sidecar: boolean;
-  };
+  patch?: PatchInfo;
   /** 本卡接替的前置卡 id（透传进信封） */
   supersedes?: string;
   /** 空壳卡（守门旁路后落盘）：调用方/下游可据此提示 */
@@ -201,9 +210,15 @@ type InboxLoadResult = {
   coverage?: CoverageStats;
   /** 随卡消费的机器信封 JSON 字符数；卡无信封（旧卡/外写卡）缺省 */
   envelopeChars?: number;
-  /** 随卡归档的未提交改动补丁路径（git apply 可复原）；卡无补丁缺省 */
+  /** 随卡归档的未提交改动补丁路径（git apply 可复原；gzip 形态已自动解压为纯文本）；卡无补丁缺省 */
   patchPath?: string;
   patchBytes?: number;
+  /** 补丁 gzip 压缩随卡形态（取件时已自动解压重组）；旧纯文本 .patch 缺省 */
+  patchFormat?: 'gzip' | 'gzip-chunked';
+  /** gzip 块数（单块=1、分块=N） */
+  patchChunks?: number;
+  /** 补丁还原降级说明（解压失败等，压缩块已原样归档）；正常还原缺省 */
+  patchWarn?: string;
   /** 信封提示的基线测试命令 */
   testCommand?: string;
   /** 本卡接替的前置卡 id */

@@ -24,6 +24,9 @@ export interface TakeoverSwitches {
   disabledProviders: string[]
 }
 
+/** 补丁 gzip 分块文件名尾段（<id>.patch.NNN.gz）；单块 <id>.patch.gz 无序号段不匹配 */
+const PATCH_CHUNK_GZ_RE = /\.patch\.(\d+)\.gz$/
+
 /** config.json 路径（HANDOFF_HOME 优先，否则 ~/.handoff） */
 export function switchesPath(dir?: string): string {
   return join(resolveHome(dir), 'config.json')
@@ -236,15 +239,21 @@ export function buildState(readers: ForeignReaders, dir?: string): TakeoverState
       // 会把超尺寸/解析失败但仍在册的卡的信封误当孤儿销毁（supersedes 链等机器层
       // 元数据不可恢复）——core 对这类卡明确「保留在收件箱」
       const supersedesByOwner = new Map<string, string>()
-      // 伴生文件孤儿清扫：信封（*.envelope.json）与补丁（*.patch）是纯派生物，
-      // 仅当对应 .md 确实不在盘上（已被任何实现取走，含不认识伴生文件的旧版）才删。
-      // 补丁孤儿是真实崩溃窗口的产物：inboxLoad 顺序是 md→信封→补丁，中途崩溃会留下
-      // 列表永不显示（列表只认 .md）、永不消费的僵尸补丁——清扫是恢复语义的最后一环
+      // 伴生文件孤儿清扫：信封（*.envelope.json）与补丁（*.patch，含 0.4.x gzip 形态
+      // *.patch.gz 与分块 *.patch.NNN.gz）是纯派生物，仅当对应 .md 确实不在盘上
+      //（已被任何实现取走，含不认识伴生文件的旧版）才删。补丁孤儿是真实崩溃窗口的
+      // 产物：inboxLoad 顺序是 md→信封→补丁，中途崩溃会留下列表永不显示（列表只认
+      // .md）、永不消费的僵尸补丁——清扫是恢复语义的最后一环
       for (const f of readdirSync(pd)) {
-        if (!f.endsWith('.envelope.json') && !f.endsWith('.patch')) continue
+        const gzChunk = PATCH_CHUNK_GZ_RE.exec(f)
+        if (!f.endsWith('.envelope.json') && !f.endsWith('.patch') && !f.endsWith('.patch.gz') && gzChunk === null) continue
         const ownerId = f.endsWith('.envelope.json')
           ? f.slice(0, -'.envelope.json'.length)
-          : f.slice(0, -'.patch'.length)
+          : gzChunk !== null
+            ? f.slice(0, f.length - gzChunk[0].length)
+            : f.endsWith('.patch.gz')
+              ? f.slice(0, -'.patch.gz'.length)
+              : f.slice(0, -'.patch'.length)
         const hasMd = existsSync(join(pd, `${ownerId}.md`))
         try {
           if (!hasMd) {
@@ -384,7 +393,7 @@ export function dismissPending(id: string, dir?: string): { ok: boolean; moved?:
     return { ok: false, error: `archived 目录创建失败（${e instanceof Error ? e.message : String(e)}）` }
   }
   let moved = 0
-  for (const ext of ['.md', '.envelope.json', '.patch'] as const) {
+  for (const ext of ['.md', '.envelope.json', '.patch', '.patch.gz'] as const) {
     const src = join(home, 'pending', safe + ext)
     if (!existsSync(src)) continue
     try {
@@ -394,6 +403,20 @@ export function dismissPending(id: string, dir?: string): { ok: boolean; moved?:
       return { ok: false, error: `移动失败：${safe}${ext}（${e instanceof Error ? e.message : String(e)}）` }
     }
   }
+  // gzip 分块（.patch.NNN.gz）带序号，固定扩展名枚举盖不住——按名单逐个搬
+  try {
+    const prefix = `${safe}.patch.`
+    for (const f of readdirSync(join(home, 'pending'))) {
+      if (!f.startsWith(prefix) || !f.endsWith('.gz')) continue
+      if (!/^\d+\.gz$/.test(f.slice(prefix.length))) continue
+      try {
+        renameSync(join(home, 'pending', f), join(home, 'archived', f))
+        moved += 1
+      } catch (e) {
+        return { ok: false, error: `移动失败：${f}（${e instanceof Error ? e.message : String(e)}）` }
+      }
+    }
+  } catch { /* pending 目录读失败不追加失败面：固定扩展名已搬完 */ }
   if (moved === 0) return { ok: false, error: `pending 里没有这张卡：${safe}（可能已被取件）` }
   return { ok: true, moved }
 }

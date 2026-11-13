@@ -256,3 +256,50 @@ test('孤儿伴生文件 · 信封与补丁按活性判据清扫（崩溃窗口�
     rmSync(home, { recursive: true, force: true })
   }
 })
+
+test('孤儿伴生文件 · gzip 单块/分块补丁同享活性判据清扫；dismissPending 搬运 gzip 形态', async () => {
+  const { buildState: bs } = await import('../src/settings.ts')
+  const { dismissPending } = await import('../src/settings.ts')
+  const home = freshHome()
+  try {
+    const liveId = 'ho-gzorphan-live'
+    const deadId = 'ho-gzorphan-dead'
+    placeCard(home, liveId)
+    placeCard(home, deadId)
+    // live 卡的 gzip 单块与分块补丁（.md 在盘，保留）
+    writeFileSync(join(home, 'pending', `${liveId}.patch.gz`), Buffer.from([0x1f, 0x8b]), 'utf-8')
+    writeFileSync(join(home, 'pending', `${liveId}.patch.001.gz`), Buffer.from([0x1f, 0x8b]), 'utf-8')
+    writeFileSync(join(home, 'pending', `${liveId}.patch.002.gz`), Buffer.from([0x1f, 0x8b]), 'utf-8')
+    // dead 卡（.md 已被取走）的 gzip 形态伴生文件——崩溃窗口产物，应被清扫
+    writeFileSync(join(home, 'pending', `${deadId}.patch.gz`), Buffer.from([0x1f, 0x8b]), 'utf-8')
+    writeFileSync(join(home, 'pending', `${deadId}.patch.001.gz`), Buffer.from([0x1f, 0x8b]), 'utf-8')
+    writeFileSync(join(home, 'pending', `${deadId}.patch.002.gz`), Buffer.from([0x1f, 0x8b]), 'utf-8')
+    rmSync(join(home, 'pending', `${deadId}.md`))
+
+    const readers = {
+      adapterNote: () => ({ supported: false, note: '' }),
+      listSessions: () => [],
+      resolve: () => ({ kind: 'not-found', reference: '' }),
+      readSession: () => [],
+    } as never
+    const state = bs(readers, home)
+    assert.ok(!existsSync(join(home, 'pending', `${deadId}.patch.gz`)), '孤儿 gzip 单块补丁被清扫')
+    assert.ok(!existsSync(join(home, 'pending', `${deadId}.patch.001.gz`)), '孤儿分块 001 被清扫')
+    assert.ok(!existsSync(join(home, 'pending', `${deadId}.patch.002.gz`)), '孤儿分块 002 被清扫')
+    assert.ok(existsSync(join(home, 'pending', `${liveId}.patch.gz`)), '活卡 gzip 单块保留')
+    assert.ok(existsSync(join(home, 'pending', `${liveId}.patch.001.gz`)), '活卡分块 001 保留')
+    assert.ok(existsSync(join(home, 'pending', `${liveId}.patch.002.gz`)), '活卡分块 002 保留')
+    assert.equal(state.pending.length, 1)
+
+    // dismissPending：活卡连同 gzip 单块与分块一起搬 archived
+    const d = dismissPending(liveId, home)
+    assert.equal(d.ok, true)
+    assert.equal(d.moved, 4, '.md + .patch.gz + 001/002.gz 应全搬')
+    assert.ok(existsSync(join(home, 'archived', `${liveId}.patch.gz`)))
+    assert.ok(existsSync(join(home, 'archived', `${liveId}.patch.001.gz`)))
+    assert.ok(existsSync(join(home, 'archived', `${liveId}.patch.002.gz`)))
+    assert.deepEqual(readdirSync(join(home, 'pending')).filter((f) => f.startsWith(liveId)), [])
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})

@@ -13,6 +13,7 @@ import { existsSync, readFileSync, renameSync, rmSync, statSync, writeFileSync }
 import { hostname } from 'node:os'
 import { isLowInfoCardMarkdown } from './lowinfo.ts'
 import { scanSecrets } from './secretscan.ts'
+import { augmentPatchWithUntracked, resolvePatchText, restoreGzipPatch, writePatchSidecar, type RestoredPatch } from './patchpack.ts'
 import { recordLifecycleEvent } from './lifecycle.ts'
 import { loadOrCreateSigningKey, signEnvelope, verifyEnvelopeSig, type SigVerdict } from './signing.ts'
 import { syncNow, syncPull, syncPush, syncSetup, syncStatusLine, syncStatusOf, type SyncOutcome, type SyncStatus } from './sync.ts'
@@ -253,6 +254,20 @@ export function renderBaselineGuidance(baseline: RepoBaseline, patchPath: string
 // B. 机器信封（双形态输出：人的卡片 .md + 机器的接手信封 .envelope.json）
 // ---------------------------------------------------------------------------
 
+/**
+ * 补丁随卡信息（PushResult / 信封 extra / HandoffEnvelope.patch 三处共用）。
+ * patchFormat/chunks 是 0.4.x gzip/分块扩展：patchFormat='gzip' = 补丁以 gzip 压缩形态
+ * 随卡（.patch.gz 或分块 .patch.NNN.gz），chunks>1 = 分块数；旧消费者天然忽略，
+ * bytes 恒为未压缩补丁全文的字节数（压缩块字节数进取件面 patchBytes）。
+ */
+export type PatchInfo = {
+  bytes: number
+  truncated: boolean
+  sidecar: boolean
+  patchFormat?: 'gzip'
+  chunks?: number
+}
+
 /** 接手信封：卡片纯派生物，机器消费用（token 受限接手场景），可随时由卡片重建 */
 export interface HandoffEnvelope {
   handoff: 1
@@ -267,7 +282,7 @@ export interface HandoffEnvelope {
   files: string[]
   /** ── 0.4.1 物质层扩展（全部可选，旧消费者天然忽略）── */
   /** 未提交改动补丁随卡情况 */
-  patch?: { bytes: number; truncated: boolean; sidecar: boolean }
+  patch?: PatchInfo
   /** 未跟踪且未被 ignore 的新文件清单（只列不带货） */
   untracked?: Array<{ file: string; bytes: number }>
   /** 源机标识 */
@@ -317,8 +332,8 @@ function testHint(cwd: string): { test?: { command: string } } {
 
 /** buildEnvelope 的结构化入参：Card 天然满足，单测可用最小字面量 */
 export interface EnvelopeExtra {
-  /** 未提交改动补丁随卡情况（bytes/truncated/sidecar） */
-  patch?: { bytes: number; truncated: boolean; sidecar: boolean }
+  /** 未提交改动补丁随卡情况（bytes/truncated/sidecar，gzip/分块扩展见 PatchInfo） */
+  patch?: PatchInfo
   /** 未跟踪且未被 ignore 的新文件清单（只列不带货） */
   untracked?: Array<{ file: string; bytes: number }>
   /** 源机标识（跨机接管时判断路径体系/OS） */
@@ -422,16 +437,24 @@ function patchPath(id: string, dir?: string): string {
   return join(pendingDir(dir), `${id}.patch`)
 }
 
-/** 取件时同步消费补丁：pending → archived（与 .md 同步搬），返回归档后路径供 apply 指引 */
-function consumePatch(id: string, dir?: string): string | undefined {
+/**
+ * 取件时同步消费补丁：pending → archived（与 .md 同步搬），返回归档后路径供 apply 指引。
+ * 0.4.x 物质层补全：gzip 单块（<id>.patch.gz）与 gzip 分块（<id>.patch.NNN.gz）按
+ * gzip magic（1f 8b）识别，多块按序重组解压后写归档 <id>.patch——apply 指引路径不变；
+ * 解压失败时压缩块原样归档并回 warn（绝不静默丢弃材料）。旧纯文本 .patch 原样搬移。
+ */
+function consumePatch(id: string, dir?: string): RestoredPatch | undefined {
   try {
     const src = patchPath(id, dir)
-    if (!existsSync(src)) return undefined
-    const dest = join(archivedDir(dir), `${id}.patch`)
-    try {
-      renameSync(src, dest)
-      return dest
-    } catch { /* 搬失败不挡取件：残留补丁会被列表忽略（列表只认 .md） */ }
+    if (existsSync(src)) {
+      const dest = join(archivedDir(dir), `${id}.patch`)
+      try {
+        renameSync(src, dest)
+        return { path: dest, bytes: statSync(dest).size }
+      } catch { /* 搬失败不挡取件：残留补丁会被列表忽略（列表只认 .md） */ }
+      return undefined
+    }
+    return restoreGzipPatch(id, dir)
   } catch { /* 整体失败只降级 */ }
   return undefined
 }
@@ -464,6 +487,9 @@ export function renderInbox(_args: unknown, value: unknown): Array<{ type: 'text
     sig?: SigVerdict
     patchPath?: string
     patchBytes?: number
+    patchFormat?: 'gzip' | 'gzip-chunked'
+    patchChunks?: number
+    patchWarn?: string
     testCommand?: string
     supersedes?: string
     crossOS?: { source: string; local: string }
@@ -488,6 +514,14 @@ export function renderInbox(_args: unknown, value: unknown): Array<{ type: 'text
   if (patchPath !== undefined) {
     const kb = typeof v.patchBytes === 'number' ? `${Math.max(1, Math.round(v.patchBytes / 1024))} KB` : '? KB'
     lines.push(`🩹 补丁随卡归档（${kb} 未提交改动）：先 \"git apply --check ${patchPath}\" 验证可干净应用，再 \"git apply ${patchPath}\" 复原；--check 失败（目标仓已前进）时用 \"git apply -3 ${patchPath}\" 三方合并尝试自助解决冲突`)
+    // gzip/分块形态如实告知：解压重组已在本机完成，apply 指引针对解压后的纯文本补丁
+    if (v.patchFormat === 'gzip' || v.patchFormat === 'gzip-chunked') {
+      const n = typeof v.patchChunks === 'number' && v.patchChunks > 1 ? `${v.patchChunks} 块已按序重组，` : ''
+      lines.push(`🧯 补丁以 gzip 压缩形态随卡（${n}取件时已自动解压为纯文本）——上方 git apply 指引针对解压后的归档补丁`)
+    }
+  }
+  if (typeof v.patchWarn === 'string' && v.patchWarn !== '') {
+    lines.push(`⚠️ 补丁还原降级：${v.patchWarn}`)
   }
   if (typeof v.testCommand === 'string' && v.testCommand !== '') {
     lines.push(`🧪 基线测试提示（来自寄存方信封）：接手后先跑 \"${v.testCommand}\" 对比寄存时状态，漂移即 MISMATCH 处理`)
@@ -564,7 +598,7 @@ export type PushResult =
       note: string
       coverage: CoverageStats
       /** 未提交改动补丁随卡情况；undefined = 源目录非 git 仓库 */
-      patch?: { bytes: number; truncated: boolean; sidecar: boolean }
+      patch?: PatchInfo
       /** 本卡接替的前置卡 id（透传进信封） */
       supersedes?: string
       /** 空壳卡（守门旁路后落盘）：调用方/下游可据此提示 */
@@ -667,6 +701,16 @@ export function pushHandoff(session: unknown, args: PushArgs, opts?: { dir?: str
     // 物质层采集：未提交改动补丁（非 git 目录 null）——先于 sections 组装，
     // 便于把「非 git 仓」如实写进警告段而不是让 git 字段静默为空
     const patchBundle = collectPatch(cwd)
+    // 补丁全文解析：vendor 超 512KB 整份拒带（patch 为空串）时按 core 同款口径自采
+    // diff 全文，交给 gzip/分块打包管线带走——绝不静默丢补丁；自采失败才如实降级
+    const fullPatch = resolvePatchText(cwd, patchBundle)
+    // untracked 小文件内容旅行：清单里单文件 <64KB 的项手拼「新增文件 diff」追加进
+    // 补丁全文（追加部分与 tracked diff 同过密钥闸）；大文件/二进制/不可读仍只列清单
+    const inline = patchBundle !== null
+      ? augmentPatchWithUntracked(cwd, fullPatch, patchBundle.untracked)
+      : { patch: '', inlined: [], leftOut: [] }
+    const finalPatch = inline.patch
+    const finalPatchBytes = Buffer.byteLength(finalPatch, 'utf-8')
     const sections: CardSections = {
       goal: section(args.goal, fallback.goal),
       files: section(args.files, fallback.files),
@@ -686,7 +730,8 @@ ${honest}`
     // 密钥闸（先例：gitleaks/Push Protection——阻断为默认 + 留痕旁路）：卡随同步盘跨机传播
     // 并进入下游会话上下文，比 git 更宽的泄漏面；命中即拒，理由回喂调用方
     // title/to/project 标量也进扫描——密钥从 title 侧门出盘等于没闸
-    // 补丁 diff 同扫（T2-P，红队驱动）：diff 全是源码行，密钥走补丁走私等于没闸
+    // 补丁 diff 同扫（T2-P，红队驱动）：diff 全是源码行，密钥走补丁走私等于没闸；
+    // 扫描口径是增补后的补丁全文——untracked 小文件的手拼 diff 一样过闸，不成走私侧门
     const secretHits = [
       ...scanSecrets({
         ...sections,
@@ -695,7 +740,7 @@ ${honest}`
         to: args.to,
         project: args.project,
       }),
-      ...(patchBundle !== null && patchBundle.patch !== '' ? scanSecrets({ patch: patchBundle.patch }) : []),
+      ...(finalPatch !== '' ? scanSecrets({ patch: finalPatch }) : []),
     ]
     if (secretHits.length > 0 && args.allowSecrets !== true) {
       const detail = secretHits.map((h) => `${h.rule}@${h.section}（${h.masked}）`).join('；')
@@ -758,24 +803,43 @@ ${honest}`
       },
     }
     const path = writeCard(card, opts?.dir)
-    // 物质层第二文件：未提交改动补丁（截断的补丁不能 apply，宁可不带——collectPatch 已拒）
+    // 物质层第二文件：补丁边车（密钥闸已扫过增补全文；打包管线按尺寸选纯文本/gzip/分块——
+    // 超 512KB 不再整份拒带，先压缩、仍超则 480KB 分块，最需要带的时刻也带得走）
     const patchNotes: string[] = []
-    let patchInfo: { bytes: number; truncated: boolean; sidecar: boolean } | undefined
-    if (patchBundle !== null && patchBundle.patch !== '') {
+    let patchInfo: PatchInfo | undefined
+    if (finalPatch !== '') {
       try {
-        writeFileSync(join(pendingDir(opts?.dir), `${card.id}.patch`), patchBundle.patch, 'utf-8')
-        patchInfo = { bytes: patchBundle.bytes, truncated: false, sidecar: true }
-        patchNotes.push(`补丁随卡（${Math.max(1, Math.round(patchBundle.bytes / 1024))} KB 未提交改动）：取件时会给出 git apply 指引`)
+        const packed = writePatchSidecar(card.id, finalPatch, opts?.dir)
+        patchInfo = packed.format === 'gzip-chunked'
+          ? { bytes: finalPatchBytes, truncated: false, sidecar: true, patchFormat: 'gzip', chunks: packed.chunks }
+          : packed.format === 'gzip'
+            ? { bytes: finalPatchBytes, truncated: false, sidecar: true, patchFormat: 'gzip' }
+            : { bytes: finalPatchBytes, truncated: false, sidecar: true }
+        patchNotes.push(
+          packed.format === 'gzip-chunked'
+            ? `未提交 diff 过大（${Math.round(finalPatchBytes / 1024)} KB），gzip 分 ${packed.chunks} 块随卡（.patch.001.gz…）：取件侧自动重组解压后给出 git apply 指引`
+            : packed.format === 'gzip'
+              ? `未提交 diff 过大（${Math.round(finalPatchBytes / 1024)} KB），gzip 压缩后单块随卡（${Math.max(1, Math.round(packed.writtenBytes / 1024))} KB .patch.gz）：取件侧自动解压后给出 git apply 指引`
+              : `补丁随卡（${Math.max(1, Math.round(finalPatchBytes / 1024))} KB 未提交改动）：取件时会给出 git apply 指引`,
+        )
       } catch (e) {
         patchNotes.push(`补丁随卡失败（卡片本体已寄存）：${readableError(e)}`)
       }
     } else if (patchBundle !== null && patchBundle.truncated) {
+      // vendor 拒带且自采也失败：如实降级为未随卡，绝不假称已带
       patchInfo = { bytes: patchBundle.bytes, truncated: true, sidecar: false }
-      patchNotes.push(`未提交 diff 过大（${Math.round(patchBundle.bytes / 1024)} KB 超上限）未随卡——请自行 git commit/push 携带`)
+      patchNotes.push(`未提交 diff 过大（${Math.round(patchBundle.bytes / 1024)} KB 超上限）且自采失败未随卡——请自行 git commit/push 携带`)
     }
     if (patchBundle !== null && patchBundle.untracked.length > 0) {
-      const names = patchBundle.untracked.slice(0, 5).map((u: { file: string }) => u.file).join('、')
-      patchNotes.push(`未跟踪新文件 ${patchBundle.untracked.length} 个不随卡${patchBundle.untracked.length > 5 ? `（前 5：${names}…）` : `（${names}）`}——请自行提交或携带`)
+      const total = patchBundle.untracked.length
+      const names = inline.leftOut.slice(0, 5).map((u: { file: string }) => u.file).join('、')
+      if (inline.leftOut.length === 0) {
+        patchNotes.push(`未跟踪新文件 ${total} 个已随补丁携带（单文件 <64KB 手拼新增 diff）——清单仍进机器信封备核`)
+      } else if (inline.inlined.length > 0) {
+        patchNotes.push(`未跟踪新文件 ${total} 个中 ${inline.inlined.length} 个小文件已随补丁携带，${inline.leftOut.length} 个超大/二进制不随卡${inline.leftOut.length > 5 ? `（前 5：${names}…）` : `（${names}）`}——请自行提交或携带`)
+      } else {
+        patchNotes.push(`未跟踪新文件 ${total} 个不随卡${total > 5 ? `（前 5：${names}…）` : `（${names}）`}——请自行提交或携带`)
+      }
     }
     // 机器信封（协议扩展提案，handoff: 1 SPEC 不动）：卡片落盘成功后落第二文件。
     // 信封是纯派生物——写失败只降级进 note，不回滚已寄存的卡片
@@ -867,9 +931,15 @@ export type InboxLoadResult =
       coverage?: CoverageStats
       /** 随卡消费的机器信封 JSON 字符数；卡无信封（旧卡/外写卡）缺省 */
       envelopeChars?: number
-      /** 随卡归档的未提交改动补丁路径（git apply 可复原）；卡无补丁缺省 */
+      /** 随卡归档的未提交改动补丁路径（git apply 可复原；gzip 形态已自动解压为纯文本）；卡无补丁缺省 */
       patchPath?: string
       patchBytes?: number
+      /** 补丁 gzip 压缩随卡形态（取件时已自动解压重组）；旧纯文本 .patch 缺省 */
+      patchFormat?: 'gzip' | 'gzip-chunked'
+      /** gzip 块数（单块=1、分块=N） */
+      patchChunks?: number
+      /** 补丁还原降级说明（解压失败等，压缩块已原样归档）；正常还原缺省 */
+      patchWarn?: string
       /** 信封提示的基线测试命令 */
       testCommand?: string
       /** 本卡接替的前置卡 id */
@@ -930,10 +1000,17 @@ export function inboxLoad(id: string, opts?: { dir?: string }): InboxLoadResult 
     if (baseline !== undefined) out.baseline = baseline
     if (envelopeChars !== undefined) out.envelopeChars = envelopeChars
     if (patchArchived !== undefined) {
-      out.patchPath = patchArchived
-      try {
-        out.patchBytes = statSync(patchArchived).size
-      } catch { /* stat 失败不挡取件 */ }
+      if (patchArchived.path !== undefined) {
+        out.patchPath = patchArchived.path
+        try {
+          out.patchBytes = patchArchived.bytes ?? statSync(patchArchived.path).size
+        } catch { /* stat 失败不挡取件 */ }
+      }
+      if (patchArchived.format !== undefined) {
+        out.patchFormat = patchArchived.format
+        out.patchChunks = patchArchived.chunks
+      }
+      if (patchArchived.warn !== undefined) out.patchWarn = patchArchived.warn
     }
     if (typeof env['test'] === 'object' && env['test'] !== null) {
       const cmd = (env['test'] as { command?: unknown })['command']
@@ -1031,7 +1108,7 @@ function safeUserQuestions(ctx: Context): unknown {
 export function registerPushTool(ctx: Context): void {
   ctx.tools.register(defineTool({
     name: 'handoff_push',
-    description: '把当前 DSH 会话寄存为一张 handoff: 1 交接卡片到共享收件箱 ~/.handoff/pending/（任何 agent 可取件）。六段文本（goal/files/done/remaining/stopped/warnings）+ 可选 suggested（建议加载段，非协议段）可选传入；留空段从会话事件流确定性兜底，不调 LLM。内置两道守门：密钥扫描（云厂商 key/私钥头/高熵赋值，命中拒绝并回喂理由，allowSecrets 留痕旁路）与空壳卡守门（六段全是兜底占位时拒绝，confirmSkeleton 旁路）。若源目录是 git 仓库且有未提交改动，同步落补丁 <id>.patch（取件方 git apply 可复原；diff 超上限整体拒带不截断）。另落机器信封 <id>.envelope.json（含源机标识/未跟踪清单/基线测试提示，协议扩展提案）并对 done 段产出四态覆盖率统计 coverage（只统计不强制）。卡片 extras 带四轴立约标记 axis（本工具恒为 session）与仓库基线 baseline（origin/HEAD/分支，拿不到如实缺省）。返回 { ok, id, path, coverage, patch? } 规范值。',
+    description: '把当前 DSH 会话寄存为一张 handoff: 1 交接卡片到共享收件箱 ~/.handoff/pending/（任何 agent 可取件）。六段文本（goal/files/done/remaining/stopped/warnings）+ 可选 suggested（建议加载段，非协议段）可选传入；留空段从会话事件流确定性兜底，不调 LLM。内置两道守门：密钥扫描（云厂商 key/私钥头/高熵赋值，命中拒绝并回喂理由，allowSecrets 留痕旁路；扫描覆盖补丁全文含未跟踪小文件的手拼新增 diff）与空壳卡守门（六段全是兜底占位时拒绝，confirmSkeleton 旁路）。若源目录是 git 仓库且有未提交改动，同步落补丁 <id>.patch（取件方 git apply 可复原；diff 超 512KB 先 gzip 压缩随卡、压缩后仍超则 480KB 分块 .patch.NNN.gz，取件侧按 gzip magic 自动解压重组；未跟踪清单里单文件 <64KB 的小文件手拼新增 diff 随补丁携带，超大/二进制仍只列清单）。另落机器信封 <id>.envelope.json（含源机标识/未跟踪清单/基线测试提示，协议扩展提案）并对 done 段产出四态覆盖率统计 coverage（只统计不强制）。卡片 extras 带四轴立约标记 axis（本工具恒为 session）与仓库基线 baseline（origin/HEAD/分支，拿不到如实缺省）。返回 { ok, id, path, coverage, patch? } 规范值。',
     parameters: {
       goal: { type: 'string', description: '「目标」段：会话在做什么、最后一条用户请求' },
       files: { type: 'string', description: '「涉及文件」段：碰过的文件/命令；计划文档只写路径' },
