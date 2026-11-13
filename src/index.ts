@@ -33,8 +33,8 @@ export function apply(ctx: Context): void {
   ctx.logger.info('dsh-takeover: 会话接管已加载（工具 handoff_push / handoff_inbox / handoff_memory / handoff_sync / handoff_env / foreign_session_read + slash /handoff /inbox /resume-*×8 + 设置卡 API /dsh-takeover/*）')
 }
 
-export { pushHandoff, inboxList, inboxLoad, factsToSections, handoffHostNotice, baselineFromExtras, renderBaselineGuidance } from './tools.ts'
-export type { PushArgs, PushResult, InboxItem, InboxListResult, InboxLoadResult, CardAxis, CardPayload, RepoBaseline } from './tools.ts'
+export { pushHandoff, inboxList, inboxLoad, inboxHistory, pushConfigCard, factsToSections, handoffHostNotice, baselineFromExtras, axisFromExtras, renderBaselineGuidance, HISTORY_TAIL_MAX, HISTORY_STOPPED_MAX } from './tools.ts'
+export type { PushArgs, PushResult, InboxItem, InboxListResult, InboxLoadResult, InboxHistoryResult, HistoryItem, ConfigCardPayload, ConfigCardResult, CardAxis, CardPayload, RepoBaseline } from './tools.ts'
 export { probeSessionEvents, collectFacts, todoToTasks } from './collect.ts'
 export type { ProbeResult, SessionFacts } from './collect.ts'
 export { FOREIGN_PROVIDERS, PROVIDER_TO_ADAPTER, disabledError, foreignSessionRead, foreignSessionsList, foreignSessionPreview, foreignResolveOne, summarizeTurns, registerForeignTool, renderForeign } from './foreign.ts'
@@ -77,12 +77,12 @@ export {
   validateRemoteUrl,
 } from './sync.ts'
 export type { SyncConfig, SyncOutcome, SyncStatus } from './sync.ts'
-export { createBackup, dryRunRestore, applyRestore, rollbackRestore, listBackups, collectScopeFiles, envBackupDir, validateRelPath } from './envbackup.ts'
-export type { BackupRow, ScopeFile, BackupResult, DryRunResult, ApplyResult, RestoreDiffRow } from './envbackup.ts'
+export { createBackup, dryRunRestore, applyRestore, rollbackRestore, listBackups, readBackupManifest, collectScopeFiles, envBackupDir, validateRelPath } from './envbackup.ts'
+export type { BackupRow, ScopeFile, BackupResult, BackupManifestRead, ManifestFileRow, DryRunResult, ApplyResult, RestoreDiffRow } from './envbackup.ts'
 export { registerTakeoverRoutes, admitTakeover, sessionControllerOf } from './server.ts'
 export type { SessionControllerLike, TakeoverMode, TakeoverOutcome } from './server.ts'
-export { scanMemorySources, pushMemoryCard, registerMemoryTool, renderMemory, MEMORY_SOURCES } from './memory.ts'
-export type { MemorySourceDef, MemorySourceRow, MemoryPushArgs, MemoryPushResult } from './memory.ts'
+export { scanMemorySources, pushMemoryCard, registerMemoryTool, renderMemory, MEMORY_SOURCES, MEMORY_STORES, readStoreEntries } from './memory.ts'
+export type { MemorySourceDef, MemorySourceRow, MemoryStoreDef, MemoryStoreEntry, StoreEntriesRead, MemoryPushArgs, MemoryPushResult } from './memory.ts'
 export { outboundCommand, pickupCommand, humanChars, OUTBOUND_TARGETS, OUTBOUND_LABELS } from './browser-view.ts'
 export type { OutboundTarget } from './browser-view.ts'
 export {

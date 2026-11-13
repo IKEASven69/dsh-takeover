@@ -39,7 +39,17 @@ test('registerInboxTool：注册 handoff_inbox 且 action 枚举齐全', async (
   registerInboxTool(ctx)
   assert.equal(registered[0]?.name, 'handoff_inbox')
   const def = registered[0]?.def as { parameters: { properties: Record<string, { enum?: string[] }> } }
-  assert.deepEqual(def.parameters.properties.action?.enum, ['list', 'load'])
+  // 卡链检索（action=history）为 2026-11 功能扩展：枚举追加，断言形式不变
+  assert.deepEqual(def.parameters.properties.action?.enum, ['list', 'load', 'history'])
+})
+
+test('registerEnvBackupTool：注册 handoff_env 且 action 枚举含 card（配置轴转正）', async () => {
+  const { registerEnvBackupTool } = await import('../src/tools.ts')
+  const { ctx, registered } = fakeToolsCtx()
+  registerEnvBackupTool(ctx)
+  assert.equal(registered[0]?.name, 'handoff_env')
+  const def = registered[0]?.def as { parameters: { properties: Record<string, { enum?: string[] }> } }
+  assert.deepEqual(def.parameters.properties.action?.enum, ['backup', 'dry', 'apply', 'rollback', 'list', 'card'])
 })
 
 test('registerForeignTool：注册 foreign_session_read，九家 provider 枚举齐全', async () => {

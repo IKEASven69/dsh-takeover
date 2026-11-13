@@ -5,12 +5,13 @@
  */
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { recordLifecycleEvent, readLifecycleEvents, reasonFromCoreSkip, lifecyclePath, LIFECYCLE_LOG_MAX } from '../src/lifecycle.ts'
 import { buildState } from '../src/settings.ts'
-import { pushHandoff } from '../src/tools.ts'
+import { inboxLoad, pushHandoff, renderInbox } from '../src/tools.ts'
+import { pushMemoryCard, type MemorySourceRow } from '../src/memory.ts'
 
 const READERS = {
   listSessions: () => [],
@@ -116,5 +117,49 @@ describe('state.rejections 组装', () => {
     const st2 = buildState(READERS, empty)
     assert.equal(st2.rejections, undefined)
     assert.ok(!existsSync(lifecyclePath(empty)), '全空目录不应产生日志文件')
+  })
+})
+
+describe('吸收回执（memory 轴卡消费 → memory-absorbed）', () => {
+  test('inboxLoad 消费 axis=memory 卡记 read/memory-absorbed；session 卡不记', () => {
+    const dir = tmpHome()
+    try {
+      // memory 卡：pushMemoryCard（假 scan 只给一份 CLAUDE.md）→ 取件 → 回执在册
+      const body = mkdtempSync(join(tmpdir(), 'lifecycle-mem-body-'))
+      try {
+        writeFileSync(join(body, 'a.md'), '偏好 bun。')
+        const scan = (): MemorySourceRow[] => [
+          { key: 'claude-user', agent: 'Claude Code', path: join(body, 'a.md'), exists: true, bytes: 15, mtime: '2026-11-14T00:00:00.000Z', preview: '偏好 bun。' },
+        ]
+        const r = pushMemoryCard({ keys: ['claude-user'] }, { scan, push: pushHandoff, dir })
+        assert.equal(r.ok, true)
+        if (!r.ok) return
+        const load = inboxLoad(r.id, { dir })
+        assert.equal(load.ok, true)
+        if (!load.ok) return
+        assert.equal(load.axis, 'memory', '取件返回面应带四轴标记')
+        const ev = readLifecycleEvents(dir).find((e) => e.reason === 'memory-absorbed')
+        assert.ok(ev, 'memory 轴卡取件应记 memory-absorbed')
+        assert.equal(ev?.stage, 'read')
+        assert.equal(ev?.target, r.id)
+        assert.match(ev?.detail ?? '', /吸收/)
+        // 渲染提示：记忆已随卡注入
+        const text = String(renderInbox({}, load)[0]?.text)
+        assert.match(text, /记忆已随卡注入，按建议加载段吸收/)
+      } finally {
+        rmSync(body, { recursive: true, force: true })
+      }
+      // session 卡：不产生吸收回执（负例）
+      const r2 = pushHandoff(null, { goal: '普通会话卡（手写段过守门）' }, { dir })
+      assert.equal(r2.ok, true)
+      if (!r2.ok) return
+      const load2 = inboxLoad(r2.id, { dir })
+      assert.equal(load2.ok, true)
+      if (!load2.ok) return
+      assert.equal(load2.axis, 'session')
+      assert.equal(readLifecycleEvents(dir).filter((e) => e.reason === 'memory-absorbed').length, 1, 'session 卡不应新增吸收回执')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

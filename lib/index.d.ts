@@ -87,9 +87,11 @@ type CardAxis = 'session' | 'memory' | 'config';
 /**
  * 四轴 IR 立约——payload：载荷形态。
  * 'files'=原文件正文（卡里带原始文件内容，取件方原样吸收整份）；
- * 'distilled'=蒸馏条目（卡里带甄别过的条目，取件方按条目入库）。
+ * 'distilled'=蒸馏条目（卡里带甄别过的条目，取件方按条目入库）；
+ * 'manifest'=清单+指针（配置轴：卡里只带文件清单/哈希/类别与密文包指针，
+ * 不带货本体——本体在卡外按指针取，口令永不进卡）。
  */
-type CardPayload = 'files' | 'distilled';
+type CardPayload = 'files' | 'distilled' | 'manifest';
 /**
  * 寄存时刻的仓库基线：remote/head/branch 三元组。取件方据此在新机器上
  * clone → checkout → apply 补丁 → 跑测试，复原寄存时的代码现场。
@@ -106,6 +108,8 @@ type RepoBaseline = {
 };
 /** 从卡片 extras 防御式取基线（core parseCard 把顶层未知键收进 extras；外来卡/坏数据一律 undefined） */
 export declare function baselineFromExtras(extras: unknown): RepoBaseline | undefined;
+/** 从卡片 extras 防御式取四轴标记（闭集外/坏数据一律 undefined——外来卡无 axis 按旧卡处理） */
+export declare function axisFromExtras(extras: unknown): CardAxis | undefined;
 /** 「🧭 基线恢复指引」四步（clone → checkout → apply 补丁 → 跑测试）。
  * baseline 与 patch/testCommand 任一缺席都如实降级为说明行，不渲染空壳步骤。 */
 export declare function renderBaselineGuidance(baseline: RepoBaseline, patchPath: string | undefined, testCommand: string | undefined): string[];
@@ -199,6 +203,42 @@ type InboxListResult = {
 export declare function inboxList(opts?: {
   dir?: string;
 }): InboxListResult;
+/** 卡链历史单卡上限条数（与 core ARCHIVED_KEEP=50 同量级——再早的已被滚动归档淘汰） */
+export declare const HISTORY_TAIL_MAX = 50;
+/** stopped 摘要截断（够辨认停点，不把卡正文搬进返回值） */
+export declare const HISTORY_STOPPED_MAX = 120;
+/** 卡链历史单行（type 别名：JsonValue 契约要隐式索引签名，InboxItem 同款） */
+type HistoryItem = {
+  id: string;
+  title: string;
+  pushed_at: string;
+  /** 「停在哪」段摘要（截 HISTORY_STOPPED_MAX；控制字符已剥离） */
+  stopped: string;
+  /** 本卡接替的前置卡 id（extras.supersedes；旧卡/无接力缺省） */
+  supersedes?: string;
+};
+type InboxHistoryResult = {
+  ok: true;
+  action: 'history';
+  cards: HistoryItem[];
+  total: number;
+  project?: string;
+  cwd?: string;
+} | {
+  ok: false;
+  error: string;
+};
+/**
+ * 卡链检索：按 project 或 cwd 查 archived/ 已归档卡（复用 core listArchivedReport，
+ * 坏卡照旧跳过并忽略）。时间正序（pushed_at 字典序——同机卡共享时区口径），取尾
+ * HISTORY_TAIL_MAX 条；两个过滤条件都给 = AND，都不给 = 全量回查。
+ * supersedes 取自卡面 extras（寄存时随 extras 持久化——信封取件即弃，卡面才是持久通道）。
+ */
+export declare function inboxHistory(opts?: {
+  dir?: string;
+  project?: string;
+  cwd?: string;
+}): InboxHistoryResult;
 type InboxLoadResult = {
   ok: true;
   action: 'load';
@@ -206,6 +246,8 @@ type InboxLoadResult = {
   text: string;
   mismatches: string[];
   unavailable?: string;
+  /** 卡内 extras.axis 四轴标记（防御式提取，外来旧卡缺省） */
+  axis?: CardAxis;
   /** 卡内 extras.coverage（防御式提取，外来卡/坏数据缺省） */
   coverage?: CoverageStats;
   /** 随卡消费的机器信封 JSON 字符数；卡无信封（旧卡/外写卡）缺省 */
@@ -251,6 +293,52 @@ export declare function handoffHostNotice(userQuestions: unknown, action: 'push'
   agent?: Agent;
   signal?: AbortSignal;
 }, log?: (msg: string) => void): Promise<void>;
+/** 配置卡 extras.config 结构化载荷：清单 + 指针（不含任何文件内容，口令永不进卡） */
+interface ConfigCardPayload {
+  /** 密文备份文件名（.dshenv，指针） */
+  backupFile: string;
+  /** 密文包本体字节数（指针口径） */
+  bytes: number;
+  /** 备份时刻（容器 manifest.createdAt） */
+  createdAt: string;
+  /** 源机主机名 */
+  host: string;
+  /** 凭据类文件计数（如实告知包内有几件只存在于加密包内的东西） */
+  secretCount: number;
+  /** 清单行：path/sha256/category（不含内容与口令） */
+  files: Array<{
+    path: string;
+    sha256: string;
+    category: string;
+  }>;
+}
+type ConfigCardResult = {
+  ok: true;
+  id: string;
+  path: string;
+  file: string;
+  bytes: number;
+  files: number;
+  note?: string;
+} | {
+  ok: false;
+  error: string;
+};
+/**
+ * 配置轴出卡核心（handoff_env action=card / 换机面板共用）：把最近一次备份的
+ * 清单（files[{path,sha256,category}] + backupFile + bytes）写成 axis='config'
+ * 载荷卡——writeCard + 机器信封签名全套纪律（cardSha256 进签名面，与 pushHandoff
+ * 同款尽力签名：密钥缺席信封照落、落盘失败不回滚卡片）。密文 blob 仍在
+ * env-backup/（卡只带清单+指针，随 HANDOFF_HOME 同步盘走）；口令只用于读加密
+ * 清单，永不进卡六段与 extras。args.file 缺省取最近一次备份（listBackups 首项）。
+ */
+export declare function pushConfigCard(args: {
+  file?: string;
+  passphrase?: string;
+  title?: string;
+}, opts?: {
+  dir?: string;
+}): ConfigCardResult;
 //#endregion
 //#region node_modules/.pnpm/@agent-handoff+readers@file+vendor+@agent-handoff+readers/node_modules/@agent-handoff/readers/dist/index.d.mts
 //#region src/transcript.d.ts
@@ -564,6 +652,32 @@ type BackupRow = {
 };
 /** 列备份文件（只读目录，不解密） */
 export declare function listBackups(dir?: string): BackupRow[];
+/** 备份清单行（容器 manifest 的对外形态；配置轴出卡 / dry diff 共用） */
+type ManifestFileRow = {
+  path: string;
+  bytes: number;
+  sha256: string;
+  category: string;
+};
+interface BackupManifestRead {
+  ok: true;
+  /** 备份文件名（.dshenv） */
+  file: string;
+  /** 密文包本体字节数（卡上「指针」的 bytes 口径） */
+  bytes: number;
+  createdAt: string;
+  host: string;
+  secretCount: number;
+  secretHits: number;
+  /** 清单行（path/bytes/sha256/category，容器内解密所得） */
+  files: ManifestFileRow[];
+}
+/**
+ * 读一份备份的加密清单：口令解密容器取 manifest，**不触碰任何 blob 内容**——
+ * 配置轴出卡（handoff_env action=card / pushConfigCard）只把清单+指针写上卡，
+ * 密文 blob 原样留在 env-backup/。错口令 = GCM 认证失败诚实报错（同解包口径）。
+ */
+export declare function readBackupManifest(file: string, passphrase: string, dir?: string): BackupManifestRead;
 interface BackupResult {
   ok: true;
   file: string;
@@ -839,7 +953,8 @@ interface MemorySourceDef {
  * 只列有公开文档惯例的路径；没列入的家不是不支持，是路径无公开惯例。
  * hippo-db 特殊行：dsh-hippo（伴侣智能体长期记忆插件）的记忆库——v0.1.9 起是
  * <数据目录>/memories/ 的 zvec 原生目录（proxima 向量索引 + rocksdb FTS），二进制
- * 不随卡直带，存在性照报（UI 提示装了记忆库），出卡时正文替换为 export/import 指引。 */
+ * 不随卡直带，存在性照报（UI 提示装了记忆库）；出卡正文走 MEMORY_STORES 通用
+ * 掏取契约（条目 JSONL 在场掏条目、缺席退回指引），这里只管「探测到没有」。 */
 export declare const MEMORY_SOURCES: readonly MemorySourceDef[];
 /** 扫描结果行 */
 interface MemorySourceRow {
@@ -854,6 +969,49 @@ interface MemorySourceRow {
   preview: string;
   [k: string]: string | number | boolean;
 }
+/**
+ * 记忆库 store 注册表项：二进制/引擎型记忆库的通用掏取契约。
+ * 这类库的本体不是可读文件（zvec 目录 / sqlite 等），扫描只能报存在性；
+ * 内容能不能随卡走，取决于该库有没有「条目 JSONL」导出落在约定路径上：
+ * - entriesFile 在场：实际读条目（每行 {text, tags?}）进「建议加载」段（64KB 截断口径内）；
+ * - entriesFile 不在场：退回 guidance 指引文案（告诉双方怎么补齐 JSONL 快照）。
+ * entriesFile 是 (row) => 路径 的解析函数而非静态字符串：导出约定路径往往锚在
+ * 该库的数据目录上，而数据目录是动态的（env / data-dir.txt / 回退根，hippoDataDir
+ * 同款三级解析）——扫描行 row.path 已带解析好的基座，从它推约定路径即可，测试注入
+ * 假 row 也天然可注入（假 entriesFile 指临时文件即得两态）。
+ */
+interface MemoryStoreDef {
+  /** 稳定键（与 MEMORY_SOURCES 的 key 对应，fileBody 按它查表） */
+  id: string;
+  /** 展示名 */
+  label: string;
+  /** 条目 JSONL 约定路径（每行 {text, tags?}）；undefined = 无掏取通路，恒走指引 */
+  entriesFile?: (row: MemorySourceRow) => string;
+  /** 条目 JSONL 不在场时的退回指引文案（export/import 通路说明） */
+  guidance: string;
+}
+/**
+ * 条目 JSONL 约定：每行一个 JSON 对象 {text, tags?}——与 `hippo export -f jsonl`
+ * 的行形态兼容（多余字段忽略），其他记忆库照此约定产出即可获得同款掏取通路。
+ */
+interface MemoryStoreEntry {
+  text: string;
+  tags?: string[];
+}
+/** 记忆库 store 注册表（hippo 在册——不再是代码特例；新库 = 在这里加一项） */
+export declare const MEMORY_STORES: readonly MemoryStoreDef[];
+/** 条目 JSONL 读取结果：entries 为解析出的有效条目（坏行/缺 text 跳过） */
+interface StoreEntriesRead {
+  entries: MemoryStoreEntry[];
+  /** 原始文件字符数（超 FILE_BODY_MAX 时渲染侧截断并注明） */
+  rawChars: number;
+}
+/**
+ * 读一份条目 JSONL（纯读；64KB 截断口径由渲染侧执行，这里只解析）：
+ * 每行一个 JSON 对象取 text 与 tags（非字符串 tags 项丢弃），坏行/空行/缺 text 行跳过。
+ * 文件不在场 / 读失败 / 零有效条目 → undefined（调用方退回指引文案）。
+ */
+export declare function readStoreEntries(file: string): StoreEntriesRead | undefined;
 /** 扫描已知记忆文件（纯读；deps.home/cwd 可注入，缺省真实 home / 无项目级） */
 export declare function scanMemorySources(deps?: {
   home?: string;
@@ -977,5 +1135,5 @@ export declare const name = "dsh-takeover";
 export declare const inject: string[];
 export declare function apply(ctx: Context): void;
 //#endregion
-export type { ApplyResult, BackupResult, BackupRow, CardAxis, CardPayload, DryRunResult, ForeignCandidate, ForeignEnv, ForeignListResult, ForeignListRow, ForeignPreviewResult, ForeignProvider, ForeignReadArgs, ForeignReadResult, ForeignReaders, ForeignResolve, ForeignSkeleton, ForeignSummary, ForeignTurn, InboxItem, InboxListResult, InboxLoadResult, MemoryPushArgs, MemoryPushResult, MemorySourceDef, MemorySourceRow, OutboundTarget, PendingRow, ProbeResult, ProviderRow, PushArgs, PushResult, RepoBaseline, RestoreDiffRow, ResumeSkillSpec, ScopeFile, SessionControllerLike, SessionFacts, SyncConfig, SyncOutcome, SyncStatus, TakeoverMode, TakeoverOutcome, TakeoverState, TakeoverSwitches };
+export type { ApplyResult, BackupManifestRead, BackupResult, BackupRow, CardAxis, CardPayload, ConfigCardPayload, ConfigCardResult, DryRunResult, ForeignCandidate, ForeignEnv, ForeignListResult, ForeignListRow, ForeignPreviewResult, ForeignProvider, ForeignReadArgs, ForeignReadResult, ForeignReaders, ForeignResolve, ForeignSkeleton, ForeignSummary, ForeignTurn, HistoryItem, InboxHistoryResult, InboxItem, InboxListResult, InboxLoadResult, ManifestFileRow, MemoryPushArgs, MemoryPushResult, MemorySourceDef, MemorySourceRow, MemoryStoreDef, MemoryStoreEntry, OutboundTarget, PendingRow, ProbeResult, ProviderRow, PushArgs, PushResult, RepoBaseline, RestoreDiffRow, ResumeSkillSpec, ScopeFile, SessionControllerLike, SessionFacts, StoreEntriesRead, SyncConfig, SyncOutcome, SyncStatus, TakeoverMode, TakeoverOutcome, TakeoverState, TakeoverSwitches };
 //# sourceMappingURL=index.d.ts.map

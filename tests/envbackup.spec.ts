@@ -8,10 +8,11 @@
  * - 范围容错（缺文件不算错）+ 黑名单目录（node_modules）不进包 + 修剪留 3
  */
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import test from 'node:test'
+import { parseCard, renderCard } from '@agent-handoff/core'
 import {
   applyRestore,
   collectScopeFiles,
@@ -20,9 +21,11 @@ import {
   envBackupDir,
   listBackups,
   pruneBackups,
+  readBackupManifest,
   rollbackRestore,
   validateRelPath,
 } from '../src/envbackup.ts'
+import { inboxLoad, pushConfigCard } from '../src/tools.ts'
 
 const PASS = 'correct-horse-8'
 
@@ -170,6 +173,84 @@ test('范围容错 + 黑名单：缺失文件不算错；node_modules 永不进�
     }
     assert.equal(pruneBackups(3, home), 2)
     assert.equal(listBackups(home).length, 3)
+  } finally {
+    rmRf(root); rmRf(home)
+  }
+})
+
+// ---------- 配置轴转正（D5 裁决）：readBackupManifest + pushConfigCard（清单+指针出卡） ----------
+
+test('readBackupManifest：口令解密取清单（path/sha256/category 齐全），bytes=密文包本体；错口令诚实失败', () => {
+  const root = fakeUserHome('f')
+  const home = mkdtempSync(join(tmpdir(), 'dsh-env-home-f-'))
+  try {
+    createBackup(PASS, home, root)
+    const { file } = listBackups(home)[0]!
+    const m = readBackupManifest(file, PASS, home)
+    assert.equal(m.file, file)
+    assert.ok(m.files.length >= 8, `清单应齐：${m.files.length}`)
+    const cred = m.files.find((f) => f.path === '.dsh/.credentials.yaml')
+    assert.ok(cred, '凭据类文件路径/类别照报（内容只在加密包里）')
+    assert.equal(cred?.category, 'dsh-core')
+    assert.match(cred?.sha256 ?? '', /^[0-9a-f]{64}$/)
+    assert.equal(m.bytes, statSync(join(envBackupDir(home), file)).size, 'bytes = 密文包本体大小（指针口径）')
+    assert.ok(m.createdAt !== '' && m.host !== '')
+    // 错口令：GCM 认证失败诚实报错
+    assert.throws(() => readBackupManifest(file, 'wrong-passphrase', home), /解密失败/)
+    // 非 .dshenv 文件名拒收
+    assert.throws(() => readBackupManifest('nope.zip', PASS, home), /不合法/)
+  } finally {
+    rmRf(root); rmRf(home)
+  }
+})
+
+test('pushConfigCard round-trip：清单+指针成 axis=config/payload=manifest 载荷卡；round-trip 不丢；口令不进卡', () => {
+  const root = fakeUserHome('g')
+  const home = mkdtempSync(join(tmpdir(), 'dsh-env-home-g-'))
+  try {
+    // 无备份 → 规范报错
+    const none = pushConfigCard({ passphrase: PASS }, { dir: home })
+    assert.equal(none.ok, false)
+    if (!none.ok) assert.match(none.error, /没有可出卡的环境备份/)
+    // 短口令拒收（不碰加密清单）
+    createBackup(PASS, home, root)
+    const { file } = listBackups(home)[0]!
+    const short = pushConfigCard({ passphrase: 'short' }, { dir: home })
+    assert.equal(short.ok, false)
+    if (!short.ok) assert.match(short.error, /8 位/)
+    const r = pushConfigCard({ passphrase: PASS }, { dir: home })
+    assert.equal(r.ok, true)
+    if (!r.ok) return
+    assert.equal(r.file, file, '缺省取最近一次备份')
+    const raw = readFileSync(join(home, 'pending', `${r.id}.md`), 'utf-8')
+    const card = parseCard(raw)
+    // 四轴立约：config 轴 + manifest 载荷
+    assert.equal(card.extras['axis'], 'config')
+    assert.equal(card.extras['payload'], 'manifest')
+    const cfg = card.extras['config'] as { backupFile: string; bytes: number; createdAt: string; host: string; secretCount: number; files: Array<{ path: string; sha256: string; category: string }> }
+    assert.equal(cfg.backupFile, file)
+    assert.ok(cfg.bytes > 0, '密文包指针 bytes 在场')
+    assert.equal(cfg.secretCount, 3, '凭据类计数如实（与备份一致）')
+    assert.ok(cfg.files.some((f) => f.path === '.dsh/.credentials.yaml' && f.category === 'dsh-core' && /^[0-9a-f]{64}$/.test(f.sha256)))
+    // 双重 round-trip：renderCard → parseCard，config 嵌套载荷（对象数组过迷你 YAML）逐值等值
+    const again = parseCard(renderCard(card))
+    assert.equal(again.extras['axis'], 'config')
+    assert.deepEqual(again.extras['config'], cfg)
+    // 口令永不进卡
+    assert.doesNotMatch(raw, new RegExp(PASS))
+    // 六段口径：清单路径+指纹在 files 段、恢复三步在 suggested
+    assert.match(raw, /\.dsh\/\.credentials\.yaml/)
+    assert.match(raw, /sha256=/)
+    assert.match(raw, /action=dry/)
+    assert.match(raw, /HISTORY_REPORTED/)
+    // 签名全套纪律：机器信封随落（cardSha256 进签名面）
+    assert.ok(existsSync(join(home, 'pending', `${r.id}.envelope.json`)), '信封应随卡落 pending/')
+    // 取件回读：config 卡正常 load 且带回 axis
+    const load = inboxLoad(r.id, { dir: home })
+    assert.equal(load.ok, true)
+    if (!load.ok) return
+    assert.equal(load.axis, 'config')
+    assert.match(load.text, /备份清单 \d+ 个文件/)
   } finally {
     rmRf(root); rmRf(home)
   }

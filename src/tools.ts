@@ -17,7 +17,7 @@ import { augmentPatchWithUntracked, resolvePatchText, restoreGzipPatch, writePat
 import { recordLifecycleEvent } from './lifecycle.ts'
 import { loadOrCreateSigningKey, signEnvelope, verifyEnvelopeSig, type SigVerdict } from './signing.ts'
 import { syncNow, syncPull, syncPush, syncSetup, syncStatusLine, syncStatusOf, type SyncOutcome, type SyncStatus } from './sync.ts'
-import { applyRestore, createBackup, dryRunRestore, listBackups, rollbackRestore, type BackupRow, type RestoreDiffRow } from './envbackup.ts'
+import { applyRestore, createBackup, dryRunRestore, listBackups, readBackupManifest, rollbackRestore, type BackupRow, type RestoreDiffRow } from './envbackup.ts'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -31,6 +31,7 @@ import {
   collectGitSnapshot,
   collectPatch,
   generateId,
+  listArchivedReport,
   listPendingReport,
   loadCard,
   pendingDir,
@@ -165,9 +166,11 @@ export type CardAxis = 'session' | 'memory' | 'config'
 /**
  * 四轴 IR 立约——payload：载荷形态。
  * 'files'=原文件正文（卡里带原始文件内容，取件方原样吸收整份）；
- * 'distilled'=蒸馏条目（卡里带甄别过的条目，取件方按条目入库）。
+ * 'distilled'=蒸馏条目（卡里带甄别过的条目，取件方按条目入库）；
+ * 'manifest'=清单+指针（配置轴：卡里只带文件清单/哈希/类别与密文包指针，
+ * 不带货本体——本体在卡外按指针取，口令永不进卡）。
  */
-export type CardPayload = 'files' | 'distilled'
+export type CardPayload = 'files' | 'distilled' | 'manifest'
 
 /**
  * 寄存时刻的仓库基线：remote/head/branch 三元组。取件方据此在新机器上
@@ -222,6 +225,13 @@ export function baselineFromExtras(extras: unknown): RepoBaseline | undefined {
   if (typeof head !== 'string' && head !== null) return undefined
   if (typeof branch !== 'string') return undefined
   return { remote, head, branch }
+}
+
+/** 从卡片 extras 防御式取四轴标记（闭集外/坏数据一律 undefined——外来卡无 axis 按旧卡处理） */
+export function axisFromExtras(extras: unknown): CardAxis | undefined {
+  if (extras === null || typeof extras !== 'object') return undefined
+  const a = (extras as Record<string, unknown>)['axis']
+  return a === 'session' || a === 'memory' || a === 'config' ? a : undefined
 }
 
 /** 恢复指引单值净化：控制字符压成空格 + 截断——多行/超长的外来值不打碎四步行结构 */
@@ -477,9 +487,11 @@ export function renderInbox(_args: unknown, value: unknown): Array<{ type: 'text
   const v = value as {
     ok?: boolean
     action?: string
-    cards?: Array<{ id: string; from: string; project: string; pushed_at: string }>
+    cards?: Array<{ id: string; from?: string; title?: string; project?: string; pushed_at: string; stopped?: string; supersedes?: string }>
+    total?: number
     skipped?: number
     text?: string
+    axis?: CardAxis
     mismatches?: string[]
     unavailable?: string
     coverage?: unknown
@@ -502,14 +514,28 @@ export function renderInbox(_args: unknown, value: unknown): Array<{ type: 'text
   if (v.action === 'list') {
     const cards = v.cards ?? []
     if (cards.length === 0 && !v.skipped) return [{ type: 'text', text: '📭 收件箱为空（~/.handoff/pending/ 无待取件）' }]
-    const lines = cards.map((c, i) => `${i + 1}. ${c.id}｜来自 ${c.from}｜项目 ${c.project || '（无）'}｜${c.pushed_at || '（无时间）'}`)
+    const lines = cards.map((c, i) => `${i + 1}. ${c.id}｜来自 ${c.from ?? '（未知来源）'}｜项目 ${c.project || '（无）'}｜${c.pushed_at || '（无时间）'}`)
     if (typeof v.skipped === 'number' && v.skipped > 0) {
       lines.push(`（另有 ${v.skipped} 张坏卡被跳过，详见宿主日志）`)
     }
     return [{ type: 'text', text: `📬 待取件 ${cards.length} 张：\n${lines.join('\n')}\n\n取件：handoff_inbox({ action: "load", id: "<id>" })` }]
   }
+  // history：卡链检索（archived/ 按时间正序，接力链 supersedes 一并报出）
+  if (v.action === 'history') {
+    const cards = v.cards ?? []
+    if (cards.length === 0) return [{ type: 'text', text: '🗂️ 卡链历史为空（archived/ 无匹配卡——用 project / cwd 缩小或放宽过滤）' }]
+    const lines = cards.map((c, i) =>
+      `${i + 1}. ${c.id}｜${c.title || '（无标题）'}｜${c.pushed_at || '（无时间）'}${typeof c.supersedes === 'string' && c.supersedes !== '' ? `｜接替 ${c.supersedes}` : ''}\n   停在：${c.stopped || '（无停点记录）'}`,
+    )
+    const total = typeof v.total === 'number' ? v.total : cards.length
+    return [{ type: 'text', text: `🕘 卡链历史（archived/ 匹配 ${total} 张，时间正序取尾 ${cards.length} 张）：\n${lines.join('\n')}` }]
+  }
   // load
   const lines = ['📥 已取件（消费即弃，卡片已归档）：', '', v.text ?? '']
+  // 吸收回执提示：memory 轴卡取件即注入完成，按建议加载段吸收（生命周期已记 memory-absorbed）
+  if (v.axis === 'memory') {
+    lines.push('🧠 记忆已随卡注入，按建议加载段吸收')
+  }
   const patchPath = typeof v.patchPath === 'string' ? v.patchPath : undefined
   if (patchPath !== undefined) {
     const kb = typeof v.patchBytes === 'number' ? `${Math.max(1, Math.round(v.patchBytes / 1024))} KB` : '? KB'
@@ -799,6 +825,9 @@ ${honest}`
         coverage,
         ...(secretHits.length > 0 && args.allowSecrets === true ? { secretsBypass: secretHits.map((h) => `${h.rule}@${h.section}`) } : {}),
         ...(baseline !== undefined ? { baseline } : {}),
+        // 接力链进 extras：信封随取件消费即弃，archived 卡只剩卡面——卡链检索
+        // （handoff_inbox action=history）要报 supersedes 就得靠这个持久通道
+        ...(typeof args.supersedes === 'string' && args.supersedes.trim() !== '' ? { supersedes: args.supersedes.trim() } : {}),
         ...(opts?.extras ?? {}),
       },
     }
@@ -919,6 +948,67 @@ export function inboxList(opts?: { dir?: string }): InboxListResult {
   }
 }
 
+// ---------------------------------------------------------------------------
+// A2b. 卡链检索：archived/ 已归档卡按 project / cwd 回查（接力链可溯）
+// ---------------------------------------------------------------------------
+
+/** 卡链历史单卡上限条数（与 core ARCHIVED_KEEP=50 同量级——再早的已被滚动归档淘汰） */
+export const HISTORY_TAIL_MAX = 50
+/** stopped 摘要截断（够辨认停点，不把卡正文搬进返回值） */
+export const HISTORY_STOPPED_MAX = 120
+
+/** 卡链历史单行（type 别名：JsonValue 契约要隐式索引签名，InboxItem 同款） */
+export type HistoryItem = {
+  id: string
+  title: string
+  pushed_at: string
+  /** 「停在哪」段摘要（截 HISTORY_STOPPED_MAX；控制字符已剥离） */
+  stopped: string
+  /** 本卡接替的前置卡 id（extras.supersedes；旧卡/无接力缺省） */
+  supersedes?: string
+}
+
+export type InboxHistoryResult =
+  | { ok: true; action: 'history'; cards: HistoryItem[]; total: number; project?: string; cwd?: string }
+  | { ok: false; error: string }
+
+/**
+ * 卡链检索：按 project 或 cwd 查 archived/ 已归档卡（复用 core listArchivedReport，
+ * 坏卡照旧跳过并忽略）。时间正序（pushed_at 字典序——同机卡共享时区口径），取尾
+ * HISTORY_TAIL_MAX 条；两个过滤条件都给 = AND，都不给 = 全量回查。
+ * supersedes 取自卡面 extras（寄存时随 extras 持久化——信封取件即弃，卡面才是持久通道）。
+ */
+export function inboxHistory(opts?: { dir?: string; project?: string; cwd?: string }): InboxHistoryResult {
+  try {
+    const project = typeof opts?.project === 'string' ? opts.project.trim() : ''
+    const cwd = typeof opts?.cwd === 'string' ? opts.cwd.trim() : ''
+    const report = listArchivedReport(opts?.dir)
+    const rows: HistoryItem[] = report.cards
+      .filter((c) => (project === '' || c.project === project) && (cwd === '' || c.cwd === cwd))
+      .map((c) => {
+        const sup = (c.extras as Record<string, unknown> | undefined)?.['supersedes']
+        return {
+          id: c.id,
+          title: c.from.title,
+          pushed_at: c.pushed_at,
+          stopped: stripControlChars(c.sections.stopped ?? '').slice(0, HISTORY_STOPPED_MAX),
+          ...(typeof sup === 'string' && sup !== '' ? { supersedes: sup } : {}),
+        }
+      })
+      .sort((a, b) => a.pushed_at.localeCompare(b.pushed_at))
+    return {
+      ok: true,
+      action: 'history',
+      cards: rows.slice(-HISTORY_TAIL_MAX),
+      total: rows.length,
+      ...(project !== '' ? { project } : {}),
+      ...(cwd !== '' ? { cwd } : {}),
+    }
+  } catch (e) {
+    return { ok: false, error: readableError(e) }
+  }
+}
+
 export type InboxLoadResult =
   | {
       ok: true
@@ -927,6 +1017,8 @@ export type InboxLoadResult =
       text: string
       mismatches: string[]
       unavailable?: string
+      /** 卡内 extras.axis 四轴标记（防御式提取，外来旧卡缺省） */
+      axis?: CardAxis
       /** 卡内 extras.coverage（防御式提取，外来卡/坏数据缺省） */
       coverage?: CoverageStats
       /** 随卡消费的机器信封 JSON 字符数；卡无信封（旧卡/外写卡）缺省 */
@@ -974,6 +1066,12 @@ export function inboxLoad(id: string, opts?: { dir?: string }): InboxLoadResult 
     const patchArchived = consumePatch(trimmed, opts?.dir)
     const coverage = coverageFromExtras(card.extras)
     const baseline = baselineFromExtras(card.extras)
+    const axis = axisFromExtras(card.extras)
+    // 吸收回执：memory 轴卡取件即「记忆已随卡注入」——正向生命周期事件（闭集
+    // 'memory-absorbed'），取件方按建议加载段吸收的账本留痕；detail 不落卡正文
+    if (axis === 'memory') {
+      recordLifecycleEvent({ stage: 'read', reason: 'memory-absorbed', target: card.id, detail: 'memory 轴卡已取件，按建议加载段吸收' }, opts?.dir)
+    }
     // 信封验签：sig 缺席（旧卡/外写卡）不算异常；mac 不合或卡面哈希与签名面不符 = 篡改/损坏，进警告 + 死亡地图
     const sigVerdict: SigVerdict = envelope?.data !== undefined
       ? verifyEnvelopeSig(envelope.data, opts?.dir, cardShaBeforeLoad)
@@ -996,6 +1094,7 @@ export function inboxLoad(id: string, opts?: { dir?: string }): InboxLoadResult 
     } else if (check.unavailable !== undefined && check.unavailable !== '') {
       recordLifecycleEvent({ stage: 'pickup', reason: 'git_unavailable', target: card.id, detail: check.unavailable.slice(0, 120) }, opts?.dir)
     }
+    if (axis !== undefined) out.axis = axis
     if (coverage !== undefined) out.coverage = coverage
     if (baseline !== undefined) out.baseline = baseline
     if (envelopeChars !== undefined) out.envelopeChars = envelopeChars
@@ -1159,10 +1258,12 @@ export function registerPushTool(ctx: Context): void {
 export function registerInboxTool(ctx: Context): void {
   ctx.tools.register(defineTool({
     name: 'handoff_inbox',
-    description: '交接卡片收件箱：action=list 列 ~/.handoff/pending/ 待取件（id/来源/项目/时间）；action=load + id 取件（消费即弃，卡片移到 archived/，随卡消费机器信封，附 git 核验 MISMATCH/UNAVAILABLE 警告与四态覆盖率；卡带仓库基线 baseline 时输出 clone → checkout → apply → 跑测试四步恢复指引）。返回 { ok, ... } 规范值。',
+    description: '交接卡片收件箱：action=list 列 ~/.handoff/pending/ 待取件（id/来源/项目/时间）；action=load + id 取件（消费即弃，卡片移到 archived/，随卡消费机器信封，附 git 核验 MISMATCH/UNAVAILABLE 警告与四态覆盖率；卡带仓库基线 baseline 时输出 clone → checkout → apply → 跑测试四步恢复指引；memory 轴卡输出「记忆已随卡注入」吸收提示）；action=history 按 project 或 cwd 回查 archived/ 已归档卡（卡链检索：id/标题/寄存时刻/停点摘要/接替 supersedes，时间正序尾 50 条）。返回 { ok, ... } 规范值。',
     parameters: {
-      action: { type: 'string', required: true, enum: ['list', 'load'], description: 'list 列待取件；load 取件（消费即弃）' },
+      action: { type: 'string', required: true, enum: ['list', 'load', 'history'], description: 'list 列待取件；load 取件（消费即弃）；history 卡链检索（查 archived/）' },
       id: { type: 'string', description: 'load 必填：卡片 id' },
+      project: { type: 'string', description: 'history：按项目名过滤 archived/ 卡（与 cwd 同时给则为 AND）' },
+      cwd: { type: 'string', description: 'history：按工作目录过滤 archived/ 卡（与 project 同时给则为 AND）' },
     },
     output: {
       schema: {
@@ -1171,7 +1272,8 @@ export function registerInboxTool(ctx: Context): void {
         properties: {
           ok: { type: 'boolean', description: '操作是否成功' },
           action: { type: 'string', description: '实际执行的动作' },
-          cards: { type: 'json', description: 'list：待取件摘要数组' },
+          cards: { type: 'json', description: 'list：待取件摘要数组；history：卡链历史数组 [{ id, title, pushed_at, stopped, supersedes? }]' },
+          total: { type: 'number', description: 'history：过滤命中的总数（返回值为时间正序尾 50 条）' },
           id: { type: 'string', description: 'load：取到的卡片 id' },
           text: { type: 'string', description: 'load：卡片全文（frontmatter + 六段）' },
           mismatches: { type: 'json', description: 'load：git 核验冲突（MISMATCH）' },
@@ -1184,8 +1286,9 @@ export function registerInboxTool(ctx: Context): void {
       },
       render: renderInbox,
     },
-    async execute(args: { action?: string; id?: string }, exec: { agent?: Agent; signal?: AbortSignal }) {
+    async execute(args: { action?: string; id?: string; project?: string; cwd?: string }, exec: { agent?: Agent; signal?: AbortSignal }) {
       if (args.action === 'list') return inboxList()
+      if (args.action === 'history') return inboxHistory({ project: args.project, cwd: args.cwd })
       if (args.action === 'load') {
         const result = inboxLoad(args.id ?? '')
         // 取件成功后的宿主通知（同 push：阻塞式问答面板，失败静默降级）
@@ -1196,7 +1299,7 @@ export function registerInboxTool(ctx: Context): void {
         }
         return result
       }
-      return { ok: false, error: `未知 action：${String(args.action)}（支持 list / load）` }
+      return { ok: false, error: `未知 action：${String(args.action)}（支持 list / load / history）` }
     },
   }))
 }
@@ -1284,19 +1387,162 @@ function renderSync(_args: unknown, value: unknown): Array<{ type: 'text'; text:
   return [{ type: 'text', text: lines.join('\n') }]
 }
 
+// ---------------------------------------------------------------------------
+// A3. 配置轴转正：备份清单 → axis='config' 载荷卡（清单+指针，密文 blob 留 env-backup/）
+// ---------------------------------------------------------------------------
+
+/** 配置卡 extras.config 结构化载荷：清单 + 指针（不含任何文件内容，口令永不进卡） */
+export interface ConfigCardPayload {
+  /** 密文备份文件名（.dshenv，指针） */
+  backupFile: string
+  /** 密文包本体字节数（指针口径） */
+  bytes: number
+  /** 备份时刻（容器 manifest.createdAt） */
+  createdAt: string
+  /** 源机主机名 */
+  host: string
+  /** 凭据类文件计数（如实告知包内有几件只存在于加密包内的东西） */
+  secretCount: number
+  /** 清单行：path/sha256/category（不含内容与口令） */
+  files: Array<{ path: string; sha256: string; category: string }>
+}
+
+export type ConfigCardResult =
+  | { ok: true; id: string; path: string; file: string; bytes: number; files: number; note?: string }
+  | { ok: false; error: string }
+
+/**
+ * 配置轴出卡核心（handoff_env action=card / 换机面板共用）：把最近一次备份的
+ * 清单（files[{path,sha256,category}] + backupFile + bytes）写成 axis='config'
+ * 载荷卡——writeCard + 机器信封签名全套纪律（cardSha256 进签名面，与 pushHandoff
+ * 同款尽力签名：密钥缺席信封照落、落盘失败不回滚卡片）。密文 blob 仍在
+ * env-backup/（卡只带清单+指针，随 HANDOFF_HOME 同步盘走）；口令只用于读加密
+ * 清单，永不进卡六段与 extras。args.file 缺省取最近一次备份（listBackups 首项）。
+ */
+export function pushConfigCard(
+  args: { file?: string; passphrase?: string; title?: string },
+  opts?: { dir?: string },
+): ConfigCardResult {
+  try {
+    const passphrase = typeof args.passphrase === 'string' ? args.passphrase : ''
+    if (passphrase.length < 8) {
+      return { ok: false, error: '口令至少 8 位（读加密清单必需；口令永不进卡，也永不落盘）' }
+    }
+    // 选备份：显式 file 优先（取末段文件名防目录走私），否则最近一次
+    const explicit = typeof args.file === 'string' ? args.file.trim().split('\\').join('/').split('/').pop() ?? '' : ''
+    const name = explicit !== '' ? explicit : (listBackups(opts?.dir)[0]?.file ?? '')
+    if (name === '') {
+      return { ok: false, error: '没有可出卡的环境备份：先 handoff_env action=backup 生成 .dshenv 加密包' }
+    }
+    const m = readBackupManifest(name, passphrase, opts?.dir)
+    const kb = (n: number): string => (n >= 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${n} B`)
+    // 六段组装（段闸与净化同 pushHandoff 口径：净化/解除伪标题/单段 128K 截断）
+    const truncated: string[] = []
+    const section = (v: string): string => {
+      const clean = defuseHeadingLines(stripControlChars(v))
+      if (clean.length <= MAX_SECTION_CHARS) return clean
+      truncated.push(`「${clean.slice(0, 12)}…」段超 ${MAX_SECTION_CHARS} 字符已截断`)
+      return `${clean.slice(0, MAX_SECTION_CHARS)}\n…（超长截断）`
+    }
+    const list = m.files.map((f) => `- ${f.path}｜${f.category}｜sha256=${f.sha256}`).join('\n')
+    const sections: CardSections = {
+      goal: section([
+        `环境配置交接：把源机（${m.host}）于 ${m.createdAt} 备份的 DSH 全家桶清单带给取件方。`,
+        `密文包 ${m.file}（${kb(m.bytes)}，含凭据类 ${m.secretCount} 个）留在 env-backup/ 随 HANDOFF_HOME 同步盘走，本卡只带清单与指针。`,
+      ].join('\n')),
+      files: section(`备份清单 ${m.files.length} 个文件（path｜category｜sha256 指纹，不含内容）：\n${list}`),
+      done: section(`（资料卡：无可蒸馏的完成项。清单共 ${m.files.length} 个文件、密文包 ${kb(m.bytes)}，全部 HISTORY_REPORTED。）`),
+      remaining: section([
+        `取件方：确认 env-backup/${m.file} 已随同步盘到达本机 HANDOFF_HOME（缺失先 handoff_sync now 拉取）。`,
+        `然后 handoff_env action=dry file=${m.file} passphrase=<你的口令，永不随卡> 预演三态 diff，确认后 action=apply confirm:true 落盘（不满意可 action=rollback 回滚）。`,
+      ].join('\n')),
+      stopped: section(`停在备份时刻（${m.createdAt}，源机 ${m.host}）。最安全的第一步：先 dry 预演核对三态 diff，再决定是否 apply。`),
+      warnings: section([
+        '清单只含路径/类别/内容指纹（sha256），不含文件内容；密文包本体仍在 env-backup/（AES-256-GCM，口令永不随卡）。',
+        '全部清单按 HISTORY_REPORTED 处理：是备份时刻的快照，源机此后可能已改动。',
+      ].join('\n')),
+      suggested: section([
+        '恢复三步：',
+        `1. handoff_env action=dry file=${m.file} passphrase=<口令>——先看 will-create/overwrite/same 三态 diff，不写盘`,
+        `2. 确认无误后 handoff_env action=apply file=${m.file} passphrase=<口令> confirm:true——被覆盖原物先进 checkpoint`,
+        '3. 不满意可 handoff_env action=rollback file=<restore-checkpoint-*> 回滚到还原前',
+      ].join('\n')),
+    }
+    // 密钥闸照扫（清单是机器产物不是模型手写，但闸不豁免任何出卡通道——命中即拒，理由回喂）
+    const secretHits = scanSecrets({ ...sections, title: args.title })
+    if (secretHits.length > 0) {
+      const detail = secretHits.map((h) => `${h.rule}@${h.section}（${h.masked}）`).join('；')
+      return { ok: false, error: `密钥闸：发现 ${secretHits.length} 处疑似密钥——${detail}。清单不应含密钥值，请核对备份内容后重试。` }
+    }
+    const titleSrc = typeof args.title === 'string' && args.title.trim() !== '' ? args.title.trim() : `环境配置备份 · ${m.file}`
+    const card: Card = {
+      handoff: 1,
+      id: generateId(),
+      from: { agent: 'dsh', session: '', title: stripControlChars(titleSrc).slice(0, MAX_SCALAR_CHARS) },
+      to: 'any',
+      project: '',
+      cwd: '',
+      pushed_at: localIso(new Date()),
+      git: { branch: '', changed: [] },
+      tasks: [],
+      sections,
+      extras: {
+        // 四轴 IR 立约：配置卡是 config 轴载荷，形态为 manifest（清单+指针，不带货本体）
+        axis: 'config' satisfies CardAxis,
+        payload: 'manifest' satisfies CardPayload,
+        coverage: coverageOfDone(sections.done),
+        config: {
+          backupFile: m.file,
+          bytes: m.bytes,
+          createdAt: m.createdAt,
+          host: m.host,
+          secretCount: m.secretCount,
+          files: m.files.map((f) => ({ path: f.path, sha256: f.sha256, category: f.category })),
+        } satisfies ConfigCardPayload,
+      } as Record<string, unknown>,
+    }
+    const path = writeCard(card, opts?.dir)
+    // 机器信封 + 签名全套纪律（与 pushHandoff 同款：尽力签名，失败只降级不回滚卡片）
+    let envelopeNote = ''
+    try {
+      const key = loadOrCreateSigningKey(opts?.dir)
+      const env = buildEnvelope(card, {
+        cardSha256: fileSha256(join(pendingDir(opts?.dir), `${card.id}.md`)),
+      })
+      writeFileSync(envelopePath(card.id, opts?.dir), JSON.stringify(key === null ? env : signEnvelope(env as unknown as Record<string, unknown>, key)), 'utf-8')
+    } catch (e) {
+      envelopeNote = `机器信封落盘失败（卡片本体已寄存）：${readableError(e)}`
+    }
+    const note = [...truncated, envelopeNote].filter(Boolean).join('；')
+    return {
+      ok: true,
+      id: card.id,
+      path,
+      file: m.file,
+      bytes: m.bytes,
+      files: m.files.length,
+      ...(note !== '' ? { note } : {}),
+    }
+  } catch (e) {
+    return { ok: false, error: readableError(e) }
+  }
+}
+
 /**
  * 环境备份/恢复（0.2.0 wave2）：DSH 全家桶单文件加密备份 + 跨机还原。
  * apply 必须先 dry 预演再 confirm（覆盖性动作两步确认）；口令永不落盘（工具入参会
  * 进会话转录，敏感场景用面板输入）。凭据类文件只存在于加密包内。
+ * 配置轴转正（2026-11 裁决 D5）：action=card 把最近备份清单写成 axis='config'
+ * 载荷卡（清单+指针），密文 blob 仍在 env-backup/。
  */
 export function registerEnvBackupTool(ctx: Context): void {
   ctx.tools.register(defineTool({
     name: 'handoff_env',
-    description: '环境备份/恢复：把 DSH 全家桶（settings/插件登记/会话库/用户 skills/工作区登记）打包成单个 AES-256-GCM 加密文件（口令 scrypt 派生，口令不落盘），随换机同步跨机；新机器 dry 预演（新建/覆盖/相同三态 diff）→ confirm 还原 → 可 rollback 回滚到还原前。凭据类文件（credentials/typesafe-key 等）只存在于加密包内。返回 { ok, ... } 规范值。',
+    description: '环境备份/恢复：把 DSH 全家桶（settings/插件登记/会话库/用户 skills/工作区登记）打包成单个 AES-256-GCM 加密文件（口令 scrypt 派生，口令不落盘），随换机同步跨机；新机器 dry 预演（新建/覆盖/相同三态 diff）→ confirm 还原 → 可 rollback 回滚到还原前。凭据类文件（credentials/typesafe-key 等）只存在于加密包内。action=card 配置轴出卡：把最近一次备份的清单（files[{path,sha256,category}] + backupFile + bytes）写成 axis=\'config\' 载荷卡寄存进共享收件箱（writeCard + 信封签名全套纪律；密文 blob 仍在 env-backup/，卡只带清单+指针，口令永不进卡）。返回 { ok, ... } 规范值。',
     parameters: {
-      action: { type: 'string', required: true, enum: ['backup', 'dry', 'apply', 'rollback', 'list'], description: 'backup 打包加密备份（passphrase 必填 ≥8 位）；dry 还原预演（file+passphrase）；apply 确认还原（file+passphrase+confirm:true）；rollback 回滚 checkpoint（file=checkpoint 目录名）；list 列备份' },
-      passphrase: { type: 'string', description: 'backup/dry/apply 必填：加密口令（≥8 位，永不落盘；注意会进本会话转录——敏感场景用面板输入）' },
-      file: { type: 'string', description: 'dry/apply：备份文件名；rollback：checkpoint 目录名（restore-checkpoint-*）' },
+      action: { type: 'string', required: true, enum: ['backup', 'dry', 'apply', 'rollback', 'list', 'card'], description: 'backup 打包加密备份（passphrase 必填 ≥8 位）；dry 还原预演（file+passphrase）；apply 确认还原（file+passphrase+confirm:true）；rollback 回滚 checkpoint（file=checkpoint 目录名）；list 列备份；card 备份清单出配置轴卡（passphrase 必填；file 缺省取最近一次）' },
+      passphrase: { type: 'string', description: 'backup/dry/apply/card 必填：加密口令（≥8 位，永不落盘；注意会进本会话转录——敏感场景用面板输入）' },
+      file: { type: 'string', description: 'dry/apply/card：备份文件名（card 缺省取最近一次）；rollback：checkpoint 目录名（restore-checkpoint-*）' },
       confirm: { type: 'boolean', description: 'apply 必须显式 true（覆盖性动作的两步确认）' },
     },
     output: {
@@ -1308,6 +1554,8 @@ export function registerEnvBackupTool(ctx: Context): void {
           action: { type: 'string', description: '实际执行的动作' },
           detail: { type: 'string', description: '结果摘要' },
           file: { type: 'string', description: '备份文件名 / checkpoint 目录名' },
+          id: { type: 'string', description: 'card：配置轴载荷卡 id' },
+          path: { type: 'string', description: 'card：载荷卡落盘路径' },
           creates: { type: 'number', description: 'dry：将新建的文件数' },
           overwrites: { type: 'number', description: 'dry：将覆盖的文件数' },
           same: { type: 'number', description: 'dry：内容相同的文件数' },
@@ -1341,7 +1589,12 @@ export function registerEnvBackupTool(ctx: Context): void {
           return { ok: true, action, detail: r.detail }
         }
         if (action === 'list') return { ok: true, action, backups: listBackups(), detail: `共 ${listBackups().length} 个备份（保留最新 3 个）` }
-        return { ok: false, action, error: `未知 action：${action}（支持 backup / dry / apply / rollback / list）` }
+        if (action === 'card') {
+          const r = pushConfigCard({ file: args.file, passphrase: args.passphrase })
+          if (!r.ok) return { ok: false, action, error: r.error }
+          return { ok: true, action, id: r.id, path: r.path, file: r.file, detail: `配置轴载荷卡已寄存：${r.id}（清单 ${r.files} 个文件 + 密文包指针 ${r.file}，${Math.max(1, Math.round(r.bytes / 1024))} KB——密文 blob 仍在 env-backup/，口令未进卡）${r.note !== undefined ? `；${r.note}` : ''}` }
+        }
+        return { ok: false, action, error: `未知 action：${action}（支持 backup / dry / apply / rollback / list / card）` }
       } catch (e) {
         return { ok: false, action, error: e instanceof Error ? e.message : String(e) }
       }
@@ -1354,6 +1607,8 @@ type EnvToolValue = {
   action?: string
   detail?: string
   file?: string
+  id?: string
+  path?: string
   creates?: number
   overwrites?: number
   same?: number

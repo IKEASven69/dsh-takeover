@@ -12,7 +12,7 @@ import test from 'node:test'
 import { EventEmitter } from 'node:events'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, existsSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import {
   humanChars,
   outboundCommand,
@@ -21,8 +21,10 @@ import {
 } from '../src/browser-view.ts'
 import {
   MEMORY_SOURCES,
+  MEMORY_STORES,
   memorySections,
   pushMemoryCard,
+  readStoreEntries,
   registerMemoryTool,
   scanMemorySources,
   type MemorySourceRow,
@@ -209,6 +211,114 @@ test('memorySections：六段齐全、来源清单进 goal/files、正文进 sug
     assert.match(s.suggested ?? '', /hippo export -f jsonl/)
     assert.match(s.suggested ?? '', /hippo import/)
     assert.doesNotMatch(s.suggested ?? '', /\/memory dump/)
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+})
+
+// ---------- memory.ts 记忆库掏取契约（通用 MEMORY_STORES 注册表） ----------
+
+test('readStoreEntries：逐行解析 {text, tags?}——坏行/缺 text 跳过、tags 非字符串项丢弃；文件缺席/零有效条目回 undefined', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'dsh-mem-store-'))
+  try {
+    const p = join(tmp, 'entries.jsonl')
+    writeFileSync(p, [
+      JSON.stringify({ text: '偏好 bun', tags: ['env', 42, null, 'pkg'] }),
+      'not json',
+      JSON.stringify({ noText: true }),
+      '',
+      JSON.stringify({ text: '用 pnpm' }),
+    ].join('\n'))
+    const r = readStoreEntries(p)
+    assert.ok(r, '有效条目在场应返回结果')
+    if (!r) return
+    assert.deepEqual(r.entries, [
+      { text: '偏好 bun', tags: ['env', 'pkg'] },
+      { text: '用 pnpm' },
+    ])
+    assert.ok(r.rawChars > 0)
+    // 文件不在场 → undefined
+    assert.equal(readStoreEntries(join(tmp, 'nope.jsonl')), undefined)
+    // 零有效条目（全坏行）→ undefined（调用方退回指引文案）
+    const empty = join(tmp, 'empty.jsonl')
+    writeFileSync(empty, 'not json\n{"nope":1}\n')
+    assert.equal(readStoreEntries(empty), undefined)
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+})
+
+test('通用掏取契约（假 store 两态）：entriesFile 在场掏条目进 suggested，缺席退回指引文案', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'dsh-mem-fakestore-'))
+  try {
+    const entriesFile = join(tmp, 'data', 'fake-entries.jsonl')
+    mkdirSync(join(tmp, 'data'), { recursive: true })
+    writeFileSync(entriesFile, `${JSON.stringify({ text: '假库条目一', tags: ['t1'] })}\n${JSON.stringify({ text: '假库条目二' })}\n`)
+    const fakeStore = {
+      id: 'fake-store',
+      label: '假记忆库',
+      entriesFile: (row: MemorySourceRow): string => join(dirname(row.path), 'fake-entries.jsonl'),
+      guidance: '（假库指引：先 fake export 导出条目 JSONL 再重新出卡。）',
+    }
+    // 在场：条目进「建议加载」段（64KB 截断口径内），指引文案不出现
+    const row = fakeRow({ key: 'fake-store', agent: '假记忆库', path: join(tmp, 'data', 'store-dir'), bytes: 0 })
+    const withEntries = memorySections([row], { target: 'any', at: '2026-11-14T00:00:00.000Z' }, { stores: [fakeStore] })
+    assert.match(withEntries.suggested ?? '', /假库条目一/)
+    assert.match(withEntries.suggested ?? '', /假库条目二/)
+    assert.match(withEntries.suggested ?? '', /\[t1\]/)
+    assert.doesNotMatch(withEntries.suggested ?? '', /假库指引/)
+    // 缺席（entriesFile 解析到另一目录）：退回该 store 的指引文案，条目不出现
+    const noFile = fakeRow({ key: 'fake-store', agent: '假记忆库', path: join(tmp, 'other', 'store-dir'), bytes: 0 })
+    const withGuidance = memorySections([noFile], { target: 'any', at: '2026-11-14T00:00:00.000Z' }, { stores: [fakeStore] })
+    assert.match(withGuidance.suggested ?? '', /假库指引/)
+    assert.doesNotMatch(withGuidance.suggested ?? '', /假库条目/)
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+})
+
+test('hippo 掏取接线：数据目录根的 hippo-memory.jsonl 在场掏条目，缺席退回 export/import 指引', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'dsh-mem-hippo-entries-'))
+  try {
+    mkdirSync(join(tmp, 'data', 'memories'), { recursive: true })
+    writeFileSync(join(tmp, 'data', 'hippo-memory.jsonl'), `${JSON.stringify({ text: 'hippo 记忆条目：偏好中文回复', tags: ['style'] })}\n`)
+    const row = fakeRow({ key: 'hippo-db', agent: 'dsh-hippo 记忆库', path: join(tmp, 'data', 'memories'), bytes: 0 })
+    // 在场：条目进卡（不再是纯指引）
+    const withEntries = memorySections([row], { target: 'any', at: '2026-11-14T00:00:00.000Z' })
+    assert.match(withEntries.suggested ?? '', /hippo 记忆条目：偏好中文回复/)
+    assert.doesNotMatch(withEntries.suggested ?? '', /hippo export -f jsonl/)
+    // 缺席：退回 export/import 指引（既有文案口径：hippo CLI JSONL 通路）
+    rmSync(join(tmp, 'data', 'hippo-memory.jsonl'), { force: true })
+    const withGuidance = memorySections([row], { target: 'any', at: '2026-11-14T00:00:00.000Z' })
+    assert.match(withGuidance.suggested ?? '', /hippo export -f jsonl/)
+    assert.match(withGuidance.suggested ?? '', /hippo import/)
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+})
+
+test('MEMORY_STORES：hippo 在册（id 对应 MEMORY_SOURCES 键、entriesFile 指数据目录根约定路径）', () => {
+  const store = MEMORY_STORES.find((s) => s.id === 'hippo-db')
+  assert.ok(store, 'hippo-db 应作为 store 注册项在册（不再是代码特例）')
+  if (!store) return
+  assert.match(store.label, /hippo/)
+  const row = fakeRow({ key: 'hippo-db', path: join('data', 'memories') })
+  const ef = store.entriesFile?.(row)
+  assert.ok(ef, 'hippo 应有 entriesFile 解析')
+  assert.match(ef ?? '', /hippo-memory\.jsonl$/, '约定路径：数据目录根的 hippo-memory.jsonl')
+})
+
+test('pushMemoryCard：store 条目随卡——hippo JSONL 在场时条目进卡「建议加载」段', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'dsh-mem-push-store-'))
+  try {
+    mkdirSync(join(tmp, 'data', 'memories'), { recursive: true })
+    writeFileSync(join(tmp, 'data', 'hippo-memory.jsonl'), `${JSON.stringify({ text: '条目随卡冒烟' })}\n`)
+    const scan = (): MemorySourceRow[] => [fakeRow({ key: 'hippo-db', agent: 'dsh-hippo 记忆库', path: join(tmp, 'data', 'memories'), bytes: 0 })]
+    const r = pushMemoryCard({ target: 'any' }, { scan, push: pushHandoff, dir: tmp })
+    assert.equal(r.ok, true)
+    if (!r.ok) return
+    const text = readFileSync(join(tmp, 'pending', `${r.id}.md`), 'utf-8')
+    assert.match(text, /条目随卡冒烟/, '条目 JSONL 内容应随卡进「建议加载」段')
   } finally {
     rmSync(tmp, { recursive: true, force: true })
   }

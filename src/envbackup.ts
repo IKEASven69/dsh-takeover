@@ -295,6 +295,45 @@ export function pruneBackups(keep = 3, dir?: string): number {
 
 // ---------- 动作 ----------
 
+/** 备份清单行（容器 manifest 的对外形态；配置轴出卡 / dry diff 共用） */
+export type ManifestFileRow = { path: string; bytes: number; sha256: string; category: string }
+
+export interface BackupManifestRead {
+  ok: true
+  /** 备份文件名（.dshenv） */
+  file: string
+  /** 密文包本体字节数（卡上「指针」的 bytes 口径） */
+  bytes: number
+  createdAt: string
+  host: string
+  secretCount: number
+  secretHits: number
+  /** 清单行（path/bytes/sha256/category，容器内解密所得） */
+  files: ManifestFileRow[]
+}
+
+/**
+ * 读一份备份的加密清单：口令解密容器取 manifest，**不触碰任何 blob 内容**——
+ * 配置轴出卡（handoff_env action=card / pushConfigCard）只把清单+指针写上卡，
+ * 密文 blob 原样留在 env-backup/。错口令 = GCM 认证失败诚实报错（同解包口径）。
+ */
+export function readBackupManifest(file: string, passphrase: string, dir?: string): BackupManifestRead {
+  const name = basenameSafe(file)
+  if (!name.endsWith('.dshenv')) throw new Error('备份文件名不合法（须为 .dshenv）')
+  const buf = readFileSync(join(envBackupDir(dir), name))
+  const m = unpackEncrypted(buf, passphrase)
+  return {
+    ok: true,
+    file: name,
+    bytes: buf.length,
+    createdAt: m.createdAt,
+    host: m.host,
+    secretCount: m.secretCount,
+    secretHits: m.secretHits,
+    files: m.files.map((f) => ({ ...f })),
+  }
+}
+
 export interface BackupResult {
   ok: true
   file: string

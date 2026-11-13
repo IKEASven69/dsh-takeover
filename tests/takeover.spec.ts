@@ -2,21 +2,23 @@
  * dsh-takeover 测试：卡片渲染/落盘、消费即弃、事件流探测降级、规范错误值。
  * 落盘一律走 HANDOFF_HOME 指到临时目录，不碰真实 ~/.handoff。
  */
-import { mkdtempSync, existsSync, readFileSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { parseCard, loadCard, listPending, listArchived } from '@agent-handoff/core'
+import { archivedDir, parseCard, loadCard, listPending, listArchived, renderCard } from '@agent-handoff/core'
 import {
   collectFacts,
   handoffHostNotice,
+  inboxHistory,
   inboxList,
   inboxLoad,
   probeSessionEvents,
   pushHandoff,
   todoToTasks,
 } from '../src/index.ts'
+import { renderInbox } from '../src/tools.ts'
 
 /** 造一个独立 HANDOFF_HOME 临时目录 */
 function tmpHome(): string {
@@ -219,6 +221,106 @@ test('核心层二次取件直接调用也报错（消费即弃协议语义）',
     if (!pushed.ok) return
     loadCard(pushed.id, dir)
     assert.throws(() => loadCard(pushed.id, dir), /收件箱无此待取件/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// ---------- 卡链检索（handoff_inbox action=history） ----------
+
+/** 造一张已归档卡（直写 archived/——历史回查是纯读面，绕开 pushHandoff 的 git 采集） */
+function archCard(dir: string, o: { id: string; title: string; project?: string; cwd?: string; pushed_at: string; stopped?: string; supersedes?: string }): void {
+  mkdirSync(archivedDir(dir), { recursive: true })
+  const card = {
+    handoff: 1,
+    id: o.id,
+    from: { agent: 'dsh', session: '', title: o.title },
+    to: 'any',
+    project: o.project ?? '',
+    cwd: o.cwd ?? '',
+    pushed_at: o.pushed_at,
+    git: { branch: '', changed: [] },
+    tasks: [],
+    sections: { goal: '', files: '', done: '', remaining: '', stopped: o.stopped ?? '', warnings: '' },
+    extras: { axis: 'session', ...(o.supersedes !== undefined ? { supersedes: o.supersedes } : {}) },
+  }
+  writeFileSync(join(archivedDir(dir), `${o.id}.md`), renderCard(card as Parameters<typeof renderCard>[0]), 'utf-8')
+}
+
+test('history：按 project / cwd 回查 archived/——返回 id/title/pushed_at/stopped 摘要/supersedes，时间正序', () => {
+  const dir = tmpHome()
+  try {
+    archCard(dir, { id: 'ho-h1-aaaa', title: '早卡', project: 'alpha', cwd: 'D:/work/alpha', pushed_at: '2026-11-13T09:00:00+08:00', stopped: '停在写测试', supersedes: 'ho-h0-zzzz' })
+    archCard(dir, { id: 'ho-h2-bbbb', title: '晚卡', project: 'alpha', cwd: 'D:/work/alpha', pushed_at: '2026-11-13T10:00:00+08:00', stopped: '停在部署' })
+    archCard(dir, { id: 'ho-h3-cccc', title: '别家卡', project: 'beta', cwd: 'D:/work/beta', pushed_at: '2026-11-13T11:00:00+08:00' })
+    const all = inboxHistory({ dir })
+    assert.equal(all.ok, true)
+    if (!all.ok) return
+    assert.equal(all.total, 3)
+    assert.deepEqual(all.cards.map((c) => c.id), ['ho-h1-aaaa', 'ho-h2-bbbb', 'ho-h3-cccc'], '时间正序（早→晚）')
+    const first = all.cards[0]
+    assert.equal(first?.title, '早卡')
+    assert.equal(first?.pushed_at, '2026-11-13T09:00:00+08:00')
+    assert.equal(first?.stopped, '停在写测试')
+    assert.equal(first?.supersedes, 'ho-h0-zzzz')
+    assert.equal(all.cards[1]?.supersedes, undefined, '无接力链的卡 supersedes 缺省')
+    // project 过滤
+    const byProject = inboxHistory({ dir, project: 'alpha' })
+    assert.equal(byProject.ok, true)
+    if (byProject.ok) {
+      assert.equal(byProject.total, 2)
+      assert.deepEqual(byProject.cards.map((c) => c.id), ['ho-h1-aaaa', 'ho-h2-bbbb'])
+    }
+    // cwd 过滤
+    const byCwd = inboxHistory({ dir, cwd: 'D:/work/beta' })
+    assert.equal(byCwd.ok, true)
+    if (byCwd.ok) assert.deepEqual(byCwd.cards.map((c) => c.id), ['ho-h3-cccc'])
+    // 两个条件同时给 = AND
+    const both = inboxHistory({ dir, project: 'alpha', cwd: 'D:/work/beta' })
+    assert.equal(both.ok, true)
+    if (both.ok) assert.equal(both.cards.length, 0)
+    // 渲染分支：历史头 + 停点摘要 + 接力链
+    const text = String(renderInbox({}, all)[0]?.text)
+    assert.match(text, /卡链历史/)
+    assert.match(text, /停在：停在写测试/)
+    assert.match(text, /接替 ho-h0-zzzz/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('history：尾 50 条封顶（55 张归档卡只回最新 50，total 照报全量）', () => {
+  const dir = tmpHome()
+  try {
+    for (let i = 0; i < 55; i++) {
+      archCard(dir, { id: `ho-t${String(i).padStart(2, '0')}-xxxx`, title: `卡${i}`, pushed_at: `2026-11-01T00:${String(i).padStart(2, '0')}:00+08:00` })
+    }
+    const r = inboxHistory({ dir })
+    assert.equal(r.ok, true)
+    if (!r.ok) return
+    assert.equal(r.total, 55, 'total 报过滤命中全量')
+    assert.equal(r.cards.length, 50, '返回值尾 50 封顶')
+    assert.equal(r.cards[0]?.title, '卡5', '最早的 5 张被裁掉')
+    assert.equal(r.cards.at(-1)?.title, '卡54', '最新一张保住')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('push：supersedes 进 extras（卡链检索的持久通道——信封取件即弃，卡面才是历史）', () => {
+  const dir = tmpHome()
+  try {
+    const r = pushHandoff(fakeSession(SAMPLE_EVENTS), { goal: '接力卡', supersedes: 'ho-prev-0001' }, { dir })
+    assert.equal(r.ok, true)
+    if (!r.ok) return
+    const card = parseCard(readFileSync(r.path, 'utf-8'))
+    assert.equal(card.extras['supersedes'], 'ho-prev-0001')
+    // 不传 supersedes：extras 无该键（不写空壳假链）
+    const r2 = pushHandoff(fakeSession(SAMPLE_EVENTS), { goal: '无接力卡' }, { dir })
+    assert.equal(r2.ok, true)
+    if (!r2.ok) return
+    const card2 = parseCard(readFileSync(r2.path, 'utf-8'))
+    assert.equal(card2.extras['supersedes'], undefined)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

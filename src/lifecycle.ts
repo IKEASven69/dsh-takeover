@@ -20,7 +20,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { resolveHome } from '@agent-handoff/core'
 
-/** 生命周期阶段：write=寄存闸拒收 read=读侧坏卡 pickup=取件核验异常 */
+/** 生命周期阶段：write=寄存闸拒收 read=读侧（坏卡跳过 + memory 卡吸收回执） pickup=取件核验异常 */
 export type LifecycleStage = 'write' | 'read' | 'pickup'
 
 /** 闭集理由：开集字符串无法聚合出死亡地图。新增理由 = 改这里 + 测试 */
@@ -30,6 +30,7 @@ export const LIFECYCLE_REASONS = [
   'lifeboat', // 写侧：救生艇一键抢出成功（面板不经模型出卡，含事件流降级的兜底骨架）
   'oversize', // 读侧：超 MAX_CARD_BYTES 尺寸闸
   'parse_error', // 读侧：frontmatter/正文解析失败
+  'memory-absorbed', // 读侧（正向回执）：memory 轴卡被取件消费——记忆已随卡注入，按建议加载段吸收
   'drift_mismatch', // 取侧：git 核验 MISMATCH
   'git_unavailable', // 取侧：git 核验不可用（非仓/无 git）
   'sig_tampered', // 取侧：信封 HMAC 验签失败（内容与写侧签名不符）
