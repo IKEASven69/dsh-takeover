@@ -30,7 +30,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { recordLifecycleEvent } from './lifecycle.ts'
-import { envBackupDir, listBackups, readBackupEntryBlobs } from './envbackup.ts'
+import { envBackupDir, listBackups, readBackupEntryBlobs, validateRelPath } from './envbackup.ts'
 
 /** inject 依赖注入（测试用：dir=HANDOFF_HOME、home=user home、now=事件时刻） */
 export interface InjectDeps {
@@ -186,7 +186,10 @@ function loadSourceEntries(file: string, passphrase: string, deps?: InjectDeps):
       }
       mcpServers = servers as Record<string, unknown>
     } else {
-      skills.push({ rel: b.path.slice('.agents/skills/'.length), content: b.content })
+      // 穿越闸（第二道，validateRelPath 归一化后的相对路径才允许拼进 skillsDir）：
+      // ..、绝对路径、盘符一律拒收——敌意包的 skills 条目不得越出目标 skills 目录
+      const rel = validateRelPath(b.path.slice('.agents/skills/'.length))
+      skills.push({ rel, content: b.content })
     }
   }
   return { mcpServers, skills }
@@ -379,10 +382,14 @@ export function applyInject(args: InjectArgs, deps?: InjectDeps): InjectResult {
       }
       doc[def.mcp.key] = table
       if (docExisted) {
-        // 写前快照：原物进 checkpoint（与 applyRestore 同款布局，action=rollback 直接可回滚）
+        // 写前快照：原物进 checkpoint（与 applyRestore 同款布局，action=rollback 直接可回滚）。
+        // 同一分钟两次 inject 不覆盖既有 checkpoint——撞名时尾缀递增取空位，
+        // 保留的永远是第一次写入前的原物（与 absorb 快照「首写不被覆盖」同纪律）
         const stamp = (deps?.now ?? new Date()).toISOString().slice(0, 16).replace(/[-:]/g, '').replace('T', '-')
-        const ckptName = `restore-checkpoint-inject-${stamp}`
-        const ckpt = join(envBackupDir(deps?.dir), ckptName)
+        const backupDir = envBackupDir(deps?.dir)
+        let ckptName = `restore-checkpoint-inject-${stamp}`
+        for (let n = 2; existsSync(join(backupDir, ckptName)); n++) ckptName = `restore-checkpoint-inject-${stamp}-${n}`
+        const ckpt = join(backupDir, ckptName)
         const relToHome = cfgPath.slice(home.length).split('\\').join('/').replace(/^[/\\]/, '')
         const cAbs = join(ckpt, relToHome)
         mkdirSync(dirname(cAbs), { recursive: true })

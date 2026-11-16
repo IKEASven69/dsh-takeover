@@ -11,7 +11,7 @@
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createHash } from 'node:crypto'
+import { createCipheriv, createHash, randomBytes, scryptSync } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -505,6 +505,128 @@ test('inject：SCOPE 收 .mcp.json（mcp-config 类）；readBackupEntryBlobs �
     assert.throws(() => readBackupEntryBlobs(file, 'wrong-passphrase', handoff), /解密失败/)
   } finally {
     rmRf(root); rmRf(handoff)
+  }
+})
+
+/** 手搓敌意容器（与 packEncrypted 同格式；容器格式公开，manifest 路径可任意伪造——红队前提） */
+function craftDshenv(entries: Array<{ path: string; content: Buffer }>, passphrase: string): Buffer {
+  const manifest = {
+    createdAt: new Date().toISOString(),
+    host: 'evil-host',
+    secretCount: 0,
+    secretHits: 0,
+    files: entries.map((e) => ({ path: e.path, bytes: e.content.length, sha256: createHash('sha256').update(e.content).digest('hex'), category: 'agents-skills' })),
+  }
+  const manifestJson = Buffer.from(JSON.stringify(manifest), 'utf-8')
+  const body = Buffer.concat([Buffer.alloc(4), manifestJson, ...entries.map((e) => e.content)])
+  body.writeUInt32LE(manifestJson.length, 0)
+  const salt = randomBytes(16)
+  const iv = randomBytes(12)
+  const cipher = createCipheriv('aes-256-gcm', scryptSync(passphrase, salt, 32, { N: 16384, r: 8, maxmem: 256 * 1024 * 1024 }), iv)
+  const enc = Buffer.concat([cipher.update(body), cipher.final()])
+  return Buffer.concat([Buffer.from('DSHENV1', 'ascii'), salt, iv, cipher.getAuthTag(), enc])
+}
+
+test('inject：敌意包 skills 条目穿越闸（.. / 盘符 / 前缀后绝对路径）一律拒收、零写盘', () => {
+  const handoff = tmpDir('t-handoff')
+  const home = tmpDir('t-dst')
+  try {
+    // 敌意 manifest 路径两型：.. 越出 skillsDir；'.agents/skills/' 前缀内嵌盘符
+    // （后者只有 skills 相对路径的二次闸能抓——容器穿越闸只查整路径开头）
+    const evilPaths = [
+      '.agents/skills/../../pwned.txt',
+      '.agents/skills/C:/evil.txt',
+    ]
+    for (const evil of evilPaths) {
+      mkdirSync(join(handoff, 'env-backup'), { recursive: true })
+      writeFileSync(join(handoff, 'env-backup', 'evil.dshenv'), craftDshenv([{ path: evil, content: Buffer.from('PWNED-BY-TRAVERSAL') }], PASS))
+      const args = { file: 'evil.dshenv', passphrase: PASS, target: 'zcode', confirm: true }
+      // 预演即拒（纯读面也不放行穿越条目）
+      const p = planInject(args, { dir: handoff, home })
+      assert.equal(p.ok, false, `${evil} 在 planInject 就必须拒收`)
+      if (!p.ok) assert.match(p.error, /非法备份路径/)
+      // 执行面拒收 + 零写盘：目标机 home 全树不变、越界文件不存在
+      const before = treeMap(home)
+      const r = applyInject(args, { dir: handoff, home })
+      assert.equal(r.ok, false, `${evil} 在 applyInject 必须拒收`)
+      if (!r.ok) assert.match(r.error, /非法备份路径/)
+      assert.deepEqual(treeMap(home), before, `敌意包 ${evil} 不得在目标机写任何文件`)
+      const escaped = join(home, '..', 'pwned.txt')
+      assert.ok(!existsSync(escaped), `${evil} 不得越出 home（${escaped} 不应存在）`)
+      rmSync(escaped, { force: true })
+      rmSync(join(handoff, 'env-backup', 'evil.dshenv'), { force: true })
+    }
+    // 归一化口径（与 applyRestore 同款）：'.agents/skills//etc/evil' 规范为界内 'etc/evil'，
+    // 只允许落在 skillsDir 内，不越界——验证双斜杠折叠不产生逃逸
+    writeFileSync(join(handoff, 'env-backup', 'evil.dshenv'), craftDshenv([{ path: '.agents/skills//etc/evil', content: Buffer.from('PWNED-BY-TRAVERSAL') }], PASS))
+    const p = planInject({ file: 'evil.dshenv', passphrase: PASS, target: 'zcode' }, { dir: handoff, home })
+    assert.equal(p.ok, true)
+    if (p.ok) {
+      const item = p.items.find((i) => i.kind === 'skill')
+      assert.ok(item, '归一化后的界内条目应进计划')
+      assert.ok(item.path.startsWith(join(home, '.agents', 'skills')), `目标路径必须留在 skillsDir 内（${item.path}）`)
+      assert.equal(item.name, 'etc/evil', '双斜杠折叠为界内相对路径')
+    }
+    const r = applyInject({ file: 'evil.dshenv', passphrase: PASS, target: 'zcode', confirm: true }, { dir: handoff, home })
+    assert.equal(r.ok, true)
+    assert.ok(existsSync(join(home, '.agents', 'skills', 'etc', 'evil')), '界内归一化条目正常落盘')
+    assert.ok(!existsSync(join(home, 'etc')), '不得越出 skillsDir 根')
+  } finally {
+    rmRf(handoff); rmRf(home)
+  }
+})
+
+test('inject：同一分钟两次注入不覆盖既有 checkpoint——首次写入前的原物永存、可回滚', () => {
+  const root = tmpDir('u-src')
+  const handoff = tmpDir('u-handoff')
+  const home = tmpDir('u-dst')
+  try {
+    const original = JSON.stringify({ mcpServers: {} }, null, 2)
+    writeFileSync(join(home, '.claude.json'), `${original}\n`, 'utf-8')
+    const mkMcp = (servers: Record<string, unknown>): void => {
+      mkdirSync(join(root, '.agents', 'skills'), { recursive: true })
+      writeFileSync(join(root, '.mcp.json'), JSON.stringify({ mcpServers: servers }), 'utf-8')
+    }
+    // createBackup 文件名同为分钟粒度（两份会撞名），各即刻改名成 a/b.dshenv 区分内容
+    mkMcp({ one: { command: 'node', args: ['one.js'] } })
+    assert.equal(createBackup(PASS, handoff, root).ok, true)
+    const n1 = listBackups(handoff)[0]!.file
+    writeFileSync(join(handoff, 'env-backup', 'a.dshenv'), readFileSync(join(handoff, 'env-backup', n1)))
+    rmSync(join(handoff, 'env-backup', n1), { force: true })
+    mkMcp({ one: { command: 'node', args: ['one.js'] }, two: { command: 'node', args: ['two.js'] } })
+    assert.equal(createBackup(PASS, handoff, root).ok, true)
+    const n2 = listBackups(handoff).find((b) => b.file !== 'a.dshenv')!.file
+    writeFileSync(join(handoff, 'env-backup', 'b.dshenv'), readFileSync(join(handoff, 'env-backup', n2)))
+    rmSync(join(handoff, 'env-backup', n2), { force: true })
+
+    // 同一分钟（deps.now 定钟）连续两次 inject
+    const r1 = applyInject({ file: 'a.dshenv', passphrase: PASS, target: 'claude', confirm: true }, { dir: handoff, home, now: new Date('2026-11-16T06:46:00Z') })
+    assert.equal(r1.ok, true, r1.ok ? '' : r1.error)
+    const r2 = applyInject({ file: 'b.dshenv', passphrase: PASS, target: 'claude', confirm: true }, { dir: handoff, home, now: new Date('2026-11-16T06:46:30Z') })
+    assert.equal(r2.ok, true, r2.ok ? '' : r2.error)
+    if (!r1.ok || !r2.ok) return
+    assert.match(r1.checkpointDir ?? '', /^env-backup[\\/]restore-checkpoint-inject-/)
+    assert.match(r2.checkpointDir ?? '', /^env-backup[\\/]restore-checkpoint-inject-/)
+    // 撞名不覆盖：第二次拿尾缀空位，两个 checkpoint 各自独立
+    assert.notEqual(r1.checkpointDir, r2.checkpointDir, '同一分钟两次 inject 不得共用 checkpoint 目录')
+    // 第一个 checkpoint 里必须还是首次写入前的原物（不被第二次快照覆盖）
+    const snap1 = readFileSync(join(handoff, r1.checkpointDir ?? '', '.claude.json'), 'utf-8')
+    assert.equal(snap1, `${original}\n`, '第一个 checkpoint 快照 = 首次注入前原物')
+    const from1 = (JSON.parse(readFileSync(join(handoff, r1.checkpointDir ?? '', 'checkpoint-manifest.json'), 'utf-8')) as { from: string }).from
+    assert.equal(from1, 'inject:a.dshenv', '首个 checkpoint 的 manifest 不被第二次注入改写')
+    // 第二个 checkpoint = inject1 后中间态；带尾缀的目录名 rollback 照常可用
+    const snap2 = readFileSync(join(handoff, r2.checkpointDir ?? '', '.claude.json'), 'utf-8')
+    assert.match(snap2, /"one"/)
+    assert.ok(!snap2.includes('"two"'), '第二个 checkpoint 快照 = inject1 后、inject2 前的中间态')
+    const rolled = rollbackRestore(r2.checkpointDir ?? '', handoff, home)
+    assert.equal(rolled.ok, true)
+    const afterRollback2 = JSON.parse(readFileSync(join(home, '.claude.json'), 'utf-8')) as { mcpServers: Record<string, unknown> }
+    assert.deepEqual(Object.keys(afterRollback2.mcpServers).sort(), ['one'], 'rollback(r2) 回到 inject2 前状态')
+    const rolled1 = rollbackRestore(r1.checkpointDir ?? '', handoff, home)
+    assert.equal(rolled1.ok, true)
+    assert.equal(readFileSync(join(home, '.claude.json'), 'utf-8'), `${original}\n`, 'rollback(r1) 回到首次注入前原物')
+  } finally {
+    rmRf(root); rmRf(handoff); rmRf(home)
   }
 })
 

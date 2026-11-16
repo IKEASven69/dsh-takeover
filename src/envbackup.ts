@@ -349,6 +349,9 @@ export interface BackupEntryBlob {
  * 与 readBackupManifest 同口径，错口令 = GCM 认证失败诚实报错，不吐半个字节）。
  * handoff_env action=inject 用它取 `.mcp.json` 与 `.agents/skills/**` 两类源条目；
  * 谓词缺省 = 全部条目（调用方自己过滤也行）。
+ *
+ * 选中条目的路径过 validateRelPath（与 applyRestore 同款穿越闸：..、绝对路径、
+ * 盘符一律拒收）——容器格式公开可伪造，敌意包不得经注入链把文件写出备份范围外。
  */
 export function readBackupEntryBlobs(file: string, passphrase: string, dir?: string, pred?: (rel: string) => boolean): BackupEntryBlob[] {
   const name = basenameSafe(file)
@@ -358,7 +361,8 @@ export function readBackupEntryBlobs(file: string, passphrase: string, dir?: str
   for (let i = 0; i < m.files.length; i++) {
     const f = m.files[i]!
     if (pred !== undefined && !pred(f.path)) continue
-    out.push({ path: f.path, category: f.category, content: Buffer.from(blobAt(m, i)) })
+    const path = validateRelPath(f.path) // 穿越闸：..、绝对路径、盘符一律拒收（applyRestore 同款）
+    out.push({ path, category: f.category, content: Buffer.from(blobAt(m, i)) })
   }
   return out
 }
