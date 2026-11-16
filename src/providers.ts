@@ -250,7 +250,7 @@ export const PROVIDERS = [
     },
   },
   {
-    // 0.3.0 jsonl 族扩容（kimi / codebuddy / qoder / kiro）：与 gemini 同款双轴纪律——
+    // 0.25 jsonl 族扩容（kimi / codebuddy / qoder / kiro）：与 gemini 同款双轴纪律——
     // 只进读取器轴，不进交接目标轴（outboundEligible: false）；暂无核实过的官方
     // 矢量，icon 显式 'none' 走中性兜底——未经核实的「官方 path」不入表。
     name: 'kimi',

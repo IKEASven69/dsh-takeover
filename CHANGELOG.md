@@ -1,15 +1,31 @@
 # Changelog — dsh-takeover
 
-## [未发布]
+## [0.25.0] — 2026-11-16
 
-写回最小闭环：产品第一次从只读转向受控写回。硬线不动摇——**外部 harness 的会话存储永不写**，写回仅限记忆/配置，且全部是显式授权动作（confirm 两步）、写前原物快照可回滚。THREAT-MODEL 新增 T8（写回面）。
+读取器大扩容 + 写回最小闭环：外部会话面从九家推到二十三家（Tier 2 十四家），云端先立诚实的边界；产品第一次从只读转向受控写回。硬线不动摇——**外部 harness 的会话存储永不写**，写回仅限记忆/配置，且全部是显式授权动作（confirm 两步）、写前原物快照可回滚。THREAT-MODEL 新增 T8（写回面）。
+
+- **Tier 2 十四家读取器**（总面二十三家，家数以 `src/providers.ts` 注册表为准）：
+  - **jsonl 族四家**：kimi（`wd_<目录>/<会话>/agents/main/wire.jsonl` 事件流）、codebuddy（projects 下 cwd 转义目录一文件一会 JSONL）、qoder（Claude Code 同族主会话 JSONL）、kiro（`sessions/cli/<uuid>.jsonl` 事件流，伴生 `.json` / `.history` 不读）；
+  - **sqlite/文件族六家**：copilot / devin / mimo 各家明文 SQLite（node:sqlite readonly 随开随关，列名探测自适应、探测不中如实报降级；mimo 应用目录名未完全核实、候选扫描全不命中时如实标注不可用），aider（项目根 `.aider.chat.history.md` 半结构化 markdown，解析尽力而为并以 note 标注），cline（VS Code 变体 globalStorage 的 `api_conversation_history.json`，ui_messages 不读），continue（`~/.continue/sessions` 索引 + 会话文件）；
+  - **收尾四家**：qwen（`~/.qwen` tmp/ 与 projects/ 双布局）、antigravity（brain 目录 transcript.jsonl，跨端索引库只作 cwd 索引）、openclaw（新版 `openclaw-agent.sqlite` + 旧版 sessions/ JSONL 双形态，zstd 缺支持时压缩行跳过并如实降级）、goose（候选路径探测——路径按上游源码推导、未实机核实，全不命中时如实标注待社区确认，`HANDOFF_ROOT_GOOSE` 可直指）；
+  - **双轴纪律照旧**：十四家全部只进读取器轴、不进交接目标轴（`OUTBOUND_TARGETS` 一家不加）。
+- **注册表派生的新 resume 技能**：二十三条 `/resume-*` 规格全部从 `src/providers.ts` 注册表 map 派生（id / product / description / recoveryBoundary 一表出），消灭手抄数组的漂移面。
+- **云端导出落盘通路**：约定 `<HANDOFF_HOME>/exports/<provider>/`——云端会话凡能导出成文件的，按该家本地记录的**原生格式**丢进子目录，读取器原样吃掉（复用既有文件系适配器，零新增解析面；`HANDOFF_EXPORTS` 可直指，`foreign_session_read` 与会话浏览器发现层自动并网）；支持矩阵该行显示 ☁ 导出计数；纯 SQLite 四家（zcode / copilot / devin / mimo）记录在库内、无可对齐的导出格式，诚实不参与。
+- **卡链历史 UI**：收件箱视图新增「历史」块——懒加载 `/dsh-takeover/history` 回查 archived/ 已归档卡（id / 标题 / 停点摘要 / 接替链，时间正序），首次展开才拉、30s 轮询共享缓存。
+- **接力账本继承**：`supersedes` 在场时新卡确定性继承父卡「还差什么」段前缀（零 LLM、2KB 截断原样并入、不总结不改写）；继承发生在密钥闸之前——父卡遗留里若藏着密钥照拦，不因拼接放行；前缀命中失败时诚实降级，行为与无父卡完全一致。
+- **跨机演示脚本**：`scripts/demo-tier2.mjs`——合成 Kiro 会话 fixture → readers discover/parse → 蒸馏六段卡 → `syncNow` 跨机 → B 机取件断言 Turn / 六段齐全（断言不过非零退出，tests/tier2-demo.spec.ts 随全量守门）。
+- **记忆写回 `handoff_absorb`**：把已取件（archived/）的 memory 轴记忆卡「建议加载」段条目写进目标 harness 的记忆文件。目标闭集 = MEMORY_SOURCES 的八条文件型记忆路径（AGENTS.md 族事实标准优先；hippo-db 是 zvec 引擎目录，明确拒收并回退指引 `hippo import`）。confirm 两步强制（先 `handoff_inbox load` 看卡、再 absorb 落盘，缺 confirm 一律拒绝并逐条回显计划）；追加前按条目 sha256 去重（已有内容不重写，重复 absorb 幂等 = 0 追加）；写前把目标原物快照进 `archived/absorb-backup/<id>-<target>.md`（同名快照不被覆盖）；tmp+rename 原子替换；写后记 `absorbed-write` 生命周期事件。
+- **配置写回 `handoff_env action=inject`**（最小面：MCP servers 与 skills 两样，事实标准可映射）：把备份包内的 `.mcp.json`（`{ mcpServers }` 形态）与 `.agents/skills/**` 条目合并进目标 harness 对应配置。映射闭集 `INJECT_TARGETS`：claude（`~/.claude.json` 的 mcpServers + `~/.claude/skills`）、cursor（`~/.cursor/mcp.json`）、gemini（`~/.gemini/settings.json`）、zcode（skills 即 `~/.agents/skills` 事实标准目录）；codex 的 config.toml（TOML）语义不等价——明确不做。confirm 两步强制、逐条列出将写入什么；**只新增不覆盖**（同名 MCP server / 已存在 skill 文件一律跳过，同内容/冲突分开如实报告）；既有配置被改前原物快照进 `env-backup/restore-checkpoint-inject-*`（与 applyRestore 同款 checkpoint 布局，`action=rollback` 直接可回滚）；写后记 `config-injected` 事件。hooks / 权限 / 插件登记语义不等价，明确不做并如实标注。
+- **备份范围补 `.mcp.json`**（category `mcp-config`）：备份清单从此携带用户级 MCP servers 事实标准配置（inject 的源条目）；新增 `readBackupEntryBlobs`（口令解密按谓词取包内条目原文，纯读不落盘）。
+- **生命周期闭集新增**：`absorbed-write`（记忆写回正向回执）与 `config-injected`（配置写回正向回执）——写回动作全部入账本。
+- **文档**：README 双语补「支持面与分层承诺」表（Tier 1 无缝 = DSH + 原九家 / Tier 2 可接管 = 本期十四家，mimo 目录与 goose 路径诚实降级显式标注 / Tier 3 云端策略）、「写回」功能叙述（只读承诺措辞改为「读取零写入；写回仅记忆/配置且两步确认、原物可回滚」）；THREAT-MODEL 新增 T8（写回面：显式授权、闭集注册表、会话存储零写入硬线、快照可回滚与诚实残余风险）。
 
 - **记忆写回 `handoff_absorb`**：把已取件（archived/）的 memory 轴记忆卡「建议加载」段条目写进目标 harness 的记忆文件。目标闭集 = MEMORY_SOURCES 的八条文件型记忆路径（AGENTS.md 族事实标准优先；hippo-db 是 zvec 引擎目录，明确拒收并回退指引 `hippo import`）。confirm 两步强制（先 `handoff_inbox load` 看卡、再 absorb 落盘，缺 confirm 一律拒绝并逐条回显计划）；追加前按条目 sha256 去重（已有内容不重写，重复 absorb 幂等 = 0 追加）；写前把目标原物快照进 `archived/absorb-backup/<id>-<target>.md`（同名快照不被覆盖）；tmp+rename 原子替换；写后记 `absorbed-write` 生命周期事件。
 - **配置写回 `handoff_env action=inject`**（最小面：MCP servers 与 skills 两样，事实标准可映射）：把备份包内的 `.mcp.json`（`{ mcpServers }` 形态）与 `.agents/skills/**` 条目合并进目标 harness 对应配置。映射闭集 `INJECT_TARGETS`：claude（`~/.claude.json` 的 mcpServers + `~/.claude/skills`）、cursor（`~/.cursor/mcp.json`）、gemini（`~/.gemini/settings.json`）、zcode（skills 即 `~/.agents/skills` 事实标准目录）；codex 的 config.toml（TOML）语义不等价——明确不做。confirm 两步强制、逐条列出将写入什么；**只新增不覆盖**（同名 MCP server / 已存在 skill 文件一律跳过，同内容/冲突分开如实报告）；既有配置被改前原物快照进 `env-backup/restore-checkpoint-inject-*`（与 applyRestore 同款 checkpoint 布局，`action=rollback` 直接可回滚）；写后记 `config-injected` 事件。hooks / 权限 / 插件登记语义不等价，明确不做并如实标注。
 - **备份范围补 `.mcp.json`**（category `mcp-config`）：备份清单从此携带用户级 MCP servers 事实标准配置（inject 的源条目）；新增 `readBackupEntryBlobs`（口令解密按谓词取包内条目原文，纯读不落盘）。
 - **生命周期闭集新增**：`absorbed-write`（记忆写回正向回执）与 `config-injected`（配置写回正向回执）——写回动作全部入账本。
 - **文档**：README「只读承诺」措辞改为「读取零写入；写回仅记忆/配置且两步确认、原物可回滚」；THREAT-MODEL 新增 T8（写回面：显式授权、闭集注册表、会话存储零写入硬线、快照可回滚与诚实残余风险）。
-- 质量闸：新增 `tests/writeback.spec.ts`——confirm 缺省拒零写盘、去重幂等、快照回滚、多目标各留各账、**会话存储零写入全树指纹对账**（负向断言）、无映射家诚实拒绝；typecheck 零错误、全量测试绿（数字以实测为准，见质量徽标）。
+- 质量闸：新增 `tests/writeback.spec.ts`——confirm 缺省拒零写盘、去重幂等、快照回滚、多目标各留各账、**会话存储零写入全树指纹对账**（负向断言）、无映射家诚实拒绝；`tests/tier2-demo.spec.ts` 以子进程整跑 `scripts/demo-tier2.mjs` 守门（退出码 0、全链横幅在场）；typecheck 零错误、全量测试 **460** 全绿（2026-11-16 实测，`npm run check` + `npx tsc -p tsconfig.json --noEmit` 双跑确认）。
 
 ## [0.2.0] — 2026-11-12
 

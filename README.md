@@ -4,7 +4,7 @@
 
 **把任何 agent 干到一半的活接过来继续干——二十三家 CLI 会话只读拉取、一键寄存、开局取件，会话和记忆都能交接。**
 
-[![npm](https://img.shields.io/npm/v/@cold777/dsh-takeover)](https://www.npmjs.com/package/@cold777/dsh-takeover) ![tests](https://img.shields.io/badge/tests-459%20passing-brightgreen) ![DSH](https://img.shields.io/badge/DSH-%3E%3D0.2.0--rc.2-orange) ![Node](https://img.shields.io/badge/node-%3E%3D22-green) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
+[![npm](https://img.shields.io/npm/v/@cold777/dsh-takeover)](https://www.npmjs.com/package/@cold777/dsh-takeover) ![tests](https://img.shields.io/badge/tests-460%20passing-brightgreen) ![DSH](https://img.shields.io/badge/DSH-%3E%3D0.2.0--rc.2-orange) ![Node](https://img.shields.io/badge/node-%3E%3D22-green) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
 
 - **接过来**：Claude Code 里干到一半的任务，`/resume-claude` 一条命令——六段交接卡注入当前会话，模型直接接着干；
 - **交出去**：会话太长想换环境？`/handoff` 把当前会话寄存成一张卡，任何 agent 开局取件继续；
@@ -30,7 +30,7 @@ dsh plugin --profile web add github:IKEASven69/dsh-takeover
 
 > 请为本机安装 dsh-takeover 插件：执行 `dsh plugin --profile web add github:IKEASven69/dsh-takeover`。完成后重启 DSH web 端，在 设置 → 插件 里确认 dsh-takeover 已启用，最后告诉我安装结果。
 
-装完即用（构建产物已入库，无需本地工具链）。固定版本：`github:IKEASven69/dsh-takeover#v0.1.0`。需要 DSH ≥0.2.0-rc.2、Node ≥22。
+装完即用（构建产物已入库，无需本地工具链）。固定版本：`github:IKEASven69/dsh-takeover#v0.25.0`。需要 DSH ≥0.2.0-rc.2、Node ≥22。
 
 ## 30 秒上手
 
@@ -51,6 +51,18 @@ dsh plugin --profile web add github:IKEASven69/dsh-takeover
 **信任长在文件里。** 首次寄存自动生成总线密钥，卡片带机器签名；取件侧三态裁决 `ok / tampered / no-key`，篡改可检出、跨信任域不误报。
 
 **读取零写入；写回仅记忆/配置且两步确认、原物可回滚。** 拉取与取件对外部 agent 的会话库零写入、不回放历史工具调用，原文不进卡片、卡里只有指针。写回只有两个显式动作：`handoff_absorb`（已取件的记忆卡落进目标记忆文件——confirm 两步、按条目去重、写前快照）与 `handoff_env inject`（备份包内 MCP/skills 合并进目标配置——confirm 两步、只新增不覆盖、checkpoint 可回滚）；外部会话存储永不写（威胁模型 T8 硬线），hooks/权限/插件登记语义不等价、明确不做。
+
+## 支持面与分层承诺
+
+二十三家读取器不是同一句承诺——三层各管一段，说到哪一层就兑现哪一层（家数以 `src/providers.ts` 注册表为准）：
+
+| 层 | 覆盖 | 承诺 |
+|---|---|---|
+| **Tier 1 · 无缝** | DSH（宿主）+ 原九家：claude / codex / opencode / zcode / pi / workbuddy / cursor / grok / gemini | 首发（0.1.0）即落地的成熟读取器，历经多版本回归——读取零配置开箱即用；claude / zcode 布局有逐字节 golden 语料钉住，zcode / opencode 另有本机真实会话冒烟（见[质量与证据](#质量与证据)） |
+| **Tier 2 · 可接管** | 本期十四家：kimi / codebuddy / qoder / kiro / copilot / devin / mimo / aider / cline / continue / qwen / antigravity / openclaw / goose | 适配器按上游源码与公开实录编写，本地记录在位即可接管；两家诚实降级——**mimo** 的应用数据目录名未完全核实（候选目录全不命中时如实标注不可用，`HANDOFF_ROOT_MIMO` 可直指库文件），**goose** 的数据路径按上游源码推导、未实机核实（候选全不命中同款如实标注，`HANDOFF_ROOT_GOOSE` 可直指） |
+| **Tier 3 · 云端策略** | 三条通路：厂商门（`--teleport` / gRPC Attach）、产物级（git 基线 + 四步复原）、导出落盘（`exports/<provider>/`） | 各家云端会话凡能导出成文件即可被读取器原样吃掉；**跨厂商的云会话级接管，行业现状为零**——不做云 API、不做认证面（见[跨机器 / 云端](#跨机器--云端)） |
+
+写入承诺对三层一致：读取零写入、写回仅记忆/配置且两步确认、原物快照可回滚、**外部 harness 的会话存储永不写**（THREAT-MODEL T8 硬线）。
 
 ## 一即是全 · 四轴一根链
 
@@ -106,7 +118,7 @@ dsh plugin --profile web add github:IKEASven69/dsh-takeover
 接力质量不是感觉，是数字、测试与第三方可复核的证明（口径与复现步骤见 [eval/README.md](eval/README.md)）：
 
 - **回测**：50 张真实交接卡回测延续率 34.7%；done 段带账本标注的卡延续率 50%、无标注 0%。端到端双卡接力真 host 真模型评测 PASS。
-- **回归**：13 份 golden files 逐字节冻结真实会话脱敏语料，上游存储布局一变就红在提交前。
+- **回归**：14 份 golden files（12 份会话语料 + 2 份 discover 索引，以 tests/golden/ 实存为准）逐字节冻结真实会话脱敏语料，上游存储布局一变就红在提交前。
 - **安全**：威胁模型见 [THREAT-MODEL.md](THREAT-MODEL.md)；红队套件 8 组随 CI——密钥闸覆盖六段正文、全部标量与随卡补丁 diff。
 - **协议**：`conformance/` 可执行套件（MUST 9 条推导自 SPEC）；参考实现与「只读 SPEC 从零手写」的独立第二实现双双符合。
 - **互通**：INTERCHANGE v1（dsh-chat-import）↔ handoff: 1 双向转换，转换产物经对方插件 v0.26.2 真实导入互验。
@@ -123,7 +135,7 @@ AI 编码的「延续上下文」需求由三层各管一段：spec 工具（spe
 
 ## 权限范围
 
-写 `~/.handoff/`（`HANDOFF_HOME` 可覆盖）、读 git 状态、只读二十三家 agent 的本地会话库（zcode 与 cursor 走 sqlite readonly，随开随关；`HANDOFF_ROOT_<家>` 可覆盖各家根路径）与 `~/.handoff/exports/<provider>/` 下用户自行放入的导出会话文件（见[跨机器 / 云端](#跨机器--云端)）。cursor 只导入支持的 transcript / store 记录，grok 只读可见 updates.jsonl 流（永不读 chat_history.jsonl 原始模型上下文），gemini 只读本地 chats/ 会话文件；0.3.0 扩容的 jsonl 族四家：kimi 只读 wire.jsonl 事件流（state.json / session_index 只取元数据），codebuddy / qoder 只读主会话 JSONL（子代理 transcript 不读），kiro 只读 sessions/cli 的 <uuid>.jsonl（伴生 .json / .history 不读）；0.25 扩容的 sqlite/文件族六家：copilot / devin / mimo 只读各家的明文 SQLite（node:sqlite readonly 随开随关，列名探测自适应、探测不中如实报降级；mimo 的应用目录名未完全核实，候选扫描全不命中时该家不可用并如实标注），aider 只读项目根的 .aider.chat.history.md / .aider.input.history（半结构化 markdown，解析尽力而为并以 note 标注），cline 只读 VS Code 变体 globalStorage 的 api_conversation_history.json（ui_messages.json 不读），continue 只读 ~/.continue/sessions 的索引与会话文件；适配器收尾四家：qwen 只读 ~/.qwen 的双布局会话记录（tmp/ 的 Gemini 族与 projects/ 的 ChatRecord，QWEN.md 记忆文件不在会话轴），antigravity 只读 brain 目录的 transcript.jsonl（conversation_summaries.db 只作工作目录索引），openclaw 只读各 agent 的 openclaw-agent.sqlite 与旧版 sessions/ JSONL（zstd 压缩事件行在缺 zstd 支持的 Node 上跳过并如实降级），goose 的数据目录按上游源码推导的候选路径探测（全不命中时该家不可用并诚实标注「未实机核实，待社区确认」，HANDOFF_ROOT_GOOSE 可直指）。0.2.0 起两个显式例外：①`handoff_sync` 经系统 git 与**你显式配置**的仓库通信（插件进程内不构造网络连接，零存储凭据）；②`handoff_env` 备份/恢复读写全家桶配置路径——恢复必须先 dry 预演再 confirm 落盘，被覆盖原物自动 checkpoint 可回滚，凭据类文件只存在于加密包内（详见 THREAT-MODEL T6/T7）。0.2.x 起写回最小闭环是第三个显式例外（详见 THREAT-MODEL T8）：`handoff_absorb` 与 `handoff_env inject` 两个**显式授权动作**可写回记忆/配置——confirm 两步确认、写前原物快照可回滚、目标闭集注册表无自由路径入参，**外部 harness 的会话存储永不写**。不复活外部进程，不回放历史工具调用，原文不进卡片。
+写 `~/.handoff/`（`HANDOFF_HOME` 可覆盖）、读 git 状态、只读二十三家 agent 的本地会话库（zcode 与 cursor 走 sqlite readonly，随开随关；`HANDOFF_ROOT_<家>` 可覆盖各家根路径）与 `~/.handoff/exports/<provider>/` 下用户自行放入的导出会话文件（见[跨机器 / 云端](#跨机器--云端)）。cursor 只导入支持的 transcript / store 记录，grok 只读可见 updates.jsonl 流（永不读 chat_history.jsonl 原始模型上下文），gemini 只读本地 chats/ 会话文件；本期（0.25）扩容的 jsonl 族四家：kimi 只读 wire.jsonl 事件流（state.json / session_index 只取元数据），codebuddy / qoder 只读主会话 JSONL（子代理 transcript 不读），kiro 只读 sessions/cli 的 <uuid>.jsonl（伴生 .json / .history 不读）；0.25 扩容的 sqlite/文件族六家：copilot / devin / mimo 只读各家的明文 SQLite（node:sqlite readonly 随开随关，列名探测自适应、探测不中如实报降级；mimo 的应用目录名未完全核实，候选扫描全不命中时该家不可用并如实标注），aider 只读项目根的 .aider.chat.history.md / .aider.input.history（半结构化 markdown，解析尽力而为并以 note 标注），cline 只读 VS Code 变体 globalStorage 的 api_conversation_history.json（ui_messages.json 不读），continue 只读 ~/.continue/sessions 的索引与会话文件；适配器收尾四家：qwen 只读 ~/.qwen 的双布局会话记录（tmp/ 的 Gemini 族与 projects/ 的 ChatRecord，QWEN.md 记忆文件不在会话轴），antigravity 只读 brain 目录的 transcript.jsonl（conversation_summaries.db 只作工作目录索引），openclaw 只读各 agent 的 openclaw-agent.sqlite 与旧版 sessions/ JSONL（zstd 压缩事件行在缺 zstd 支持的 Node 上跳过并如实降级），goose 的数据目录按上游源码推导的候选路径探测（全不命中时该家不可用并诚实标注「未实机核实，待社区确认」，HANDOFF_ROOT_GOOSE 可直指）。0.2.0 起两个显式例外：①`handoff_sync` 经系统 git 与**你显式配置**的仓库通信（插件进程内不构造网络连接，零存储凭据）；②`handoff_env` 备份/恢复读写全家桶配置路径——恢复必须先 dry 预演再 confirm 落盘，被覆盖原物自动 checkpoint 可回滚，凭据类文件只存在于加密包内（详见 THREAT-MODEL T6/T7）。0.25.0 起写回最小闭环是第三个显式例外（详见 THREAT-MODEL T8）：`handoff_absorb` 与 `handoff_env inject` 两个**显式授权动作**可写回记忆/配置——confirm 两步确认、写前原物快照可回滚、目标闭集注册表无自由路径入参，**外部 harness 的会话存储永不写**。不复活外部进程，不回放历史工具调用，原文不进卡片。
 
 ## 开发
 

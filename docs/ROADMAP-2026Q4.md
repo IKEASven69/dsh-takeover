@@ -199,6 +199,38 @@
 
 **0.25 方向**：**Tier2 十三家适配器** / **云端门内通路（teleport/gRPC）** / **写回（需拍板）**；随行候选：救生艇事前 contextHealth 预警（事件条数代理）。
 
+### 0.25 兑现（2026-11-16 收尾核）
+
+兑现总表（口径以 `src/providers.ts` 注册表实测为准；计划写「十三家」，实交**十四家**——文档数字不追认计划、只认注册表）：
+
+| 方向 | 交付 | 状态 |
+|---|---|---|
+| Tier2 适配器 | 十四家全量落地（下表逐家），总面二十三家 | ✅ |
+| 云端通路 | 落的是**导出落盘**（`exports/<provider>/` + ☁ 计数 + 发现层并网）；厂商门内（teleport/gRPC）正式适配器**未做**，归 0.3 | ✅（诚实缩小）/ 0.3 |
+| 写回 | 需拍板 → 已拍板落地：`handoff_absorb` + `handoff_env inject` 显式授权写回，THREAT-MODEL T8 立面 | ✅ |
+| contextHealth 预警 | 未随行 | ❌（如实记） |
+
+Tier2 逐家打钩（双轴纪律：全部只进读取器轴，`OUTBOUND_TARGETS` 一家不加）：
+
+| 家 | 族 | 状态 | 备注 |
+|---|---|---|---|
+| kimi | jsonl | ✅ | `agents/main/wire.jsonl` 事件流 |
+| codebuddy | jsonl | ✅ | cwd 转义目录主会话 JSONL，子代理不读 |
+| qoder | jsonl | ✅ | Claude Code 同族 JSONL，cwd 取自记录 |
+| kiro | jsonl | ✅ | `<uuid>.jsonl`，伴生 `.json`/`.history` 不读 |
+| copilot | sqlite | ✅ | `session-store.db` readonly，列名探测自适应 |
+| devin | sqlite | ✅ | `sessions.db`（main_chain_id 血缘逐条展示） |
+| mimo | sqlite | ✅ 降级 | 应用目录名未完全核实——候选扫描全不命中如实标注，`HANDOFF_ROOT_MIMO` 直指 |
+| aider | 文件 | ✅ | `.aider.chat.history.md` 半结构化尽力解析，note 标注 |
+| cline | 文件 | ✅ | `api_conversation_history.json`，ui_messages 不读 |
+| continue | 文件 | ✅ | `~/.continue/sessions` 索引 + 会话文件 |
+| qwen | 收尾 | ✅ | `~/.qwen` tmp/ 与 projects/ 双布局都探测 |
+| antigravity | 收尾 | ✅ | brain transcript.jsonl，跨端索引库只作 cwd 索引 |
+| openclaw | 收尾 | ✅ | 新版 `openclaw-agent.sqlite` + 旧版 JSONL 双形态 |
+| goose | 收尾 | ✅ 降级 | 路径按上游源码推导、未实机核实——诚实标注待社区确认，`HANDOFF_ROOT_GOOSE` 直指 |
+
+**0.3 方向（2026-11-16 更新）**：**云端门内通路正式适配器**（厂商门内 API 的编程化接入，接替过渡期 `exports/` 手动导出）/ **记忆蒸馏闭环**（蒸馏产物经卡链进目标 harness，与 hippo 的分工按 §二三层归位）/ **Tier 3 云端策略扩面**（导出落盘逐家验证、支持矩阵与 ☁ 计数扩充）。
+
 ---
 
 ## 附：相关文档
