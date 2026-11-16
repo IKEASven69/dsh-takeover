@@ -19,12 +19,6 @@
 - **备份范围补 `.mcp.json`**（category `mcp-config`）：备份清单从此携带用户级 MCP servers 事实标准配置（inject 的源条目）；新增 `readBackupEntryBlobs`（口令解密按谓词取包内条目原文，纯读不落盘）。
 - **生命周期闭集新增**：`absorbed-write`（记忆写回正向回执）与 `config-injected`（配置写回正向回执）——写回动作全部入账本。
 - **文档**：README 双语补「支持面与分层承诺」表（Tier 1 无缝 = DSH + 原九家 / Tier 2 可接管 = 本期十四家，mimo 目录与 goose 路径诚实降级显式标注 / Tier 3 云端策略）、「写回」功能叙述（只读承诺措辞改为「读取零写入；写回仅记忆/配置且两步确认、原物可回滚」）；THREAT-MODEL 新增 T8（写回面：显式授权、闭集注册表、会话存储零写入硬线、快照可回滚与诚实残余风险）。
-
-- **记忆写回 `handoff_absorb`**：把已取件（archived/）的 memory 轴记忆卡「建议加载」段条目写进目标 harness 的记忆文件。目标闭集 = MEMORY_SOURCES 的八条文件型记忆路径（AGENTS.md 族事实标准优先；hippo-db 是 zvec 引擎目录，明确拒收并回退指引 `hippo import`）。confirm 两步强制（先 `handoff_inbox load` 看卡、再 absorb 落盘，缺 confirm 一律拒绝并逐条回显计划）；追加前按条目 sha256 去重（已有内容不重写，重复 absorb 幂等 = 0 追加）；写前把目标原物快照进 `archived/absorb-backup/<id>-<target>.md`（同名快照不被覆盖）；tmp+rename 原子替换；写后记 `absorbed-write` 生命周期事件。
-- **配置写回 `handoff_env action=inject`**（最小面：MCP servers 与 skills 两样，事实标准可映射）：把备份包内的 `.mcp.json`（`{ mcpServers }` 形态）与 `.agents/skills/**` 条目合并进目标 harness 对应配置。映射闭集 `INJECT_TARGETS`：claude（`~/.claude.json` 的 mcpServers + `~/.claude/skills`）、cursor（`~/.cursor/mcp.json`）、gemini（`~/.gemini/settings.json`）、zcode（skills 即 `~/.agents/skills` 事实标准目录）；codex 的 config.toml（TOML）语义不等价——明确不做。confirm 两步强制、逐条列出将写入什么；**只新增不覆盖**（同名 MCP server / 已存在 skill 文件一律跳过，同内容/冲突分开如实报告）；既有配置被改前原物快照进 `env-backup/restore-checkpoint-inject-*`（与 applyRestore 同款 checkpoint 布局，`action=rollback` 直接可回滚）；写后记 `config-injected` 事件。hooks / 权限 / 插件登记语义不等价，明确不做并如实标注。
-- **备份范围补 `.mcp.json`**（category `mcp-config`）：备份清单从此携带用户级 MCP servers 事实标准配置（inject 的源条目）；新增 `readBackupEntryBlobs`（口令解密按谓词取包内条目原文，纯读不落盘）。
-- **生命周期闭集新增**：`absorbed-write`（记忆写回正向回执）与 `config-injected`（配置写回正向回执）——写回动作全部入账本。
-- **文档**：README「只读承诺」措辞改为「读取零写入；写回仅记忆/配置且两步确认、原物可回滚」；THREAT-MODEL 新增 T8（写回面：显式授权、闭集注册表、会话存储零写入硬线、快照可回滚与诚实残余风险）。
 - 质量闸：新增 `tests/writeback.spec.ts`——confirm 缺省拒零写盘、去重幂等、快照回滚、多目标各留各账、**会话存储零写入全树指纹对账**（负向断言）、无映射家诚实拒绝；`tests/tier2-demo.spec.ts` 以子进程整跑 `scripts/demo-tier2.mjs` 守门（退出码 0、全链横幅在场）；typecheck 零错误、全量测试 **460** 全绿（2026-11-16 实测，`npm run check` + `npx tsc -p tsconfig.json --noEmit` 双跑确认）。
 
 ## [0.2.0] — 2026-11-12

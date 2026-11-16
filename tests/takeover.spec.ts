@@ -19,6 +19,7 @@ import {
   todoToTasks,
 } from '../src/index.ts'
 import { renderInbox } from '../src/tools.ts'
+import { readLifecycleEvents } from '../src/lifecycle.ts'
 
 /** 造一个独立 HANDOFF_HOME 临时目录 */
 function tmpHome(): string {
@@ -412,6 +413,29 @@ test('接力账本：父卡缺席/非法 id——无前缀无痕迹，行为与�
     // 链记录照旧：extras.supersedes 原样入册（继承缺席不影响链本身）
     assert.equal(cGhost.extras['supersedes'], 'ho-gone-9999')
     assert.equal(cEvil.extras['supersedes'], '../../etc/passwd')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('接力账本：父卡遗留里藏着密钥——密钥闸照拦，不因继承放行（0.25 评审[12] 测试钉）', () => {
+  const dir = tmpHome()
+  try {
+    // 密钥串拼接构造：测试源码不出现完整密钥（uncommitted diff 不走私触发补丁扫描）；
+    // 父卡用 allowSecrets 留痕旁路写入（旁路的正当用途），子卡无旁路——继承内容必须被闸拦下
+    const key = 'AKIA' + 'IOSFODNN7EXAMPLE'
+    const parent = pushHandoff(fakeSession(SAMPLE_EVENTS), { remaining: '父卡遗留：aws key: ' + key + '（测试样例）', allowSecrets: true }, { dir })
+    assert.equal(parent.ok, true)
+    if (!parent.ok) return
+    assert.ok((parent.secretsBypass ?? []).length > 0, '父卡密钥旁路应留痕')
+    assert.equal(inboxLoad(parent.id, { dir }).ok, true)
+    const child = pushHandoff(fakeSession(SAMPLE_EVENTS), { remaining: '子卡新事项', supersedes: parent.id }, { dir })
+    assert.equal(child.ok, false, '父卡遗留藏密钥：继承内容必须过密钥闸')
+    if (child.ok) return
+    assert.match(child.error ?? '', /密钥闸/, '拒收原因应指向密钥闸')
+    // 死亡地图照记（secret_gate）——拒收有据可查，不静默
+    const events = readLifecycleEvents(dir)
+    assert.ok(events.some((e) => e.reason === 'secret_gate'), '写侧拒收应入死亡地图')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
