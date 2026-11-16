@@ -552,6 +552,14 @@ const CSS = `
 /* 收件箱工具行：即时过滤输入 + 导出全部（过滤词空 = 全量） */
 .bt-inbox-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: -2px; }
 .bt-inbox-toolbar .bt-filter { flex: 1 1 180px; }
+/* 卡链历史（收件箱视图「历史」块）：块头复用 .bt-pending 行纪律；行与展开体同款 */
+.bt-history { margin-top: 14px; border-top: 1px dashed var(--bt-line); padding-top: 10px; }
+.bt-history-body { display: grid; gap: 6px; padding: 8px 0 2px; }
+.bt-history-state { font-size: 12px; color: var(--bt-mut); padding: 2px 4px; }
+.bt-history-err { color: var(--bt-err, #e5484d); }
+.bt-history-row-wrap { display: grid; }
+.bt-history-row { border: 0; }
+.bt-history-stop { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .bt-filter { flex: 1; min-width: 0; height: 32px; box-sizing: border-box;
   border: 1px solid var(--bt-line); border-radius: 10px; background: var(--bt-card);
   color: inherit; font-size: 12px; padding: 0 10px; outline: none;
@@ -637,6 +645,10 @@ const CSS = `
 .tk-mnote { font-size: 11px; line-height: 1.5; color: var(--tk-warn); max-width: 360px; overflow-wrap: anywhere; }
 .tk-mstat { font-size: 11px; color: var(--tk-mut); text-align: right; overflow: hidden; text-overflow: ellipsis;
   white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* 云端导出落盘标（矩阵 stat 列内联）：有导出文件才出，青色小胶囊与 pill 同字号 */
+.tk-mexp { font-size: 11px; font-weight: 600; padding: 2px 9px; border-radius: 999px; flex: none;
+  color: var(--tk-a2); background: color-mix(in srgb, var(--tk-a2) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--tk-a2) 38%, transparent); margin-left: 8px; }
 /* 状态 pill（§4）：11px/600 胶囊（§3 中文下限 11px 优先于原型的 10px——文案是中文），
    ok/warn 两色底纹+描边，文案闭集（支持 / 待确认 / 不可用） */
 .tk-pill { font-size: 11px; font-weight: 600; padding: 2px 9px; border-radius: 999px; flex: none;
@@ -1472,6 +1484,145 @@ export function PendingList({ rows, query, home, t, lang, onExport, onChainFilte
   )
 }
 
+// ---------------------------------------------------------------------------
+// 卡链历史（收件箱视图「历史」块）：archived/ 已归档卡的接力账本回查
+// ---------------------------------------------------------------------------
+
+/** 卡链历史单行（host 半 inboxHistory 的 HistoryItem 同构；state 经 fetch 而来，防御式消费） */
+interface HistoryRow {
+  id: string
+  title: string
+  pushed_at: string
+  /** 「停在哪」段摘要（服务端已截 120 字并剥控制字符） */
+  stopped: string
+  supersedes?: string
+}
+
+/** 历史行展示标题：无人类标题时回退编号（PendingList displayTitleOf 同款纪律——
+ * 历史行没有预览段可借，只回退到 id 本身） */
+function historyTitleOf(r: HistoryRow): string {
+  const t = r.title.trim()
+  return t !== '' ? t : r.id
+}
+
+/**
+ * 收件箱视图的「历史」块：懒加载（首次展开才拉 /dsh-takeover/history，30s 轮询
+ * 不背这个账），列表渲染每轮（标题 / 寄存时刻 / 停点摘要），点击行展开复用现有
+ * 预览纪律（.bt-preview + 边界说明，说明里如实交代摘要出处）。空态诚实：
+ * 「暂无归档卡」描述的是 archived/ 现状，加载失败单独明说不粉饰。
+ */
+export function InboxHistory({ t, lang, archivedCount }: {
+  t: Translate
+  lang: Lang
+  /** state.archivedCount：未拉取前的块头徽标口径（拉取后以服务端 total 为准） */
+  archivedCount: number
+}): ReturnType<typeof createElement> {
+  const [open, setOpen] = useState(false)
+  const [rows, setRows] = useState<HistoryRow[] | null>(null)
+  const [total, setTotal] = useState<number | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const [openIds, setOpenIds] = useState<Set<string>>(new Set())
+  const load = (): void => {
+    if (busy) return
+    setBusy(true)
+    void getJson<{ ok: true; action: 'history'; cards: HistoryRow[]; total: number } | { ok: false; error: string }>('/dsh-takeover/history')
+      .then((v) => {
+        // 业务面 ok:false 由调用方窄化（getJson 只抛 HTTP 层错误）
+        if (v.ok !== true) throw new Error(v.error)
+        const cards = Array.isArray(v.cards) ? v.cards : []
+        setRows(cards.filter((c): c is HistoryRow =>
+          c !== null && typeof c === 'object' && typeof c.id === 'string'))
+        setTotal(typeof v.total === 'number' ? v.total : cards.length)
+        setErr(null)
+        return undefined
+      })
+      .catch((e: unknown) => { setErr(e instanceof Error ? e.message : String(e)) })
+      .finally(() => setBusy(false))
+  }
+  const toggle = (): void => {
+    const next = !open
+    setOpen(next)
+    if (next && rows === null) load()
+  }
+  const toggleRow = (id: string): void => {
+    setOpenIds((prev) => {
+      const nx = new Set(prev)
+      if (nx.has(id)) nx.delete(id)
+      else nx.add(id)
+      return nx
+    })
+  }
+  const count = total ?? archivedCount
+  const head = createElement('div', {
+    className: `bt-history-head bt-pending${open ? ' bt-pending-open' : ''}`,
+    role: 'button',
+    tabIndex: 0,
+    'aria-expanded': open,
+    'aria-label': t('historyToggleAria'),
+    onClick: toggle,
+    onKeyDown: (e: { key: string; preventDefault(): void }) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle() }
+    },
+  },
+    createElement('span', { className: 'bt-pend-icon', 'aria-hidden': true }, '🕘'),
+    createElement('span', { className: 'bt-pending-title' }, t('historyTitle')),
+    createElement('span', { className: 'bt-tag bt-tag-group', title: t('historyBadgeTitle') }, String(count)),
+    createElement('span', { className: 'bt-pending-chev', 'aria-hidden': true }, '▸'),
+  )
+  const body = !open
+    ? null
+    : createElement('div', { className: 'bt-history-body' },
+        busy && rows === null ? createElement('div', { className: 'bt-history-state' }, t('historyLoading')) : null,
+        err !== null ? createElement('div', { className: 'bt-history-state bt-history-err' }, t('historyLoadFail', { error: err })) : null,
+        rows !== null && rows.length === 0 && err === null
+          ? createElement('div', { className: 'bt-banner bt-banner-info' }, t('historyEmpty'))
+          : null,
+        rows !== null && rows.length > 0
+          ? rows.map((r) => {
+              const rowOpen = openIds.has(r.id)
+              return createElement('div', { key: r.id, className: 'bt-history-row-wrap' },
+                createElement('div', {
+                  className: `bt-history-row bt-pending${rowOpen ? ' bt-pending-open' : ''}`,
+                  title: r.id,
+                  role: 'button',
+                  tabIndex: 0,
+                  'aria-expanded': rowOpen,
+                  onClick: () => toggleRow(r.id),
+                  onKeyDown: (e: { key: string; preventDefault(): void }) => {
+                    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleRow(r.id) }
+                  },
+                },
+                  createElement('span', { className: 'bt-pend-main' },
+                    createElement('span', { className: 'bt-pend-line1' },
+                      createElement('span', { className: 'bt-pending-title', title: r.id }, historyTitleOf(r)),
+                      createElement('span', { className: 'bt-pend-time' }, r.pushed_at === '' ? t('noTime') : fmtTime(r.pushed_at, lang)),
+                    ),
+                    createElement('span', { className: 'bt-pend-meta' },
+                      createElement('span', { className: 'bt-history-stop' }, r.stopped !== '' ? r.stopped : t('historyStopEmpty')),
+                    ),
+                  ),
+                  createElement('span', { className: 'bt-pending-chev', 'aria-hidden': true }, '▸'),
+                ),
+                rowOpen ? createElement('div', { className: 'bt-preview' },
+                  createElement('span', null,
+                    createElement('b', null, `${t('historyStopLabel')}：`),
+                    r.stopped !== '' ? r.stopped : t('previewEmpty'),
+                    r.supersedes !== undefined && r.supersedes !== ''
+                      ? createElement('span', null, `　${t('historyChainLabel')}：${r.supersedes}`)
+                      : null,
+                  ),
+                  createElement('span', { className: 'bt-preview-actions' },
+                    createElement('span', { className: 'bt-preview-hint' }, t('historyHint')),
+                  ),
+                ) : null,
+              )
+            })
+          : null,
+      )
+  return createElement('div', { className: 'bt-history' }, head, body)
+}
+
 export function ProviderMatrix({ rows, busy, onToggle, t }: {
   rows: ProviderRow[]
   busy: string | null
@@ -1512,7 +1663,15 @@ export function ProviderMatrix({ rows, busy, onToggle, t }: {
         createElement('span', { className: 'tk-mstat' },
           r.supported
             ? (r.sessions >= 0 ? t('sessionsCount', { n: r.sessions }) : t('sessionsProbeFail'))
-            : (r.note !== '' ? t('unsupportedNote', { note: r.note }) : t('unsupported'))),
+            : (r.note !== '' ? t('unsupportedNote', { note: r.note }) : t('unsupported')),
+          // 云端导出落盘标：exports/ 下有导出文件才出（读取器已并网的可见性；
+          // exports 字段防御式消费——老 host 半缺席时按 0 处理，标不出）
+          (r.exports ?? 0) > 0
+            ? createElement('span', {
+                className: 'tk-mexp',
+                title: t('exportsBadgeTitle', { name: r.name, n: r.exports ?? 0 }),
+              }, t('exportsBadge', { n: r.exports ?? 0 }))
+            : null),
         createElement('span', { className: pillClass }, pillText),
         createElement('button', {
           className: `tk-switch${r.enabled ? ' tk-switch-on' : ''}`,
@@ -2773,6 +2932,8 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
           createElement('div', { className: 'bt-skeleton', style: { width: '70%' } }),
           createElement('div', { className: 'bt-skeleton', style: { width: '45%' } }),
         ),
+    // 卡链历史（接力账本的可见面）：懒加载 archived/ 回查，空态诚实
+    createElement(InboxHistory, { t, lang, archivedCount }),
   ]
 
   return createElement('div', { className: `bt-panel${bounded === true ? ' bt-bounded' : ''}`, style: themeVars(true), ref: rootRef, onKeyDown: onRootKeyDown },

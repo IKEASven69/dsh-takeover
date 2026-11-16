@@ -360,3 +360,29 @@ test('uiNavigatorOf：宿主 uiWorkspace 可达时切会话并返回 true；缺�
   assert.equal(uiNavigatorOf({ get: () => 'not-an-object' })('sess-9'), false)
   assert.equal(uiNavigatorOf({ get: () => ({ openSession: 'nope' }) })('sess-9'), false)
 })
+
+// ---------- 卡链历史路由（GET /dsh-takeover/history）：读守卫同 state，inboxHistory 直连 ----------
+
+test('路由：GET history 回环同源 200（ok:true + action:history）；跨站 403；POST 405', async () => {
+  const handler = routeHandler()
+  const ok = await callRoute(handler, {
+    method: 'GET',
+    url: '/dsh-takeover/history?project=alpha',
+    headers: { host: 'localhost:3080', 'sec-fetch-site': 'same-origin' },
+  })
+  assert.equal(ok.status, 200)
+  const body = JSON.parse(ok.body) as { ok: boolean; action?: string; cards?: unknown[] }
+  assert.equal(body.ok, true, '历史回查是业务只读面，照常返回规范值')
+  assert.equal(body.action, 'history')
+  assert.ok(Array.isArray(body.cards))
+  // 读守卫与 state 同款：跨站 sec-fetch-site 拒绝
+  const forbidden = await callRoute(handler, {
+    method: 'GET',
+    url: '/dsh-takeover/history',
+    headers: { host: 'localhost:3080', 'sec-fetch-site': 'cross-site' },
+  })
+  assert.equal(forbidden.status, 403)
+  // 写方法不进历史路由
+  const post = await callRoute(handler, { method: 'POST', url: '/dsh-takeover/history', headers: { ...ORIGIN }, body: '{}' })
+  assert.equal(post.status, 405)
+})

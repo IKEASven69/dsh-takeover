@@ -33,7 +33,7 @@ export function apply(ctx: Context): void {
   ctx.logger.info('dsh-takeover: 会话接管已加载（工具 handoff_push / handoff_inbox / handoff_memory / handoff_sync / handoff_env / foreign_session_read + slash /handoff /inbox /resume-*×8 + 设置卡 API /dsh-takeover/*）')
 }
 
-export { pushHandoff, inboxList, inboxLoad, inboxHistory, pushConfigCard, factsToSections, handoffHostNotice, baselineFromExtras, axisFromExtras, renderBaselineGuidance, HISTORY_TAIL_MAX, HISTORY_STOPPED_MAX } from './tools.ts'
+export { pushHandoff, inboxList, inboxLoad, inboxHistory, pushConfigCard, factsToSections, handoffHostNotice, baselineFromExtras, axisFromExtras, renderBaselineGuidance, inheritParentRemaining, HISTORY_TAIL_MAX, HISTORY_STOPPED_MAX, RELAY_REMAINING_MAX_BYTES } from './tools.ts'
 export type { PushArgs, PushResult, InboxItem, InboxListResult, InboxLoadResult, InboxHistoryResult, HistoryItem, ConfigCardPayload, ConfigCardResult, CardAxis, CardPayload, RepoBaseline } from './tools.ts'
 export { probeSessionEvents, collectFacts, todoToTasks } from './collect.ts'
 export type { ProbeResult, SessionFacts } from './collect.ts'
@@ -57,6 +57,7 @@ export {
   buildState,
   clearArchived,
   dismissPending,
+  exportsCountOf,
   isProviderEnabled,
   loadSwitches,
   saveSwitches,

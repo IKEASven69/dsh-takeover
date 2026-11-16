@@ -1,6 +1,8 @@
 /**
  * host 侧 /dsh-takeover/ JSON API（webServer 路由桥）：
  *   GET  /dsh-takeover/state           设置卡状态（收件箱概览 + 支持矩阵）
+ *   GET  /dsh-takeover/history         卡链历史 ?project=&cwd=（archived/ 已归档卡回查，
+ *                                      与 handoff_inbox action=history 同一读取层）
  *   GET  /dsh-takeover/sessions        外部会话浏览列表 ?provider=&limit=（轻量发现层，不读内容）
  *   GET  /dsh-takeover/session-preview 单会话结构化预览 ?provider=&reference=（摘要+骨架素材，不吐原文轮次）
  *   POST /dsh-takeover/takeover        一键接管/取件 {mode, provider?, reference?}——宿主会话控制器建新会话并投递指令
@@ -23,7 +25,7 @@ import { defaultForeignReaders, foreignResolveOne, foreignSessionPreview, foreig
 import { depositCommand, outboundCommand, OUTBOUND_LABELS, takeoverCommand, type Lang, type SessionRowLike } from './browser-view.ts'
 import { writeRelayProvenance } from './relay-records.ts'
 import { pushMemoryCard, scanMemorySources } from './memory.ts'
-import { pushHandoff } from './tools.ts'
+import { pushHandoff, inboxHistory } from './tools.ts'
 import { recordLifecycleEvent } from './lifecycle.ts'
 import { buildState, clearArchived, dismissPending, isProviderEnabled, setProviderEnabled } from './settings.ts'
 import { loadSyncConfig, syncNow, syncPull, syncPush, syncSetup, type SyncOutcome } from './sync.ts'
@@ -365,6 +367,25 @@ export function registerTakeoverRoutes(
             (state) => { sendJson(response, 200, state) },
             (error: unknown) => { sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) }) },
           )
+          return
+        }
+
+        if (sub === 'history') {
+          // 卡链历史（工作台收件箱「历史」视图的数据源）：handoff_inbox action=history
+          // 同一读取层（archived/ 已归档卡按 project/cwd 过滤回查）。只读面，与 state
+          // 同一读守卫；查询参数可选，全缺省 = 全量回查
+          if (request.method !== 'GET') {
+            response.writeHead(405, { allow: 'GET' })
+            response.end()
+            return
+          }
+          if (!readGuard(request)) {
+            sendJson(response, 403, { error: '仅接受本机同源读取' })
+            return
+          }
+          const q = new URL(request.url ?? '/', 'http://localhost').searchParams
+          const body = inboxHistory({ project: q.get('project') ?? '', cwd: q.get('cwd') ?? '' })
+          sendJson(response, 200, body)
           return
         }
 
@@ -792,7 +813,7 @@ export function registerTakeoverRoutes(
           return
         }
 
-        sendJson(response, 404, { error: `未知路由：/dsh-takeover/${sub}（支持 state / sessions / session-preview / takeover / provider / clear-archived / dismiss-pending / sync / env-backup / lifeboat）` })
+        sendJson(response, 404, { error: `未知路由：/dsh-takeover/${sub}（支持 state / history / sessions / session-preview / takeover / provider / clear-archived / dismiss-pending / sync / env-backup / lifeboat）` })
       },
     }))
   })

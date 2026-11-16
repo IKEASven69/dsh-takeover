@@ -18,7 +18,7 @@ const t = ((key: string, params?: Record<string, unknown>) =>
   interpolate(DICTS.zh[String(key)] ?? String(key), params)) as unknown as Translate
 
 const provider = (name: string, over: Partial<ProviderRow> = {}): ProviderRow => ({
-  name: name as ProviderRow['name'], supported: true, sessions: 3, enabled: true, note: '', ...over,
+  name: name as ProviderRow['name'], supported: true, sessions: 3, enabled: true, note: '', exports: 0, ...over,
 })
 
 const pendingRow = (over: Partial<PendingRow> = {}): PendingRow => ({
@@ -630,6 +630,80 @@ test('Panel（设置卡，无座位）：不出救生艇按钮', async () => {
   await waitText('收件箱概览')
   assert.ok(has('收件箱概览'))
   assert.ok(!has('🛟 救生艇'), '设置卡内嵌工作台无 sessionId 座位，救生艇不出现')
+})
+
+// ---------------------------------------------------------------- 卡链历史（收件箱「历史」块）
+
+const historyFixture = (): unknown => ({
+  ok: true,
+  action: 'history',
+  cards: [
+    { id: 'ho-arch-0001', title: '早班卡', pushed_at: '2026-11-13T09:00:00+08:00', stopped: '停在写测试', supersedes: 'ho-root-0000' },
+    { id: 'ho-arch-0002', title: '', pushed_at: '2026-11-13T10:00:00+08:00', stopped: '' },
+  ],
+  total: 2,
+})
+
+test('WorkspaceBody：收件箱「历史」块——默认折叠不拉取，展开才拉 history，渲染每轮标题/时刻/停点摘要', async () => {
+  stubPlan['/dsh-takeover/history'] = { body: historyFixture() }
+  await render(createElement(client.WorkspaceBody, { t, locale: undefined, navigate, chrome: false }))
+  await waitText('待取件 3')
+  const headBtn = container.querySelector('.bt-history-head') as HTMLElement | null
+  assert.ok(headBtn, '历史块头缺失')
+  assert.equal(headBtn.getAttribute('aria-expanded'), 'false', '默认折叠')
+  assert.ok(!has('早班卡'), '折叠态不渲染历史行')
+  await act(async () => { fireClick(headBtn) })
+  await flush()
+  assert.equal(calls.filter((c) => c.url.startsWith('/dsh-takeover/history')).length, 1, '首次展开应拉取 /dsh-takeover/history')
+  await waitText('早班卡')
+  assert.ok(has('历史（卡链）'), '块头文案缺失')
+  assert.ok(has('停在写测试'), '停点摘要应渲染')
+  assert.ok(has('（无停点记录）'), '空停点行诚实兜底')
+  assert.ok(!has('暂无归档卡'), '有数据不得显示空态')
+  delete stubPlan['/dsh-takeover/history']
+})
+
+test('WorkspaceBody：历史行点击展开复用预览纪律（bt-preview + 边界说明 + 接替链）', async () => {
+  stubPlan['/dsh-takeover/history'] = { body: historyFixture() }
+  await render(createElement(client.WorkspaceBody, { t, locale: undefined, navigate, chrome: false }))
+  await waitText('待取件 3')
+  const headBtn = container.querySelector('.bt-history-head') as HTMLElement | null
+  assert.ok(headBtn)
+  await act(async () => { fireClick(headBtn) })
+  await waitText('早班卡')
+  const row = container.querySelector('.bt-history-row') as HTMLElement | null
+  assert.ok(row, '历史行缺失')
+  // 预览体是行的**兄弟**节点（外层中性容器纪律，与 PendingList rowNode 同款——嵌套可交互元素违反 ARIA 禁则）
+  assert.ok(container.querySelector('.bt-history-row-wrap .bt-preview') === null, '未展开行无预览体')
+  await act(async () => { fireClick(row) })
+  await flush()
+  assert.ok(container.querySelector('.bt-history-row-wrap .bt-preview') !== null, '展开体应复用 bt-preview 纪律')
+  assert.ok(has('停在：停在写测试'), '展开体显示停点标签')
+  assert.ok(has('接替：ho-root-0000'), '展开体显示接力链')
+  assert.ok(has('handoff_inbox'), '边界说明交代摘要出处（完整卡回查通道）')
+  delete stubPlan['/dsh-takeover/history']
+})
+
+test('WorkspaceBody：历史空态诚实（无归档卡）；拉取失败明说不粉饰', async () => {
+  stubPlan['/dsh-takeover/history'] = { body: { ok: true, action: 'history', cards: [], total: 0 } }
+  await render(createElement(client.WorkspaceBody, { t, locale: undefined, navigate, chrome: false }))
+  await waitText('待取件 3')
+  const headBtn = container.querySelector('.bt-history-head') as HTMLElement | null
+  assert.ok(headBtn)
+  await act(async () => { fireClick(headBtn) })
+  await waitText('暂无归档卡')
+  assert.ok(has('archived/'), '空态说明交代目录现实')
+  delete stubPlan['/dsh-takeover/history']
+  // 失败态：规范错误值原样浮出（不粉饰成空态）
+  stubPlan['/dsh-takeover/history'] = { body: { ok: false, error: 'archived 目录读取失败' } }
+  await render(createElement(client.WorkspaceBody, { t, locale: undefined, navigate, chrome: false }))
+  await waitText('待取件 3')
+  const headBtn2 = container.querySelector('.bt-history-head') as HTMLElement | null
+  assert.ok(headBtn2)
+  await act(async () => { fireClick(headBtn2) })
+  await waitText('历史读取失败：archived 目录读取失败')
+  assert.ok(!has('暂无归档卡'), '失败态不得冒充空态')
+  delete stubPlan['/dsh-takeover/history']
 })
 
 after(() => { try { root?.unmount() } catch { /* 已卸载 */ } })

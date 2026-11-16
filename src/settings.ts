@@ -87,6 +87,30 @@ export function setProviderEnabled(provider: string, enabled: boolean, dir?: str
 }
 
 // ---------------------------------------------------------------------------
+// 云端导出落盘（exports 目录探测器）
+// ---------------------------------------------------------------------------
+
+/**
+ * 云端导出落盘计数：<HANDOFF_HOME>/exports/<provider>/ 下的常规文件数。
+ * 约定（README「跨机器 / 云端」）：各家云端会话凡能「导出成文件」的，按该家本地
+ * 记录的原生格式丢进对应子目录，即被读取器吃掉（readers 侧 exports 同款探测，
+ * 两轴独立：本计数只管矩阵显示，读取器并网不看它）。目录缺失 / 读失败 = 0——
+ * 无导出是常态两态之一，不是错误，绝不抛出。
+ */
+export function exportsCountOf(provider: string, dir?: string): number {
+  try {
+    const p = join(resolveHome(dir), 'exports', provider)
+    let n = 0
+    for (const e of readdirSync(p, { withFileTypes: true })) {
+      if (e.isFile()) n += 1
+    }
+    return n
+  } catch {
+    return 0
+  }
+}
+
+// ---------------------------------------------------------------------------
 // /dsh-takeover/state 组装
 // ---------------------------------------------------------------------------
 
@@ -119,7 +143,7 @@ function previewOf(c: { sections: { goal: string; done: string } }): { text: str
   }
 }
 
-/** 支持矩阵行：本机是否支持 / 发现的会话数 / 启用开关 */
+/** 支持矩阵行：本机是否支持 / 发现的会话数 / 启用开关 / 云端导出落盘数 */
 export interface ProviderRow {
   name: ForeignProvider
   supported: boolean
@@ -127,6 +151,9 @@ export interface ProviderRow {
   sessions: number
   enabled: boolean
   note: string
+  /** 云端导出落盘：<HANDOFF_HOME>/exports/<provider>/ 下的导出文件数（读取器已并网；
+   * 目录缺失 / 家不参与（纯 SQLite 四家）= 0，矩阵该行不出导出标）。 */
+  exports: number
 }
 
 export interface TakeoverState {
@@ -313,7 +340,14 @@ export function buildState(readers: ForeignReaders, dir?: string): TakeoverState
         /* 保留探测前的 note，不让注释查询拖垮状态组装 */
       }
     }
-    return { name, supported, sessions, enabled: !switches.disabledProviders.includes(name), note }
+    return {
+      name,
+      supported,
+      sessions,
+      enabled: !switches.disabledProviders.includes(name),
+      note,
+      exports: exportsCountOf(name, dir),
+    }
   })
 
   // 死亡地图（0.4.1）：读侧活性跳过 + 持久事件尾 50 条；全空时整个 rejections 缺省

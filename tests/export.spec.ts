@@ -46,6 +46,7 @@ function makeProviders(): ProviderRow[] {
     sessions: i % 2 === 0 ? (i === 0 ? 7 : i) : -1,
     enabled: name !== 'grok',
     note: name === 'opencode' ? '存储目录存在但未发现会话——上游可能已迁移存储布局' : '',
+    exports: 0,
   }))
 }
 

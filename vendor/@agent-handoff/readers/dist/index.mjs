@@ -4255,6 +4255,80 @@ const gooseAdapter = {
 	}
 };
 //#endregion
+//#region src/exports.ts
+/**
+* 云端导出落盘过渡通路（exports 目录探测）：
+* 约定 <HANDOFF_HOME>/exports/<provider>/ 目录——各家云端会话凡能「导出成文件」的，
+* 把导出文件按该家本地记录的原生格式丢进对应子目录，即被现有文件系适配器原样吃掉
+* （零新增解析面：解析仍走各适配器既有 parse）。要点：
+* - 根目录解析复用 HANDOFF_HOME 惯例（env 非空优先，缺省 ~/.handoff，与 core
+*   resolveHome 同口径）；测试钩子 HANDOFF_EXPORTS 可直指 exports 根——与
+*   HANDOFF_ROOT_* 同为「模块加载时读一次」的惯例。
+* - 参与者 = 文件系适配器（发现/解析都以文件路径为轴）。纯 SQLite 四家
+*   （zcode / copilot / devin / mimo）的 parse 只认库内会话 id，导出文件没有
+*   可对齐的格式，不参与——诚实边界，不假装能吃。openclaw / goose 的
+*   jsonl 旧格式可按扩展名分派，照常参与。
+* - claude 的适配器名是 claude-code，导出目录按 provider 名约定为 exports/claude；
+*   适配器同吃 exports/claude-code 别名目录（两轴名字差异只此一家）。
+* - 只读不写；目录缺失 / 不可读 / 无文件 = 无导出，静默返回空，绝不抛错。
+* - 不进交接目标轴（OUTBOUND_TARGETS）：导出探测是读取器能力，两轴独立。
+*/
+const HANDOFF_HOME_ENV = (process.env["HANDOFF_HOME"] ?? "").trim();
+const HANDOFF_EXPORTS_ENV = (process.env["HANDOFF_EXPORTS"] ?? "").trim();
+const EXPORTS_ROOT = HANDOFF_EXPORTS_ENV !== ""
+	? HANDOFF_EXPORTS_ENV
+	: join(HANDOFF_HOME_ENV !== "" ? HANDOFF_HOME_ENV : join(homedir(), ".handoff"), "exports");
+/** 纯 SQLite 四家不参与（parse 只认库内会话 id，导出文件无格式可对齐） */
+const EXPORTS_SKIP = new Set(["zcode", "copilot", "devin", "mimo"]);
+/** 适配器名 → 导出目录名候选（provider 名约定 + 适配器名别名；差异只 claude 一家） */
+const EXPORTS_DIR_ALIASES = { "claude-code": ["claude", "claude-code"] };
+/** 某家适配器的导出目录候选（按候选序去重，别名与本体可能同名） */
+function exportsDirsFor(agent) {
+	const names = EXPORTS_DIR_ALIASES[agent] ?? [agent];
+	return [...new Set(names.map((n) => join(EXPORTS_ROOT, n)))];
+}
+/** 扫一个导出目录 → SessionRef[]（常规文件逐个入册；cwd 如实留空） */
+function exportsRefsOfDir(agent, dir) {
+	const out = [];
+	let entries;
+	try {
+		entries = readdirSync(dir, { withFileTypes: true });
+	} catch {
+		return out;
+	}
+	for (const entry of entries) {
+		if (!entry.isFile()) continue;
+		const file = join(dir, entry.name);
+		let mtime = 0;
+		let size = 0;
+		try {
+			const st = statSync(file);
+			if (!st.isFile()) continue;
+			mtime = st.mtimeMs;
+			size = st.size;
+		} catch {
+			continue;
+		}
+		out.push({
+			agent,
+			id: file,
+			title: basename(file),
+			cwd: "",
+			updatedAt: mtime,
+			fingerprint: `${Math.round(mtime)}:${size}`,
+			kind: "file"
+		});
+	}
+	return out;
+}
+/** 某家适配器的导出会话（全部候选目录并集） */
+function exportsRefsFor(agent) {
+	if (EXPORTS_SKIP.has(agent)) return [];
+	const out = [];
+	for (const dir of exportsDirsFor(agent)) out.push(...exportsRefsOfDir(agent, dir));
+	return out;
+}
+//#endregion
 //#region src/index.ts
 /**
 * @agent-handoff/readers：二十三家 agent 会话的只读读取层。
@@ -4347,18 +4421,35 @@ function adapterFor(agent) {
 	if (a === void 0) throw new Error(`未知 agent：${agent}（支持：${AGENTS.map((x) => x.name).join(" / ")}）`);
 	return a;
 }
-/** 发现会话：给 agent 名只查该家；不给则查全部支持的家，单家失败不拖垮整体。 */
+/** 导出会话按 id 去重并入（防同一文件在发现层与导出层重复入册） */
+function mergeExportsRefs(native, adapter) {
+	const exports = exportsRefsFor(adapter.name);
+	if (exports.length === 0) return native;
+	// 有导出会话就不再报「假 0 布局迁移」哨兵——会话明明在册（导出落盘的），哨兵会说谎
+	if (native.length === 0) adapter.note = void 0;
+	const seen = new Set(native.map((r) => r.id));
+	return [...native, ...exports.filter((r) => !seen.has(r.id))];
+}
+/** 发现会话：给 agent 名只查该家；不给则查全部支持的家，单家失败不拖垮整体。
+* 本地发现之外并入 exports 导出落盘的会话（云端导出过渡通路），仍按更新时间倒序。 */
 function listSessions(agent) {
 	if (agent !== void 0) {
 		const a = adapterFor(agent);
 		if (!a.supported) return [];
-		return a.discover().sort((x, y) => y.updatedAt - x.updatedAt);
+		const refs = a.discover();
+		return mergeExportsRefs(refs, a).sort((x, y) => y.updatedAt - x.updatedAt);
 	}
 	const out = [];
 	for (const a of AGENTS) {
 		if (!a.supported) continue;
 		try {
 			out.push(...a.discover());
+		} catch {}
+	}
+	for (const a of AGENTS) {
+		if (!a.supported || EXPORTS_SKIP.has(a.name)) continue;
+		try {
+			out.push(...exportsRefsFor(a.name));
 		} catch {}
 	}
 	return out.sort((x, y) => y.updatedAt - x.updatedAt);

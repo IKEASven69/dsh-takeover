@@ -167,6 +167,20 @@ type PushResult = {
 };
 /** 确定性兜底：事件流事实 → 六段正文草稿（中文，证据一律 HISTORY_REPORTED） */
 export declare function factsToSections(facts: SessionFacts, skipped: boolean, note: string): CardSections;
+/** 父卡 remaining 并入新卡前的字节闸：2KB = 2048 字节（UTF-8 实测字节，超限截断留痕） */
+export declare const RELAY_REMAINING_MAX_BYTES = 2048;
+/**
+ * 读父卡（supersedes 指向的前置卡）的 remaining 段，产出「上一棒遗留」前缀：
+ * pending/ 优先（父卡还没被取走——接力现场常态），退 archived/（已被取走）。
+ * 父卡不存在 / 已被 archived 滚动清理 / id 非法 / 解析失败 / remaining 为空
+ * → undefined（无前缀，行为与无父卡完全一致；诚实降级，不造「继承成功」的假象）。
+ * id 过 core SAFE_ID 闸（ho-* 形态），路径走私进不了文件名。确定性：文本净化 +
+ * 2KB 截断后原样继承，不总结不改写。
+ */
+export declare function inheritParentRemaining(parentId: string, dir?: string): {
+  prefix: string;
+  note: string;
+} | undefined;
 /**
  * 推送核心（可脱离 host 单测）：组装协议卡片写入 pending/。
  * session 可以是任何形态——探测失败只降级，不抛错。
@@ -1137,6 +1151,14 @@ export declare function saveSwitches(switches: TakeoverSwitches, dir?: string): 
 export declare function isProviderEnabled(provider: string, dir?: string): boolean;
 /** 切某家开关并持久化；未知 provider 抛中文错（路由层转 400） */
 export declare function setProviderEnabled(provider: string, enabled: boolean, dir?: string): TakeoverSwitches;
+/**
+ * 云端导出落盘计数：<HANDOFF_HOME>/exports/<provider>/ 下的常规文件数。
+ * 约定（README「跨机器 / 云端」）：各家云端会话凡能「导出成文件」的，按该家本地
+ * 记录的原生格式丢进对应子目录，即被读取器吃掉（readers 侧 exports 同款探测，
+ * 两轴独立：本计数只管矩阵显示，读取器并网不看它）。目录缺失 / 读失败 = 0——
+ * 无导出是常态两态之一，不是错误，绝不抛出。
+ */
+export declare function exportsCountOf(provider: string, dir?: string): number;
 /** 收件箱概览的待取件行 */
 interface PendingRow {
   id: string;
@@ -1153,7 +1175,7 @@ interface PendingRow {
   /** 接力链：本卡接替的前置卡 id（信封 extras.supersedes——协议设计只随信封走，卡片本体不含；链可视化）。非接力卡缺省 */
   supersedes?: string;
 }
-/** 支持矩阵行：本机是否支持 / 发现的会话数 / 启用开关 */
+/** 支持矩阵行：本机是否支持 / 发现的会话数 / 启用开关 / 云端导出落盘数 */
 interface ProviderRow {
   name: ForeignProvider;
   supported: boolean;
@@ -1161,6 +1183,9 @@ interface ProviderRow {
   sessions: number;
   enabled: boolean;
   note: string;
+  /** 云端导出落盘：<HANDOFF_HOME>/exports/<provider>/ 下的导出文件数（读取器已并网；
+   * 目录缺失 / 家不参与（纯 SQLite 四家）= 0，矩阵该行不出导出标）。 */
+  exports: number;
 }
 interface TakeoverState {
   /** 解析后的 HANDOFF_HOME 绝对路径（默认 ~/.handoff）：客户端 localStorage

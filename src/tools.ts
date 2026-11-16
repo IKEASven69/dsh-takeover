@@ -28,12 +28,14 @@ import type {} from '@deepseek-ai/dsh-skill'
 import type {} from '@deepseek-ai/dsh-user-questions'
 import type { AskUserQuestionRequest } from '@deepseek-ai/dsh-user-questions'
 import {
+  assertSafeId,
   collectGitSnapshot,
   collectPatch,
   generateId,
   listArchivedReport,
   listPendingReport,
   loadCard,
+  parseCardLenient,
   pendingDir,
   renderCard,
   archivedDir,
@@ -688,6 +690,66 @@ export function factsToSections(facts: SessionFacts, skipped: boolean, note: str
   }
 }
 
+// ---------------------------------------------------------------------------
+// 接力账本：supersedes 在场时继承父卡「还差什么」段（确定性拼接，零 LLM）
+// ---------------------------------------------------------------------------
+
+/** 父卡 remaining 并入新卡前的字节闸：2KB = 2048 字节（UTF-8 实测字节，超限截断留痕） */
+export const RELAY_REMAINING_MAX_BYTES = 2048
+
+/** UTF-8 字节闸截断：按码点累计（代理对不被劈开），截断标记计入预算——
+ * 产出（正文 + 标记）整体 ≤ maxBytes，「≤2KB」按字面兑现 */
+function byteTruncate(s: string, maxBytes: number): string {
+  const marker = `\n…（上一棒遗留超 ${maxBytes} 字节已截断）`
+  const budget = maxBytes - Buffer.byteLength(marker, 'utf-8')
+  let out = ''
+  let bytes = 0
+  for (const ch of s) {
+    const b = Buffer.byteLength(ch, 'utf-8')
+    if (bytes + b > budget) return out + marker
+    out += ch
+    bytes += b
+  }
+  return out
+}
+
+/**
+ * 读父卡（supersedes 指向的前置卡）的 remaining 段，产出「上一棒遗留」前缀：
+ * pending/ 优先（父卡还没被取走——接力现场常态），退 archived/（已被取走）。
+ * 父卡不存在 / 已被 archived 滚动清理 / id 非法 / 解析失败 / remaining 为空
+ * → undefined（无前缀，行为与无父卡完全一致；诚实降级，不造「继承成功」的假象）。
+ * id 过 core SAFE_ID 闸（ho-* 形态），路径走私进不了文件名。确定性：文本净化 +
+ * 2KB 截断后原样继承，不总结不改写。
+ */
+export function inheritParentRemaining(parentId: string, dir?: string): { prefix: string; note: string } | undefined {
+  try {
+    assertSafeId(parentId)
+  } catch {
+    return undefined
+  }
+  let text = ''
+  for (const base of [pendingDir(dir), archivedDir(dir)]) {
+    try {
+      text = readFileSync(join(base, `${parentId}.md`), 'utf-8')
+      break
+    } catch { /* 该处没有，试下一处 */ }
+  }
+  if (text === '') return undefined
+  let remaining = ''
+  try {
+    remaining = parseCardLenient(text, { filename: `${parentId}.md` }).sections.remaining ?? ''
+  } catch {
+    return undefined
+  }
+  const raw = stripControlChars(remaining).trim()
+  if (raw === '') return undefined
+  const body = byteTruncate(defuseHeadingLines(raw), RELAY_REMAINING_MAX_BYTES)
+  return {
+    prefix: `【上一棒遗留 · ${parentId}】\n${body}`,
+    note: `接力账本：已并入上一棒（${parentId}）「还差什么」段前缀`,
+  }
+}
+
 /**
  * 推送核心（可脱离 host 单测）：组装协议卡片写入 pending/。
  * session 可以是任何形态——探测失败只降级，不抛错。
@@ -752,6 +814,19 @@ ${honest}`
     }
     const suggested = pick(args.suggested, '')
     if (suggested !== '') sections.suggested = section(suggested, '')
+
+    // 接力账本（确定性拼接，零 LLM）：supersedes 在场 → 读父卡「还差什么」段作
+    // 「上一棒遗留」前缀并入新卡 remaining 段，接手方开局先看见上一棒没干完的事。
+    // 继承发生在密钥闸/空壳闸之前——父卡遗留里若藏着密钥，闸照拦，不因拼接放行；
+    // 父卡缺席/解析失败 → 无前缀无痕迹，行为与无 supersedes 完全一致
+    const relayNotes: string[] = []
+    if (typeof args.supersedes === 'string' && args.supersedes.trim() !== '') {
+      const inherited = inheritParentRemaining(args.supersedes.trim(), opts?.dir)
+      if (inherited !== undefined) {
+        sections.remaining = `${inherited.prefix}\n\n${sections.remaining}`
+        relayNotes.push(inherited.note)
+      }
+    }
 
     // 密钥闸（先例：gitleaks/Push Protection——阻断为默认 + 留痕旁路）：卡随同步盘跨机传播
     // 并进入下游会话上下文，比 git 更宽的泄漏面；命中即拒，理由回喂调用方
@@ -895,7 +970,7 @@ ${honest}`
     const bypassNote = secretHits.length > 0 && args.allowSecrets === true
       ? `密钥闸旁路留痕：${secretHits.map((h) => `${h.rule}@${h.section}`).join('；')}`
       : ''
-    const note = [probe.note, ...truncated, ...patchNotes, envelopeNote, bypassNote, skeleton ? '空壳卡（已确认寄存）' : ''].filter(Boolean).join('；')
+    const note = [probe.note, ...truncated, ...patchNotes, ...relayNotes, envelopeNote, bypassNote, skeleton ? '空壳卡（已确认寄存）' : ''].filter(Boolean).join('；')
     return {
       ok: true,
       id: card.id,
@@ -1220,7 +1295,7 @@ export function registerPushTool(ctx: Context): void {
       to: { type: 'string', description: '目标 agent/项目，默认 any' },
       project: { type: 'string', description: '项目名（可选，默认空）' },
       cwd: { type: 'string', description: '卡片归属的工作目录，缺省取当前会话工作区' },
-      supersedes: { type: 'string', description: '本卡接替的前置卡 id（接力寄存时传）：记录进机器信封，取件侧提示接力链' },
+      supersedes: { type: 'string', description: '本卡接替的前置卡 id（接力寄存时传）：记录进机器信封，取件侧提示接力链；父卡在盘（pending/archived）时其「还差什么」段自动作「上一棒遗留」前缀并入本卡（2KB 截断，确定性拼接不调 LLM）' },
       confirmSkeleton: { type: 'boolean', description: '空壳卡守门旁路：六段全是兜底占位被拦截时，确认要寄存空壳卡传 true' },
       allowSecrets: { type: 'boolean', description: '密钥闸旁路：扫描命中疑似密钥被拦截时，确认带密寄存传 true（旁路留痕）' },
     },

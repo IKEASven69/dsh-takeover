@@ -326,6 +326,133 @@ test('push：supersedes 进 extras（卡链检索的持久通道——信封取�
   }
 })
 
+// ---------- 接力账本：supersedes 父卡 remaining 前缀继承（确定性拼接，零 LLM） ----------
+
+test('接力账本：父卡已归档——「上一棒遗留」前缀并入新卡 remaining 段（前缀在上、note 留痕）', () => {
+  const dir = tmpHome()
+  try {
+    const parent = pushHandoff(fakeSession(SAMPLE_EVENTS), { goal: '父卡目标', remaining: '父卡没干完的事', title: '父卡' }, { dir })
+    assert.equal(parent.ok, true)
+    if (!parent.ok) return
+    // 父卡取件进 archived/（接力常态：先取件再接力）
+    assert.equal(inboxLoad(parent.id, { dir }).ok, true)
+    const child = pushHandoff(fakeSession(SAMPLE_EVENTS), { goal: '子卡目标', remaining: '子卡新事项', supersedes: parent.id }, { dir })
+    assert.equal(child.ok, true)
+    if (!child.ok) return
+    const card = parseCard(readFileSync(child.path, 'utf-8'))
+    assert.match(card.sections.remaining, /^【上一棒遗留 · ho-/, '前缀应在段首')
+    const atParent = card.sections.remaining.indexOf('父卡没干完的事')
+    const atChild = card.sections.remaining.indexOf('子卡新事项')
+    assert.ok(atParent >= 0, '父卡遗留文本应随前缀继承')
+    assert.ok(atChild >= 0, '子卡自身 remaining 应保留')
+    assert.ok(atParent < atChild, '确定性顺序：上一棒遗留在前、新事项在后')
+    assert.match(child.note ?? '', /接力账本/, '继承发生应有 note 留痕')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('接力账本：父卡还在 pending（未取件）同样继承——pending 优先于 archived', () => {
+  const dir = tmpHome()
+  try {
+    const parent = pushHandoff(fakeSession(SAMPLE_EVENTS), { remaining: 'pending 里的父卡遗留' }, { dir })
+    assert.equal(parent.ok, true)
+    if (!parent.ok) return
+    const child = pushHandoff(fakeSession(SAMPLE_EVENTS), { remaining: '子卡新事项', supersedes: parent.id }, { dir })
+    assert.equal(child.ok, true)
+    if (!child.ok) return
+    const card = parseCard(readFileSync(child.path, 'utf-8'))
+    assert.ok(card.sections.remaining.includes('pending 里的父卡遗留'))
+    assert.match(child.note ?? '', /接力账本/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('接力账本：父卡 remaining 超 2KB 截断——产出整体 ≤2048 字节且带截断标记，子卡正文完整', () => {
+  const dir = tmpHome()
+  try {
+    const parent = pushHandoff(fakeSession(SAMPLE_EVENTS), { remaining: '长'.repeat(3000) }, { dir })
+    assert.equal(parent.ok, true)
+    if (!parent.ok) return
+    const child = pushHandoff(fakeSession(SAMPLE_EVENTS), { remaining: '子卡新事项', supersedes: parent.id }, { dir })
+    assert.equal(child.ok, true)
+    if (!child.ok) return
+    const card = parseCard(readFileSync(child.path, 'utf-8'))
+    const remaining = card.sections.remaining
+    // 前缀体 = 头行之后到子卡正文（空行分隔）之前
+    const headEnd = remaining.indexOf('\n')
+    const childStart = remaining.indexOf('子卡新事项')
+    assert.ok(headEnd >= 0 && childStart > headEnd)
+    const inherited = remaining.slice(headEnd + 1, childStart).trimEnd()
+    assert.ok(Buffer.byteLength(inherited, 'utf-8') <= 2048, `继承体应 ≤2048 字节（实测 ${Buffer.byteLength(inherited, 'utf-8')}）`)
+    assert.match(inherited, /上一棒遗留超 2048 字节已截断/, '截断应留痕')
+    assert.ok(!remaining.includes('长'.repeat(1500)), '3000 字的父卡正文不得整段混入')
+    assert.ok(remaining.endsWith('子卡新事项'), '子卡自身正文完整保留')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('接力账本：父卡缺席/非法 id——无前缀无痕迹，行为与无 supersedes 完全一致', () => {
+  const dir = tmpHome()
+  try {
+    const plain = pushHandoff(fakeSession(SAMPLE_EVENTS), { goal: 'g', remaining: '子卡新事项' }, { dir })
+    const ghost = pushHandoff(fakeSession(SAMPLE_EVENTS), { goal: 'g', remaining: '子卡新事项', supersedes: 'ho-gone-9999' }, { dir })
+    const evil = pushHandoff(fakeSession(SAMPLE_EVENTS), { goal: 'g', remaining: '子卡新事项', supersedes: '../../etc/passwd' }, { dir })
+    assert.equal(plain.ok && ghost.ok && evil.ok, true)
+    if (!(plain.ok && ghost.ok && evil.ok)) return
+    const cPlain = parseCard(readFileSync(plain.path, 'utf-8'))
+    const cGhost = parseCard(readFileSync(ghost.path, 'utf-8'))
+    const cEvil = parseCard(readFileSync(evil.path, 'utf-8'))
+    assert.equal(cGhost.sections.remaining, cPlain.sections.remaining, '父卡缺席：remaining 与无 supersedes 完全一致')
+    assert.equal(cEvil.sections.remaining, cPlain.sections.remaining, '非法 id（路径走私形态）：同样无前缀、不抛错')
+    assert.doesNotMatch(ghost.note, /接力账本/)
+    assert.doesNotMatch(evil.note, /接力账本/)
+    // 链记录照旧：extras.supersedes 原样入册（继承缺席不影响链本身）
+    assert.equal(cGhost.extras['supersedes'], 'ho-gone-9999')
+    assert.equal(cEvil.extras['supersedes'], '../../etc/passwd')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('接力账本：父卡 remaining 为空/父卡是坏卡——无可继承则无前缀（不造空壳遗留）', () => {
+  const dir = tmpHome()
+  try {
+    // 父卡直写 archived/（pushHandoff 的 remaining 兜底永远有内容，造不出真空段）
+    const emptyParent = {
+      handoff: 1,
+      id: 'ho-empt-0001',
+      from: { agent: 'dsh', session: '', title: '空段父卡' },
+      to: 'any',
+      project: '',
+      cwd: '',
+      pushed_at: '2026-11-13T09:00:00+08:00',
+      git: { branch: '', changed: [] },
+      tasks: [],
+      sections: { goal: '', files: '', done: '', remaining: '', stopped: '', warnings: '' },
+      extras: {},
+    }
+    mkdirSync(archivedDir(dir), { recursive: true })
+    writeFileSync(join(archivedDir(dir), 'ho-empt-0001.md'), renderCard(emptyParent as Parameters<typeof renderCard>[0]), 'utf-8')
+    const child = pushHandoff(fakeSession(SAMPLE_EVENTS), { remaining: '子卡新事项', supersedes: 'ho-empt-0001' }, { dir })
+    assert.equal(child.ok, true)
+    if (!child.ok) return
+    const card = parseCard(readFileSync(child.path, 'utf-8'))
+    assert.equal(card.sections.remaining, '子卡新事项', '父卡 remaining 为空：无前缀')
+    assert.doesNotMatch(child.note ?? '', /接力账本/)
+    // 坏卡父卡：解析失败如实降级，不拖垮子卡寄存
+    writeFileSync(join(archivedDir(dir), 'ho-bad1-0001.md'), 'garbage-not-a-card', 'utf-8')
+    const child2 = pushHandoff(fakeSession(SAMPLE_EVENTS), { remaining: '子卡新事项', supersedes: 'ho-bad1-0001' }, { dir })
+    assert.equal(child2.ok, true)
+    if (!child2.ok) return
+    assert.equal(parseCard(readFileSync(child2.path, 'utf-8')).sections.remaining, '子卡新事项')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 // ---------- 宿主通知（ctx.userQuestions 阻塞式问答面板） ----------
 
 test('宿主通知：push/load 各用规范问题 id 与文案，agent/signal 透传', async () => {
