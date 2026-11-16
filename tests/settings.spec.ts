@@ -139,7 +139,7 @@ test('buildState：pending 概览 + archived 计数 + 支持矩阵（FOREIGN_PRO
   assert.equal(st.pending[0]?.preview, 'g') // goal 段进预览
   assert.equal(st.archivedCount, 1)
 
-  assert.equal(st.providers.length, 19)
+  assert.equal(st.providers.length, 23)
   const claude = st.providers.find((p) => p.name === 'claude')
   assert.equal(claude?.supported, true)
   assert.equal(claude?.sessions, 3)
@@ -177,7 +177,7 @@ test('buildState：单家探测抛错只降级该行，不拖垮整体', () => {
   const st = buildState(readers, home)
   const cursor = st.providers.find((p) => p.name === 'cursor')
   assert.equal(cursor?.sessions, -1)
-  assert.equal(st.providers.filter((p) => p.sessions === 0).length, 18, '抛错行只降级自己；其余全量行（sqlite/文件族扩容后 19-1）照常探测')
+  assert.equal(st.providers.filter((p) => p.sessions === 0).length, 22, '抛错行只降级自己；其余全量行（适配器收尾四家后 23-1）照常探测')
 })
 
 test('buildState：note 在探测后重取——discover 写回的假 0 哨兵首轮渲染即见', () => {
@@ -273,7 +273,7 @@ test('buildState：全新安装（pending/ 不存在）不进降级态，矩阵�
   const st = buildState(fakeReaders(), home)
   assert.equal(st.inboxError, undefined)
   assert.equal(st.pending.length, 0)
-  assert.equal(st.providers.length, 19, '矩阵行数 = FOREIGN_PROVIDERS 全量（sqlite/文件族扩容后十九家）')
+  assert.equal(st.providers.length, 23, '矩阵行数 = FOREIGN_PROVIDERS 全量（适配器收尾四家后二十三家）')
 })
 
 // 回归（0.4.1）：孤儿信封（对应 .md 已被任何实现取走）由 buildState 顺手清扫，envelopeChars 只计有主信封

@@ -1,10 +1,10 @@
 /**
- * foreign_session_read 工具：只读拉取十九家外部 agent 会话。
+ * foreign_session_read 工具：只读拉取二十三家外部 agent 会话。
  * - action=list：该家会话候选列表（标题 / 时间 / 轮数）。
  * - action=show：结构化摘要（不是原文倾倒）——标题、轮数、首条用户消息、
  *   尾部进展、涉及文件 top15、骨架卡六段素材；turns 原文仅在模型显式
  *   传更大 limit 时分页给（offset 指定起始轮，需与 limit 同用）。
- * 读取层是 @agent-handoff/readers（十九家适配器），通过依赖注入可替换（单测用）。
+ * 读取层是 @agent-handoff/readers（二十三家适配器），通过依赖注入可替换（单测用）。
  * 全部规范值返回 { ok, ... }；探测 / 解析失败一律 { ok: false, error }，绝不抛出。
  * @module dsh-takeover/foreign
  */
@@ -15,7 +15,7 @@ import type {} from '@deepseek-ai/dsh-skill'
 import type { SessionRef, Turn } from '@agent-handoff/readers'
 import { PROVIDERS, type ProviderName } from './providers.ts'
 
-/** 面向用户的十九家提供方名（providers.ts 注册表派生，顺序即注册表声明序） */
+/** 面向用户的二十三家提供方名（providers.ts 注册表派生，顺序即注册表声明序） */
 export const FOREIGN_PROVIDERS: readonly ForeignProvider[] = PROVIDERS.map((p) => p.name)
 export type ForeignProvider = ProviderName
 
@@ -608,9 +608,9 @@ function tailLines(tail: string[]): string {
 export function registerForeignTool(ctx: Context, env?: ForeignEnv): void {
   ctx.tools.register(defineTool({
     name: 'foreign_session_read',
-    description: '只读拉取十九家外部 agent（claude / codex / opencode / zcode / pi / workbuddy / cursor / grok / gemini / kimi / codebuddy / qoder / kiro / copilot / devin / mimo / aider / cline / continue）的本地会话。action=list 列候选（标题/时间/轮数）；action=show 按引用（空或 latest=最新；歧义返回候选不猜）返回结构化摘要：标题、轮数、首条用户消息、尾部进展、涉及文件 top15、骨架卡六段素材；可见结果文本已含摘要与骨架六段素材全文，无需重复调用。turns 原文只在显式传 limit 时分页给（offset 指定起始轮，需与 limit 同用），同样出现在可见文本里。返回 { ok, ... } 规范值。',
+    description: '只读拉取二十三家外部 agent（claude / codex / opencode / zcode / pi / workbuddy / cursor / grok / gemini / kimi / codebuddy / qoder / kiro / copilot / devin / mimo / aider / cline / continue / qwen / antigravity / openclaw / goose）的本地会话。action=list 列候选（标题/时间/轮数）；action=show 按引用（空或 latest=最新；歧义返回候选不猜）返回结构化摘要：标题、轮数、首条用户消息、尾部进展、涉及文件 top15、骨架卡六段素材；可见结果文本已含摘要与骨架六段素材全文，无需重复调用。turns 原文只在显式传 limit 时分页给（offset 指定起始轮，需与 limit 同用），同样出现在可见文本里。返回 { ok, ... } 规范值。',
     parameters: {
-      provider: { type: 'string', required: true, enum: FOREIGN_PROVIDERS, description: '目标 agent 家：claude / codex / opencode / zcode / pi / workbuddy / cursor / grok / gemini / kimi / codebuddy / qoder / kiro / copilot / devin / mimo / aider / cline / continue' },
+      provider: { type: 'string', required: true, enum: FOREIGN_PROVIDERS, description: '目标 agent 家：claude / codex / opencode / zcode / pi / workbuddy / cursor / grok / gemini / kimi / codebuddy / qoder / kiro / copilot / devin / mimo / aider / cline / continue / qwen / antigravity / openclaw / goose' },
       action: { type: 'string', required: true, enum: ['list', 'show'], description: 'list 列会话候选；show 读一个会话的结构化摘要' },
       reference: { type: 'string', description: 'show 的会话引用：空或 latest=最新；id / id 前缀 / 路径 / 标题关键词；歧义返回候选' },
       limit: { type: 'integer', description: 'list：候选条数上限（默认 20）；show：原文轮次分页大小（默认 0=不返回原文）' },

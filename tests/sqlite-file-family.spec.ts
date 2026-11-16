@@ -167,9 +167,9 @@ function refOf(refs: SessionRef[], prefix: string): SessionRef {
 
 // ---------- AGENTS 注册 ----------
 
-test('sqlite/文件族六家在册：AGENTS 末尾追加（声明序 copilot→continue），root 指向 HANDOFF_ROOT_<名>', () => {
-  assert.deepEqual(AGENTS.map((a) => a.name).slice(-6), ['copilot', 'devin', 'mimo', 'aider', 'cline', 'continue'])
-  assert.equal(AGENTS.length, 19)
+test('sqlite/文件族六家在册：AGENTS 声明序钉在 kiro 之后、收尾四家之前（13..18），root 指向 HANDOFF_ROOT_<名>', () => {
+  assert.deepEqual(AGENTS.map((a) => a.name).slice(-10, -4), ['copilot', 'devin', 'mimo', 'aider', 'cline', 'continue'])
+  assert.equal(AGENTS.length, 23)
   for (const [name, root] of [
     ['copilot', COPILOT_DB], ['devin', DEVIN_DB], ['mimo', MIMO_DB],
     ['aider', AIDER_START], ['cline', CLINE_ROOT], ['continue', CONTINUE_ROOT],
@@ -356,13 +356,13 @@ test('continue parse：history 消息流取 user/assistant 文本（块数组取
 
 // ---------- 接线（工具轴 / 注册表轴 / 交接目标轴） ----------
 
-test('接线：FOREIGN_PROVIDERS 十九家带六家，adapter 映射同名，六家不进 OUTBOUND_TARGETS', () => {
+test('接线：FOREIGN_PROVIDERS 二十三家带六家，adapter 映射同名，六家不进 OUTBOUND_TARGETS', () => {
   for (const p of ['copilot', 'devin', 'mimo', 'aider', 'cline', 'continue'] as const) {
     assert.ok(FOREIGN_PROVIDERS.includes(p), `缺 ${p}`)
     assert.equal(PROVIDER_TO_ADAPTER[p], p, `${p} 的适配器与 provider 同名`)
     assert.ok(!(OUTBOUND_TARGETS as readonly string[]).includes(p), `${p} 不进交接目标轴`)
   }
-  assert.equal(FOREIGN_PROVIDERS.length, 19)
+  assert.equal(FOREIGN_PROVIDERS.length, 23)
 })
 
 test('接线：foreignSessionRead 用真实适配器走通 copilot list / aider show（标题关键词命中）', async () => {

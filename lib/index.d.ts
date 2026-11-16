@@ -363,7 +363,7 @@ interface Turn {
 //#region src/types.d.ts
 /** 一个已发现的会话（发现层产物，轻量：不含内容）。 */
 interface SessionRef {
-  /** 归属适配器名：claude-code | codex | opencode | zcode | pi | workbuddy | cursor | grok | gemini | kimi | codebuddy | qoder | kiro | copilot | devin | mimo | aider | cline | continue */
+  /** 归属适配器名：claude-code | codex | opencode | zcode | pi | workbuddy | cursor | grok | gemini | kimi | codebuddy | qoder | kiro | copilot | devin | mimo | aider | cline | continue | qwen | antigravity | openclaw | goose */
   agent: string;
   /** 稳定 id：文件系=绝对路径；SQLite 系=会话 id。 */
   id: string;
@@ -712,12 +712,68 @@ declare const PROVIDERS: readonly [{
     readonly description: '把一条 Continue（IDE 扩展）会话拉进当前会话，生成六段交接卡接手工作；记录是 ~/.continue/sessions/ 的 sessions.json 索引 + <sessionId>.json 会话文件，可附会话 id、记录路径或标题关键词。';
     readonly recoveryBoundary: '读取器只读 sessions 目录下的索引与会话文件（history 消息流取 user/assistant 文本，system/tool 角色跳过）；索引缺席时退化为目录扫描；没有 cwd 字段时只在 workspace 路径在场时尽力提取，否则留空；只读不写、不复活 Continue。';
   };
+}, {
+  readonly name: 'qwen';
+  readonly adapter: 'qwen';
+  readonly label: 'Qwen Code';
+  readonly outboundEligible: false;
+  readonly icon: {
+    readonly kind: 'none';
+  };
+  readonly resume: {
+    readonly id: 'resume-qwen';
+    readonly product: 'Qwen Code';
+    readonly description: '把一条 Qwen Code（阿里）会话拉进当前会话，生成六段交接卡接手工作；本地记录新旧双布局（tmp/ 的 Gemini 族 JSON/JSONL、projects/ 的 ChatRecord JSONL，都探测），可附会话 id（记录路径）、记录路径或标题关键词。';
+    readonly recoveryBoundary: '读取器只读 ~/.qwen 双布局下的会话记录（tmp/ 走 Gemini 族归一，projects/ 按 ChatRecord 归一：agent_mention 等控制 subtype 与代提交不进流，thought 块以 [thinking] 标记保留，cwd 取自记录本身）；QWEN.md 记忆体系不在会话轴、不读；只读不写、不复活 Qwen Code 进程。';
+  };
+}, {
+  readonly name: 'antigravity';
+  readonly adapter: 'antigravity';
+  readonly label: 'Antigravity';
+  readonly outboundEligible: false;
+  readonly icon: {
+    readonly kind: 'none';
+  };
+  readonly resume: {
+    readonly id: 'resume-antigravity';
+    readonly product: 'Antigravity';
+    readonly description: '把一条 Antigravity（Google）会话拉进当前会话，生成六段交接卡接手工作；正文是 brain 目录的 transcript.jsonl（antigravity-cli 与 antigravity 两个 brain 布局都探测），conversation_summaries.db 只作工作目录索引，可附会话 id、记录路径或标题关键词。';
+    readonly recoveryBoundary: '读取器只读 brain 目录的 transcript JSONL（USER_EXPLICIT 输入剥 <USER_REQUEST> 壳、MODEL 回复、tool_calls 摘要轮，thinking 以 [thinking] 标记保留）；跨端索引库只取 workspace 映射，缺席/探测不中时 cwd 如实留空；只读不写、不复活 Antigravity。';
+  };
+}, {
+  readonly name: 'openclaw';
+  readonly adapter: 'openclaw';
+  readonly label: 'OpenClaw';
+  readonly outboundEligible: false;
+  readonly icon: {
+    readonly kind: 'none';
+  };
+  readonly resume: {
+    readonly id: 'resume-openclaw';
+    readonly product: 'OpenClaw';
+    readonly description: '把一条 OpenClaw 会话拉进当前会话，生成六段交接卡接手工作；新版是各 agent 的 openclaw-agent.sqlite（session_nodes + transcript_events），旧版是 sessions/ 的 JSONL 与 sessions.json 索引，两形态都探测，可附会话 id、记录路径或标题关键词。';
+    readonly recoveryBoundary: '读取器只读各 agent 的会话库（node:sqlite readonly、随开随关，需 Node ≥22）与旧版 transcript JSONL，只取 user/assistant 文本；压缩（zstd）事件行在缺 zstd 支持的 Node 上跳过、解析为空时如实按不可用标注；不回放调用、不复活 OpenClaw。';
+  };
+}, {
+  readonly name: 'goose';
+  readonly adapter: 'goose';
+  readonly label: 'Goose';
+  readonly outboundEligible: false;
+  readonly icon: {
+    readonly kind: 'none';
+  };
+  readonly resume: {
+    readonly id: 'resume-goose';
+    readonly product: 'Goose';
+    readonly description: '把一条 Goose（Block）会话拉进当前会话，生成六段交接卡接手工作；数据目录按候选探测（上游应用策略推导的常见路径，HANDOFF_ROOT_GOOSE 可直指），新版 sessions.db / 旧版 JSONL 都探测，可附会话 id、记录路径或标题关键词。';
+    readonly recoveryBoundary: '读取器只读探测命中的 sessions/ 存储（sessions.db 走 node:sqlite readonly、随开随关，需 Node ≥22；JSONL 只取 text 块）；候选全不命中时 supported=false 并诚实标注「路径按上游源码推导、未在实机核实，待社区确认」——绝不臆造固定路径；不回放调用、不复活 Goose。';
+  };
 }];
-/** 十九家 provider 名的字面量并集类型（注册表声明序） */
+/** 二十三家 provider 名的字面量并集类型（注册表声明序） */
 type ProviderName = (typeof PROVIDERS)[number]['name'];
 //#endregion
 //#region src/foreign.d.ts
-/** 面向用户的十九家提供方名（providers.ts 注册表派生，顺序即注册表声明序） */
+/** 面向用户的二十三家提供方名（providers.ts 注册表派生，顺序即注册表声明序） */
 export declare const FOREIGN_PROVIDERS: readonly ForeignProvider[];
 type ForeignProvider = ProviderName;
 /** 面向用户的 provider 名 → readers 适配器名（注册表派生；claude 是 claude-code 的别名，设置卡支持矩阵同用） */

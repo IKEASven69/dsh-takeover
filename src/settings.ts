@@ -2,7 +2,7 @@
  * 设置卡支撑层（host 半，可脱离 cordis 单测）：
  * - provider 开关：持久化在 <HANDOFF_HOME>/config.json（与 pending/archived 同屋，每次调用现读、改动即刻生效，
  *   重启生效）；foreign_session_read 对停用家返回规范错误值「已停用」。
- * - buildState：设置卡 /dsh-takeover/state 的组装逻辑——收件箱概览 + 十九家支持矩阵。
+ * - buildState：设置卡 /dsh-takeover/state 的组装逻辑——收件箱概览 + 二十三家支持矩阵。
  * - clearArchived：清空 archived/ 全部 .md，返回清除份数。
  * 任何一步失败都回规范值 / 降级值，绝不抛出。
  * @module dsh-takeover/settings

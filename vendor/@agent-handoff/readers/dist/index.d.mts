@@ -28,7 +28,7 @@ export declare function entryToTurns(entry: Entry): Turn[];
 //#region src/types.d.ts
 /** 一个已发现的会话（发现层产物，轻量：不含内容）。 */
 interface SessionRef {
-  /** 归属适配器名：claude-code | codex | opencode | zcode | pi | workbuddy | cursor | grok | gemini | kimi | codebuddy | qoder | kiro | copilot | devin | mimo | aider | cline | continue */
+  /** 归属适配器名：claude-code | codex | opencode | zcode | pi | workbuddy | cursor | grok | gemini | kimi | codebuddy | qoder | kiro | copilot | devin | mimo | aider | cline | continue | qwen | antigravity | openclaw | goose */
   agent: string;
   /** 稳定 id：文件系=绝对路径；SQLite 系=会话 id。 */
   id: string;
@@ -162,6 +162,30 @@ export declare function parseClineConversationText(text: string): Turn[];
 //#region src/continue.d.ts
 /** Continue 会话文件文本 → Turn 流：history 消息流逐条取 user/assistant 文本。 */
 export declare function parseContinueSessionText(text: string): Turn[];
+//#endregion
+//#region src/qwen.d.ts
+/** JSONL 文本 → Turn 流：按记录形态分派（新版 ChatRecord / 旧版 Gemini 族），坏行静默跳过。 */
+export declare function parseQwenText(text: string, cwd?: string): Turn[];
+/** 会话文件路径（.json 旧格式 / .jsonl 两族流式）→ Turn 流。文件缺失/损坏返回 []。 */
+export declare function parseQwenSession(id: string): Turn[];
+//#endregion
+//#region src/antigravity.d.ts
+/** transcript JSONL 文本 → Turn 流：USER_EXPLICIT 输入 / MODEL 回复 / thinking / tool_calls 分派。 */
+export declare function parseAntigravityTranscriptText(text: string, cwd?: string): Turn[];
+//#endregion
+//#region src/openclaw.d.ts
+/** transcript JSONL 文本（旧版 sessions/*.jsonl 与新版 event_json 同构）→ Turn 流。 */
+export declare function parseOpenclawTranscriptText(text: string, cwd?: string): Turn[];
+/** sessionId + dbPath 可注入（单测用临时库），缺省扫描 agents/ 逐库找。 */
+export declare function parseOpenclawSession(sessionId: string, dbPath?: string): Turn[];
+//#endregion
+//#region src/goose.d.ts
+/** 旧版 JSONL 文本 → Turn 流：首行会话元数据跳过，消息行只取 text 块。 */
+export declare function parseGooseLegacyText(text: string): Turn[];
+/** sessionId + dbPath 可注入（单测用临时库），缺省探测命中的 sessions/sessions.db。 */
+export declare function parseGooseSession(sessionId: string, dbPath?: string): Turn[];
+/** Goose 数据目录解析（测试钩子）：HANDOFF_ROOT_GOOSE 直指优先；候选目录扫描全不命中回 null。 */
+export declare function resolveGooseRoot(): string | null;
 //#endregion
 //#region src/index.d.ts
 export declare const AGENTS: SessionAdapter[];

@@ -1,5 +1,5 @@
 /**
- * provider 注册表 —— 十九家外部 agent 会话的单一真源。
+ * provider 注册表 —— 二十三家外部 agent 会话的单一真源。
  * 收敛前存在四份平行名单（互相靠注释口头约定一致，改一家要四处同步）：
  * - foreign.ts 的 FOREIGN_PROVIDERS / PROVIDER_TO_ADAPTER（读取器轴）
  * - client.ts 的 RESUME_PROVIDERS（客户端 /resume-* 命令速览 chips）
@@ -8,19 +8,21 @@
  * 现在四者全部从本表派生；确有差异的轴显式入表，不留隐式：
  * - adapter：readers 适配器名（claude 的适配器叫 claude-code，其余同名）
  * - outboundEligible：是否进交接目标轴（OUTBOUND_TARGETS）。交接目标与读取器
- *   两轴独立：gemini、0.3.0 jsonl 族（kimi / codebuddy / qoder / kiro）与
- *   0.25 sqlite/文件族（copilot / devin / mimo / aider / cline / continue）是
- *   读取器但不进交接目标，显式 false。
+ *   两轴独立：gemini、0.3.0 jsonl 族（kimi / codebuddy / qoder / kiro）、
+ *   0.25 sqlite/文件族（copilot / devin / mimo / aider / cline / continue）与
+ *   适配器收尾四家（qwen / antigravity / openclaw / goose）是读取器但不进
+ *   交接目标，显式 false。
  * - icon：gemini / kimi / codebuddy / qoder / kiro / copilot / devin / mimo /
- *   aider / cline / continue 暂无核实过的官方矢量，显式 'none' 走中性兜底——
- *   未经核实的「官方 path」不入表，不出冒牌标。
+ *   aider / cline / continue / qwen / antigravity / openclaw / goose 暂无核实过
+ *   的官方矢量，显式 'none' 走中性兜底——未经核实的「官方 path」不入表，不出冒牌标。
  * 纪律：本文件必须是纯数据叶（不 import 任何模块）。它同时打进 host 半
  * （tsdown）与 client 半（esbuild 浏览器 bundle）——任何 host 侧依赖
  * （cordis / dsh-tools / readers）都会把宿主拖进浏览器包或让客户端包炸裂。
  * 声明序有语义：即工具 enum、支持矩阵、命令速览 chips、skill 注册面的展示序
  * （历史 FOREIGN_PROVIDERS 序：claude → codex → opencode → zcode → pi →
  * workbuddy → cursor → grok → gemini → kimi → codebuddy → qoder → kiro →
- * copilot → devin → mimo → aider → cline → continue），改动即改序。
+ * copilot → devin → mimo → aider → cline → continue → qwen → antigravity →
+ * openclaw → goose），改动即改序。
  * @module dsh-takeover/providers
  */
 
@@ -52,7 +54,7 @@ export interface ProviderResume {
   readonly recoveryBoundary: string
 }
 
-/** 十九家外部 provider 的注册表条目（全部字段显式声明，消费面各自派生） */
+/** 二十三家外部 provider 的注册表条目（全部字段显式声明，消费面各自派生） */
 export interface ProviderMeta {
   /** 面向用户的 provider 名（工具 enum / 设置卡矩阵 / slash skill / 交接目标同用） */
   readonly name: string
@@ -383,9 +385,64 @@ export const PROVIDERS = [
       recoveryBoundary: '读取器只读 sessions 目录下的索引与会话文件（history 消息流取 user/assistant 文本，system/tool 角色跳过）；索引缺席时退化为目录扫描；没有 cwd 字段时只在 workspace 路径在场时尽力提取，否则留空；只读不写、不复活 Continue。',
     },
   },
+  {
+    // 适配器收尾四家（qwen / antigravity / openclaw / goose）：与前两批同款双轴纪律——
+    // 只进读取器轴，不进交接目标轴（outboundEligible: false）；暂无核实过的官方矢量，
+    // icon 显式 'none' 走中性兜底——未经核实的「官方 path」不入表，不出冒牌标。
+    name: 'qwen',
+    adapter: 'qwen',
+    label: 'Qwen Code',
+    outboundEligible: false,
+    icon: { kind: 'none' },
+    resume: {
+      id: 'resume-qwen',
+      product: 'Qwen Code',
+      description: '把一条 Qwen Code（阿里）会话拉进当前会话，生成六段交接卡接手工作；本地记录新旧双布局（tmp/ 的 Gemini 族 JSON/JSONL、projects/ 的 ChatRecord JSONL，都探测），可附会话 id（记录路径）、记录路径或标题关键词。',
+      recoveryBoundary: '读取器只读 ~/.qwen 双布局下的会话记录（tmp/ 走 Gemini 族归一，projects/ 按 ChatRecord 归一：agent_mention 等控制 subtype 与代提交不进流，thought 块以 [thinking] 标记保留，cwd 取自记录本身）；QWEN.md 记忆体系不在会话轴、不读；只读不写、不复活 Qwen Code 进程。',
+    },
+  },
+  {
+    name: 'antigravity',
+    adapter: 'antigravity',
+    label: 'Antigravity',
+    outboundEligible: false,
+    icon: { kind: 'none' },
+    resume: {
+      id: 'resume-antigravity',
+      product: 'Antigravity',
+      description: '把一条 Antigravity（Google）会话拉进当前会话，生成六段交接卡接手工作；正文是 brain 目录的 transcript.jsonl（antigravity-cli 与 antigravity 两个 brain 布局都探测），conversation_summaries.db 只作工作目录索引，可附会话 id、记录路径或标题关键词。',
+      recoveryBoundary: '读取器只读 brain 目录的 transcript JSONL（USER_EXPLICIT 输入剥 <USER_REQUEST> 壳、MODEL 回复、tool_calls 摘要轮，thinking 以 [thinking] 标记保留）；跨端索引库只取 workspace 映射，缺席/探测不中时 cwd 如实留空；只读不写、不复活 Antigravity。',
+    },
+  },
+  {
+    name: 'openclaw',
+    adapter: 'openclaw',
+    label: 'OpenClaw',
+    outboundEligible: false,
+    icon: { kind: 'none' },
+    resume: {
+      id: 'resume-openclaw',
+      product: 'OpenClaw',
+      description: '把一条 OpenClaw 会话拉进当前会话，生成六段交接卡接手工作；新版是各 agent 的 openclaw-agent.sqlite（session_nodes + transcript_events），旧版是 sessions/ 的 JSONL 与 sessions.json 索引，两形态都探测，可附会话 id、记录路径或标题关键词。',
+      recoveryBoundary: '读取器只读各 agent 的会话库（node:sqlite readonly、随开随关，需 Node ≥22）与旧版 transcript JSONL，只取 user/assistant 文本；压缩（zstd）事件行在缺 zstd 支持的 Node 上跳过、解析为空时如实按不可用标注；不回放调用、不复活 OpenClaw。',
+    },
+  },
+  {
+    name: 'goose',
+    adapter: 'goose',
+    label: 'Goose',
+    outboundEligible: false,
+    icon: { kind: 'none' },
+    resume: {
+      id: 'resume-goose',
+      product: 'Goose',
+      description: '把一条 Goose（Block）会话拉进当前会话，生成六段交接卡接手工作；数据目录按候选探测（上游应用策略推导的常见路径，HANDOFF_ROOT_GOOSE 可直指），新版 sessions.db / 旧版 JSONL 都探测，可附会话 id、记录路径或标题关键词。',
+      recoveryBoundary: '读取器只读探测命中的 sessions/ 存储（sessions.db 走 node:sqlite readonly、随开随关，需 Node ≥22；JSONL 只取 text 块）；候选全不命中时 supported=false 并诚实标注「路径按上游源码推导、未在实机核实，待社区确认」——绝不臆造固定路径；不回放调用、不复活 Goose。',
+    },
+  },
 ] as const satisfies readonly ProviderMeta[]
 
-/** 十九家 provider 名的字面量并集类型（注册表声明序） */
+/** 二十三家 provider 名的字面量并集类型（注册表声明序） */
 export type ProviderName = (typeof PROVIDERS)[number]['name']
 
 /** /resume-* 命令速览 chips 的 provider 名单（client 命令速览同用；与读取器轴同源同序） */

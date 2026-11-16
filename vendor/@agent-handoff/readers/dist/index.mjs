@@ -2525,7 +2525,7 @@ function sqliteSessionsTable(db) {
 			table,
 			idCol,
 			titleCol: firstCol(cols, ["title", "name", "summary"]),
-			cwdCol: firstCol(cols, ["cwd", "path", "working_directory", "directory", "workspace"]),
+			cwdCol: firstCol(cols, ["cwd", "path", "working_directory", "working_dir", "directory", "workspace"]),
 			updatedCol: firstCol(cols, ["updated_at", "updatedAt", "last_updated", "updated", "last_active"]),
 			createdCol: firstCol(cols, ["created_at", "createdAt", "created", "started_at"])
 		};
@@ -3230,13 +3230,1040 @@ const continueAdapter = {
 	}
 };
 //#endregion
+//#region src/qwen.ts
+/**
+* Qwen Code（阿里 QwenLM/qwen-code，Gemini CLI 分叉）适配器（自研 TS 实现；格式对上游
+* 源码核实，2026-11：packages/cli/src/config/storage-paths-lite.ts 的 getGlobalQwenDirLite、
+* packages/core/src/config/storage.ts 与 services/chatRecordingService.ts）。
+*
+* 存储形态（root 可用 HANDOFF_ROOT_QWEN 覆盖，测试用；QWEN_HOME 优先于缺省 ~/.qwen，
+* 与上游 getGlobalQwenDirLite 同序，含 ~/ 前缀展开）：
+*
+*   <root>/tmp/<项目哈希>/chats/            旧版布局（Gemini 族遗产）
+*     session-<timestamp>-<8位id>.jsonl/.json   Gemini 族记录（metadata + messages；
+*     分叉早期类型就是 user / gemini，未改名——v0.0.14 源码核实）
+*   <root>/projects/<cwd 转义>/chats/       新版布局（上游当前 getProjectDir）
+*     <sessionId>.jsonl                     ChatRecord 树记录（uuid/parentUuid 链）
+*     <sessionId>.runtime.json              运行态 sidecar——不读
+*
+* 两布局都探测（历史版本写前者、当前版本写后者），命中哪个走哪个；记录按行分派：
+* - Gemini 族记录（content 字段）：复用 gemini 适配器同款归一（recordToTurns——
+*   user / gemini 轮、toolCalls 拆调用 + 结果轮、info/error/warning 不进流）；
+* - ChatRecord 记录（message.parts / uuid 字段）：user → 用户轮（subtype 为
+*   agent_mention / agent_message / slash_command / ui_telemetry 的控制记录与
+*   provenance=mod_prompt 的代提交不进流）；assistant → 文本轮（model 透传）+
+*   thought 块 [thinking] 标记 + functionCall 块工具轮；tool_result →
+*   functionResponse 块工具结果轮（toolCallResult.status==='error' 或
+*   response.error 记 toolFailed）；system 与未知类型静默跳过。
+* cwd 取自记录本身（新版每条 ChatRecord 带 cwd），Gemini 族记录沿 .project_root
+* 反查（gemini 同款，读不到留空）。
+* QWEN.md 记忆体系不在本期（会话轴 only）。
+* 只读不写、不复活 Qwen Code 进程；坏行/损坏文件静默跳过或返回空流。
+*/
+/** QWEN_HOME 解析（上游语义：~/ 前缀展开到 home，其余按绝对路径；缺省 ~/.qwen）。 */
+function qwenHomeDir() {
+	const env = process.env["QWEN_HOME"];
+	if (typeof env === "string" && env !== "") {
+		if (env === "~") return homedir();
+		if (env.startsWith("~/") || env.startsWith("~\\")) return join(homedir(), ...env.slice(2).split(/[\\/]+/).filter(Boolean));
+		return env;
+	}
+	return join(homedir(), ".qwen");
+}
+const QWEN_ROOT = process.env["HANDOFF_ROOT_QWEN"] ?? qwenHomeDir();
+/** qwen 控制性 subtype：type==='user' 但永远不是真人输入（上游 contract.ts 原话），
+* 与 slash / UI 遥测一起不进对话流。 */
+const QWEN_CONTROL_SUBTYPES = new Set(["agent_mention", "agent_message", "slash_command", "ui_telemetry"]);
+/** 单条 ChatRecord → Turn 列表。system / 控制 subtype / 代提交不产生 Turn。 */
+function qwenChatRecordToTurns(record, defaultCwd) {
+	const type = typeof record.type === "string" ? record.type : "";
+	if (type === "system") return [];
+	if (typeof record.subtype === "string" && QWEN_CONTROL_SUBTYPES.has(record.subtype)) return [];
+	if (record.provenance === "mod_prompt") return [];
+	const cwd = typeof record.cwd === "string" && record.cwd !== "" ? record.cwd : defaultCwd;
+	const ts = typeof record.timestamp === "string" ? record.timestamp : "";
+	const model = typeof record.model === "string" ? record.model : "";
+	const message = record.message !== null && typeof record.message === "object" ? record.message : null;
+	const parts = message !== null && Array.isArray(message.parts) ? message.parts.filter((p) => p !== null && typeof p === "object") : [];
+	const turns = [];
+	if (type === "user") {
+		const text = parts.filter((p) => p.thought !== true && typeof p.text === "string").map((p) => p.text).join("\n").trim();
+		if (text !== "") turns.push(makeTurn({
+			role: "user",
+			text,
+			cwd,
+			ts
+		}));
+		return turns;
+	}
+	if (type === "assistant") {
+		for (const part of parts) {
+			if (part.thought === true && typeof part.text === "string" && part.text.trim() !== "") turns.push(makeTurn({
+				role: "assistant",
+				text: `[thinking] ${part.text.trim()}`,
+				cwd,
+				ts,
+				model
+			}));
+			else if (typeof part.text === "string" && part.text.trim() !== "") turns.push(makeTurn({
+				role: "assistant",
+				text: part.text.trim(),
+				cwd,
+				ts,
+				model
+			}));
+			const call = part.functionCall;
+			if (call !== null && typeof call === "object") {
+				const name = typeof call.name === "string" && call.name !== "" ? call.name : "qwen_tool";
+				turns.push(makeTurn({
+					role: "assistant",
+					text: summarizeToolCall(name, call.args),
+					cwd,
+					ts,
+					model,
+					toolName: name
+				}));
+			}
+		}
+		return turns;
+	}
+	if (type === "tool_result") {
+		const callResult = record.toolCallResult !== null && typeof record.toolCallResult === "object" ? record.toolCallResult : null;
+		for (const part of parts) {
+			const fr = part.functionResponse;
+			if (fr === null || typeof fr !== "object") continue;
+			const name = typeof fr.name === "string" && fr.name !== "" ? fr.name : "qwen_tool";
+			const response = fr.response !== null && typeof fr.response === "object" ? fr.response : {};
+			let result = toolResultText(response);
+			const failed = callResult !== null && callResult.status === "error" || response.error !== void 0 && response.error !== null;
+			if (result === "" && response.error !== void 0 && response.error !== null) result = typeof response.error === "string" ? response.error : JSON.stringify(response.error);
+			turns.push(makeTurn({
+				role: "tool",
+				text: result.slice(0, 2e3),
+				cwd,
+				ts,
+				toolName: name,
+				toolFailed: failed
+			}));
+		}
+	}
+	return turns;
+}
+/** 判断一行记录是否 ChatRecord（uuid / message 字段是 Gemini 族记录没有的）。 */
+function isQwenChatRecord(record) {
+	return typeof record.uuid === "string" || record.message !== null && typeof record.message === "object";
+}
+/** JSONL 文本 → Turn 流：按记录形态分派（ChatRecord / Gemini 族），坏行静默跳过。 */
+function parseQwenText(text, cwd = "") {
+	const turns = [];
+	for (const raw of text.split("\n")) {
+		const line = raw.trim();
+		if (line === "") continue;
+		let record;
+		try {
+			record = JSON.parse(line);
+		} catch {
+			continue;
+		}
+		if (record === null || typeof record !== "object" || Array.isArray(record)) continue;
+		if (isQwenChatRecord(record)) {
+			turns.push(...qwenChatRecordToTurns(record, cwd));
+			continue;
+		}
+		if (typeof record.type !== "string") continue;
+		if (isControlLine(record)) continue;
+		turns.push(...recordToTurns(record, cwd));
+	}
+	return turns;
+}
+/** 会话文件路径（.json 旧格式 / .jsonl 两族流式）→ Turn 流。文件缺失/损坏返回 []。 */
+function parseQwenSession(id) {
+	let text;
+	try {
+		text = readFileSync(id, "utf8");
+	} catch {
+		return [];
+	}
+	const head = readHead$1(id);
+	const cwd = qwenHeadCwd(head) || projectCwd(id);
+	return id.toLowerCase().endsWith(".json") ? parseGeminiJson(text, cwd) : parseQwenText(text, cwd);
+}
+/** 头部窗口里首条 ChatRecord 的 cwd（新版每条记录都带；旧版没有 → 空串走反查）。 */
+function qwenHeadCwd(head) {
+	for (const raw of head.split("\n")) {
+		const line = raw.trim();
+		if (line === "") continue;
+		let record;
+		try {
+			record = JSON.parse(line);
+		} catch {
+			continue;
+		}
+		if (record !== null && typeof record === "object" && typeof record.cwd === "string" && record.cwd !== "") return record.cwd;
+	}
+	return "";
+}
+/** 头部窗口里首条用户输入前 40 字作标题（Gemini 族 summary 元数据优先在外层处理）。 */
+function qwenHeadUserText(head) {
+	for (const turn of parseQwenText(head, "")) if (turn.role === "user" && turn.text.trim() !== "") return turn.text.trim().slice(0, 40);
+	return "";
+}
+function qwenRefFromFile(file) {
+	let mtime = 0;
+	let size = 0;
+	try {
+		const st = statSync(file);
+		if (!st.isFile()) return null;
+		mtime = st.mtimeMs;
+		size = st.size;
+	} catch {
+		return null;
+	}
+	const meta = readHeadMeta(file, file.toLowerCase().endsWith(".json"));
+	const head = readHead$1(file);
+	const userTitle = qwenHeadUserText(head);
+	return {
+		agent: "qwen",
+		id: file,
+		title: meta.summary !== "" ? meta.summary : userTitle !== "" ? userTitle : basename(file),
+		cwd: qwenHeadCwd(head) || projectCwd(file),
+		updatedAt: meta.lastUpdated || mtime,
+		fingerprint: `${Math.round(mtime)}:${size}`,
+		kind: "file"
+	};
+}
+const qwenAdapter = {
+	name: "qwen",
+	root: QWEN_ROOT,
+	supported: true,
+	discover() {
+		const out = [];
+		for (const base of [join(QWEN_ROOT, "tmp"), join(QWEN_ROOT, "projects")]) {
+			let projectDirs = [];
+			try {
+				projectDirs = readdirSync(base, { withFileTypes: true }).filter((d) => d.isDirectory() && !d.isSymbolicLink()).map((d) => join(base, d.name));
+			} catch {
+				continue;
+			}
+			for (const projectDir of projectDirs) {
+				const chatsDir = join(projectDir, "chats");
+				let chatEntries = [];
+				try {
+					chatEntries = readdirSync(chatsDir, { withFileTypes: true });
+				} catch {
+					continue;
+				}
+				const files = [];
+				for (const entry of chatEntries) {
+					const full = join(chatsDir, entry.name);
+					if (entry.isFile()) {
+						if (isSessionFile(entry.name) || entry.name.endsWith(".jsonl")) files.push(full);
+					} else if (entry.isDirectory() && !entry.isSymbolicLink()) try {
+						for (const name of readdirSync(full)) if (isSessionFile(name)) files.push(join(full, name));
+					} catch {
+						continue;
+					}
+				}
+				for (const file of files) {
+					const ref = qwenRefFromFile(file);
+					if (ref !== null) out.push(ref);
+				}
+			}
+		}
+		this.note = out.length === 0 && existsSync(QWEN_ROOT) ? FAKE_ZERO_NOTE : void 0;
+		return out.sort((a, b) => b.updatedAt - a.updatedAt);
+	},
+	parse(id) {
+		try {
+			return parseQwenSession(id);
+		} catch {
+			return [];
+		}
+	}
+};
+//#endregion
+//#region src/antigravity.ts
+/**
+* Antigravity（Google）适配器（自研 TS 实现；格式为公开调研，2026-11 经社区读取器
+* 交叉核实：dpavlin/agy-explore 对实录解析、mjacobs/agy-reader 对目录布局、
+* fliberty 实测文章对 IDE 2.0 的 brain 路径）。
+*
+* 存储形态（root 可用 HANDOFF_ROOT_ANTIGRAVITY 覆盖，测试用；缺省 ~/.gemini/antigravity-cli）：
+*
+*   <root>/conversation_summaries.db      跨端索引（SQLite WAL，conversation_summaries 表：
+*                                         conversation_id + workspace_uris）——只作 cwd 映射
+*   <root>/brain/<会话id>/.system_generated/logs/transcript_full.jsonl | transcript.jsonl
+*   ~/.gemini/antigravity/brain/<会话id>/logs/transcript.jsonl   IDE 2.0 布局（brain 候选
+*                                         双目录都探测：antigravity-cli 与 antigravity）
+*
+* transcript JSONL 行法（一行一步骤，已知组合分派、未知行静默跳过）：
+* - source=USER_EXPLICIT 且 type=USER_INPUT → 用户轮（<USER_REQUEST> 壳剥离，
+*   agy-explore 同口径）；
+* - source=MODEL 且 type=PLANNER_RESPONSE → 助手文本轮；
+* - thinking 字段 → [thinking] 标记轮（在该步正文之前）；
+* - tool_calls[] → 每个调用一个助手工具轮（toolName=原生名，text=摘要，永不回放）。
+* cwd 取自 conversation_summaries 索引（workspace_uris JSON 数组首项 file:// 解码，
+* 正则兜底）；索引库缺席 / 列探测不中时如实留空（上层有空 cwd 警告兜底）。
+* 标题取首条用户输入前 40 字。created_at ISO 时间戳。
+* 只读不写、不复活 Antigravity；坏行/损坏文件静默跳过或返回空流。
+*/
+const ANTIGRAVITY_ROOT = process.env["HANDOFF_ROOT_ANTIGRAVITY"] ?? join(homedir(), ".gemini", "antigravity-cli");
+const ANTIGRAVITY_BRAIN_DIRS = [join(ANTIGRAVITY_ROOT, "brain"), join(homedir(), ".gemini", "antigravity", "brain")];
+const ANTIGRAVITY_SUMMARIES_DB = join(ANTIGRAVITY_ROOT, "conversation_summaries.db");
+/** transcript 候选路径（按序取首个在册；.system_generated 是社区工具核实的主形态）。 */
+const ANTIGRAVITY_TRANSCRIPT_RELS = [".system_generated/logs/transcript_full.jsonl", ".system_generated/logs/transcript.jsonl", "logs/transcript.jsonl"];
+/** 会话目录 → transcript 文件；三种候选都不在册回 null。 */
+function antigravityTranscriptOf(convDir) {
+	for (const rel of ANTIGRAVITY_TRANSCRIPT_RELS) {
+		const file = join(convDir, rel);
+		try {
+			if (statSync(file).isFile()) return file;
+		} catch {}
+	}
+	return null;
+}
+/** transcript 路径 → 会话 id：上溯到 brain/ 的直接子目录名（找不到回空串）。 */
+function antigravityConvIdOf(file) {
+	let dir = dirname(file);
+	for (let depth = 0; depth < 5; depth += 1) {
+		const parent = dirname(dir);
+		if (parent === dir) return "";
+		if (basename(parent) === "brain") return basename(dir);
+		dir = parent;
+	}
+	return "";
+}
+/** 用户输入正文：<USER_REQUEST> 壳剥离（agy-explore 同口径），其余原样 trim。 */
+function antigravityRequestText(content) {
+	if (typeof content !== "string") return "";
+	const text = content.includes("<USER_REQUEST>") ? content.split("<USER_REQUEST>").pop().split("</USER_REQUEST>")[0] : content;
+	return text.trim();
+}
+/** workspace_uris 单元格 → cwd 尽力而为：JSON 数组首项 → file:// 正则兜底 →
+* 绝对路径原样；都不是回空串（不猜）。 */
+function antigravityWorkspaceCwd(cell) {
+	if (typeof cell === "string" && cell.trim() !== "") {
+		try {
+			const v = JSON.parse(cell);
+			if (Array.isArray(v) && typeof v[0] === "string" && v[0].trim() !== "") return fileUrlToPath(v[0].trim());
+		} catch {}
+		const m = /file:\/\/[^\s"']+/.exec(cell);
+		if (m) return fileUrlToPath(m[0]);
+		const trimmed = cell.trim();
+		if (/^([A-Za-z]:[\\/]|\/)/.test(trimmed)) return trimmed;
+	}
+	return "";
+}
+/** 跨端索引库 → 会话 id → cwd 映射。库缺席 / 表列探测不中回空映射（不抛）。 */
+function antigravityWorkspaceMap() {
+	const map = new Map();
+	const db = openFamilyDb(ANTIGRAVITY_SUMMARIES_DB);
+	if (db === null) return map;
+	try {
+		const cols = tableColumns(db, "conversation_summaries");
+		const idCol = firstCol(cols, ["conversation_id", "conversationId", "id"]);
+		const wsCol = firstCol(cols, ["workspace_uris", "workspaceUris", "workspaces", "workspace"]);
+		if (idCol === void 0 || wsCol === void 0) return map;
+		let rows = [];
+		try {
+			rows = db.prepare('SELECT * FROM "conversation_summaries"').all();
+		} catch {
+			return map;
+		}
+		for (const row of rows) {
+			const id = row[idCol];
+			if (typeof id !== "string" || id === "") continue;
+			const cwd = antigravityWorkspaceCwd(row[wsCol]);
+			if (cwd !== "") map.set(id, cwd);
+		}
+	} finally {
+		db.close();
+	}
+	return map;
+}
+/** 单条步骤记录 → Turn 列表：thinking → 正文（用户 / 助手）→ 工具调用。 */
+function antigravityRecordToTurns(record, cwd) {
+	const turns = [];
+	const tsMs = toMillis(record.created_at);
+	const ts = tsMs !== 0 ? new Date(tsMs).toISOString() : "";
+	const thinking = typeof record.thinking === "string" ? record.thinking.trim() : "";
+	if (thinking !== "") turns.push(makeTurn({
+		role: "assistant",
+		text: `[thinking] ${thinking}`,
+		cwd,
+		ts
+	}));
+	if (record.source === "USER_EXPLICIT" && record.type === "USER_INPUT") {
+		const text = antigravityRequestText(record.content);
+		if (text !== "") turns.push(makeTurn({
+			role: "user",
+			text,
+			cwd,
+			ts
+		}));
+	} else if (record.source === "MODEL" && record.type === "PLANNER_RESPONSE") {
+		const text = typeof record.content === "string" ? record.content.trim() : "";
+		if (text !== "") turns.push(makeTurn({
+			role: "assistant",
+			text,
+			cwd,
+			ts
+		}));
+	}
+	const toolCalls = Array.isArray(record.tool_calls) ? record.tool_calls : [];
+	for (const call of toolCalls) {
+		if (call === null || typeof call !== "object") continue;
+		const c = call;
+		const name = typeof c.name === "string" && c.name !== "" ? c.name : "antigravity_tool";
+		turns.push(makeTurn({
+			role: "assistant",
+			text: summarizeToolCall(name, c.args),
+			cwd,
+			ts,
+			toolName: name
+		}));
+	}
+	return turns;
+}
+/** transcript JSONL 文本 → Turn 流：坏行静默跳过。 */
+function parseAntigravityTranscriptText(text, cwd = "") {
+	const turns = [];
+	for (const raw of text.split("\n")) {
+		const line = raw.trim();
+		if (line === "") continue;
+		let record;
+		try {
+			record = JSON.parse(line);
+		} catch {
+			continue;
+		}
+		if (record === null || typeof record !== "object" || Array.isArray(record)) continue;
+		turns.push(...antigravityRecordToTurns(record, cwd));
+	}
+	return turns;
+}
+/** 头部窗口里首条用户输入前 40 字作标题（索引库没有标题列，标题出自正文）。 */
+function antigravityHeadTitle(head) {
+	for (const turn of parseAntigravityTranscriptText(head, "")) if (turn.role === "user" && turn.text.trim() !== "") return turn.text.trim().slice(0, 40);
+	return "";
+}
+const antigravityAdapter = {
+	name: "antigravity",
+	root: ANTIGRAVITY_ROOT,
+	supported: true,
+	discover() {
+		const out = [];
+		const seen = new Set();
+		const workspaces = antigravityWorkspaceMap();
+		for (const brainDir of ANTIGRAVITY_BRAIN_DIRS) {
+			let entries = [];
+			try {
+				entries = readdirSync(brainDir, { withFileTypes: true });
+			} catch {
+				continue;
+			}
+			for (const entry of entries) {
+				if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+				const convDir = join(brainDir, entry.name);
+				const file = antigravityTranscriptOf(convDir);
+				if (file === null || seen.has(file)) continue;
+				let mtime = 0, size = 0;
+				try {
+					const st = statSync(file);
+					mtime = st.mtimeMs;
+					size = st.size;
+				} catch {
+					continue;
+				}
+				seen.add(file);
+				out.push({
+					agent: this.name,
+					id: file,
+					title: antigravityHeadTitle(readHead$1(file)) || entry.name,
+					cwd: workspaces.get(entry.name) ?? "",
+					updatedAt: mtime,
+					fingerprint: `${Math.round(mtime)}:${size}`,
+					kind: "file"
+				});
+			}
+		}
+		this.note = out.length === 0 && ANTIGRAVITY_BRAIN_DIRS.some((d) => existsSync(d)) ? FAKE_ZERO_NOTE : void 0;
+		return out.sort((a, b) => b.updatedAt - a.updatedAt);
+	},
+	parse(id) {
+		try {
+			const convId = antigravityConvIdOf(id);
+			const cwd = convId !== "" ? antigravityWorkspaceMap().get(convId) ?? "" : "";
+			return parseAntigravityTranscriptText(readFileSync(id, "utf8"), cwd);
+		} catch {
+			return [];
+		}
+	}
+};
+//#endregion
+//#region src/openclaw.ts
+/**
+* OpenClaw 适配器（自研 TS 实现；格式对上游源码核实，2026-11：
+* src/config/state-dir.ts、src/state/openclaw-agent-db.paths.ts、
+* src/state/openclaw-agent-schema.sql、src/config/sessions/paths.ts 与官方文档
+* docs/concepts/session.md「Where state lives」节）。
+*
+* 存储形态（root 可用 HANDOFF_ROOT_OPENCLAW 覆盖，测试用；OPENCLAW_STATE_DIR 优先于
+* 缺省 ~/.openclaw，与上游 resolveStateDir 同序）：
+*
+*   <root>/agents/<agentId>/agent/openclaw-agent.sqlite   新版：运行态会话库
+*     session_nodes      会话节点（session_key PK / current_session_id / label /
+*                        display_name / entry_json / updated_at）
+*     transcript_events  逐事件（session_id + seq PK；event_json 明文 JSON 或
+*                        event_zstd 压缩 BLOB——zstd 缺席的 Node 上跳过并如实降级）
+*   <root>/agents/<agentId>/sessions/                     旧版：归档 transcript
+*     sessions.json      旧版索引（迁移源；数组 / {sessions:[...]} / 键→条目映射
+*                        三形态容忍，sessionFile 绝对路径字段兼容旧版）
+*     <sessionId>.jsonl  旧版 transcript（一行一 {message:{role, content}}，pi 族
+*                        风格的 {type:'session', cwd} 头行容忍）
+*
+* 两形态都探测，命中哪个走哪个（同一会话在两形态各有存储物，各自成候选不去重）。
+* transcript 正文只取 user / assistant 文本（content 字符串或 text 块数组），
+* 工具与其他事件类型静默跳过；session_nodes 没有 cwd 字段——如实留空。
+* 只读不写、不复活 OpenClaw；坏行/损坏行静默跳过或返回空流。
+*/
+const OPENCLAW_ROOT = process.env["HANDOFF_ROOT_OPENCLAW"] ?? process.env["OPENCLAW_STATE_DIR"] ?? join(homedir(), ".openclaw");
+const OPENCLAW_AGENTS_DIR = join(OPENCLAW_ROOT, "agents");
+/** event_zstd 压缩行解码：Node ≥22.15 才有 zstdDecompressSync；缺席回 null
+*（压缩行静默跳过，正文按可用行归一——降级如实，不粉饰成空会话正常）。 */
+let OPENCLAW_ZSTD = null;
+try {
+	OPENCLAW_ZSTD = createRequire(import.meta.url)("node:zlib").zstdDecompressSync ?? null;
+} catch {}
+/** content（字符串 / text 块数组 / 混合）→ 纯文本。 */
+function openclawContentText(content) {
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	const parts = [];
+	for (const block of content) {
+		if (typeof block === "string") {
+			parts.push(block);
+			continue;
+		}
+		if (block !== null && typeof block === "object" && typeof block.text === "string") parts.push(block.text);
+	}
+	return parts.join("\n");
+}
+/** 单条 transcript 事件 → Turn 列表：只取 {message:{role, content}} 形态的
+* user / assistant 文本，其余事件类型静默跳过。 */
+function openclawEventToTurns(ev, cwd, ts) {
+	const turns = [];
+	if (ev === null || typeof ev !== "object") return turns;
+	const message = ev.message !== null && typeof ev.message === "object" ? ev.message : null;
+	if (message === null) return turns;
+	const role = message.role === "user" ? "user" : message.role === "assistant" ? "assistant" : "";
+	if (role === "") return turns;
+	const body = openclawContentText(message.content).trim();
+	if (body === "") return turns;
+	turns.push(makeTurn({
+		role,
+		text: body,
+		cwd,
+		ts
+	}));
+	return turns;
+}
+/** transcript JSONL 文本（旧版 sessions/*.jsonl）→ Turn 流：{type:'session'} 头行
+* 给 cwd（pi 族风格，容忍在册与否），{message:{role, content}} 行归一。 */
+function parseOpenclawTranscriptText(text, cwd = "") {
+	let dir = cwd;
+	const turns = [];
+	for (const raw of text.split("\n")) {
+		const line = raw.trim();
+		if (line === "") continue;
+		let ev;
+		try {
+			ev = JSON.parse(line);
+		} catch {
+			continue;
+		}
+		if (ev === null || typeof ev !== "object") continue;
+		if (ev.type === "session" && typeof ev.cwd === "string" && ev.cwd !== "") {
+			dir = ev.cwd;
+			continue;
+		}
+		const tsMs = cellToMs(ev.timestamp ?? ev.created_at ?? "");
+		turns.push(...openclawEventToTurns(ev, dir, tsMs > 0 ? new Date(tsMs).toISOString() : ""));
+	}
+	return turns;
+}
+/** 头部窗口里首条用户输入前 40 字作标题（目录扫描兜底用；索引在册时用索引标题）。 */
+function openclawHeadTitle(head) {
+	for (const turn of parseOpenclawTranscriptText(head, "")) if (turn.role === "user" && turn.text.trim() !== "") return turn.text.trim().slice(0, 40);
+	return "";
+}
+/** agents/ 下的 agent 目录 → 各自的 openclaw-agent.sqlite 路径（parse 缺省 dbPath
+* 时逐库探测用；openclaw 多 agent 各一库，无全局索引）。 */
+function openclawAgentDbs() {
+	const out = [];
+	let entries = [];
+	try {
+		entries = readdirSync(OPENCLAW_AGENTS_DIR, { withFileTypes: true });
+	} catch {
+		return out;
+	}
+	for (const entry of entries) {
+		if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+		const dbFile = join(OPENCLAW_AGENTS_DIR, entry.name, "agent", "openclaw-agent.sqlite");
+		if (existsSync(dbFile)) out.push(dbFile);
+	}
+	return out;
+}
+/** sessionId + dbPath 可注入（单测用临时库），缺省扫描 agents/ 逐库找。 */
+function parseOpenclawSession(sessionId, dbPath) {
+	const dbs = dbPath !== void 0 && dbPath !== "" ? [dbPath] : openclawAgentDbs();
+	for (const path of dbs) {
+		const db = openFamilyDb(path);
+		if (db === null) continue;
+		try {
+			const cols = tableColumns(db, "transcript_events");
+			const sidCol = firstCol(cols, ["session_id"]);
+			const eventCol = firstCol(cols, ["event_json"]);
+			if (sidCol === void 0 || eventCol === void 0) continue;
+			const zstdCol = firstCol(cols, ["event_zstd"]);
+			const createdCol = firstCol(cols, ["created_at"]);
+			const seqCol = firstCol(cols, ["seq"]);
+			const order = seqCol !== void 0 ? `"${seqCol}"` : "rowid";
+			let rows = [];
+			try {
+				rows = db.prepare(`SELECT * FROM "transcript_events" WHERE "${sidCol}" = ? ORDER BY ${order}`).all(sessionId);
+			} catch {
+				continue;
+			}
+			if (rows.length === 0) continue;
+			const turns = [];
+			for (const row of rows) {
+				const created = createdCol !== void 0 ? cellToMs(row[createdCol]) : 0;
+				const ts = created > 0 ? new Date(created).toISOString() : "";
+				if (typeof row[eventCol] === "string" && row[eventCol].trim() !== "") {
+					try {
+						turns.push(...openclawEventToTurns(JSON.parse(row[eventCol]), "", ts));
+					} catch {
+						continue;
+					}
+					continue;
+				}
+				if (zstdCol !== void 0 && row[zstdCol] != null && OPENCLAW_ZSTD !== null) try {
+					turns.push(...openclawEventToTurns(JSON.parse(OPENCLAW_ZSTD(Buffer.from(row[zstdCol])).toString("utf8")), "", ts));
+				} catch {
+					continue;
+				}
+			}
+			return turns;
+		} finally {
+			db.close();
+		}
+	}
+	return [];
+}
+/** session_nodes 行 → SessionRef 列表（标题 label / display_name / entry_json 三层
+* 探测；updated_at 是库行变更时间，列表排序用——上游文档口径）。cwd 字段不在库
+* schema 里——如实留空。表探测不中回 null（调用方诚实浮出 note）。 */
+function openclawSqliteRefs(agent, db) {
+	const cols = tableColumns(db, "session_nodes");
+	if (cols.size === 0) return null;
+	const keyCol = firstCol(cols, ["session_key"]);
+	const sidCol = firstCol(cols, ["current_session_id"]);
+	if (keyCol === void 0) return null;
+	const idCol = sidCol ?? keyCol;
+	const labelCol = firstCol(cols, ["label"]);
+	const displayCol = firstCol(cols, ["display_name"]);
+	const entryCol = firstCol(cols, ["entry_json"]);
+	const updatedCol = firstCol(cols, ["updated_at"]);
+	const orderCol = updatedCol ?? keyCol;
+	let rows = [];
+	try {
+		rows = db.prepare(`SELECT * FROM "session_nodes" ORDER BY "${orderCol}" DESC`).all();
+	} catch {
+		return [];
+	}
+	const out = [];
+	for (const row of rows) {
+		const idCell = row[idCol];
+		const id = typeof idCell === "string" ? idCell : typeof idCell === "number" ? String(idCell) : "";
+		if (id === "") continue;
+		let title = "";
+		for (const col of [labelCol, displayCol]) {
+			const cell = col !== void 0 ? row[col] : void 0;
+			if (typeof cell === "string" && cell.trim() !== "") {
+				title = cell.trim();
+				break;
+			}
+		}
+		if (title === "" && entryCol !== void 0 && typeof row[entryCol] === "string") try {
+			const entry = JSON.parse(row[entryCol]);
+			if (entry !== null && typeof entry === "object") for (const key of ["label", "displayName", "subject"]) {
+				const v = entry[key];
+				if (typeof v === "string" && v.trim() !== "") {
+					title = v.trim();
+					break;
+				}
+			}
+		} catch {}
+		const updated = updatedCol !== void 0 ? cellToMs(row[updatedCol]) : 0;
+		out.push({
+			agent,
+			id,
+			title: title !== "" ? title : id.slice(0, 18),
+			cwd: "",
+			updatedAt: updated,
+			fingerprint: String(updatedCol !== void 0 ? row[updatedCol] ?? "" : updated),
+			kind: "sqlite"
+		});
+	}
+	return out.sort((a, b) => b.updatedAt - a.updatedAt);
+}
+/** 索引条目 → 标题（label / displayName / subject / title / name 探测，缺省空）。 */
+function openclawIndexTitle(item) {
+	for (const key of ["label", "displayName", "subject", "title", "name"]) {
+		const v = item[key];
+		if (typeof v === "string" && v.trim() !== "") return v.trim();
+	}
+	return "";
+}
+/** sessions.json → 条目数组：数组 / {sessions:[...]} / 键→条目映射三形态容忍
+* （映射形态把键注入 sessionKey 字段）；坏 JSON / 缺文件回 null。 */
+function openclawReadIndex(sessionsDir) {
+	try {
+		const value = JSON.parse(readFileSync(join(sessionsDir, "sessions.json"), "utf8"));
+		if (Array.isArray(value)) return value;
+		if (value !== null && typeof value === "object" && Array.isArray(value.sessions)) return value.sessions;
+		if (value !== null && typeof value === "object") {
+			const rows = Object.entries(value).map(([key, row]) => row !== null && typeof row === "object" && !Array.isArray(row) ? {
+				sessionKey: key,
+				...row
+			} : row);
+			return rows.some((r) => r !== null && typeof r === "object") ? rows : null;
+		}
+		return null;
+	} catch {
+		return null;
+	}
+}
+/** 旧版 sessions/ 目录 → SessionRef 列表：索引优先（条目带 sessionFile /
+* sessionsFile 绝对路径字段时兼容旧版），索引缺席 → 目录扫描兜底。 */
+function openclawLegacyRefs(agent, sessionsDir) {
+	const out = [];
+	const seen = new Set();
+	const index = openclawReadIndex(sessionsDir);
+	if (index !== null) for (const item of index) {
+		if (item === null || typeof item !== "object") continue;
+		let sid = "";
+		for (const key of ["sessionId", "sessionKey", "session_key", "id"]) {
+			const v = item[key];
+			if (typeof v === "string" && v !== "") {
+				sid = v;
+				break;
+			}
+		}
+		if (sid === "" || seen.has(sid)) continue;
+		let file = "";
+		for (const key of ["sessionFile", "sessionsFile", "transcriptPath"]) {
+			const v = item[key];
+			if (typeof v === "string" && v !== "") {
+				file = v;
+				break;
+			}
+		}
+		if (file === "") file = join(sessionsDir, `${sid}.jsonl`);
+		let mtime = 0, size = 0;
+		try {
+			const st = statSync(file);
+			if (!st.isFile()) continue;
+			mtime = st.mtimeMs;
+			size = st.size;
+		} catch {
+			continue;
+		}
+		seen.add(sid);
+		const updated = cellToMs(item.updatedAt ?? item.lastUpdated ?? item.lastInteractionAt ?? "");
+		out.push({
+			agent,
+			id: file,
+			title: openclawIndexTitle(item) || sid.slice(0, 18),
+			cwd: "",
+			updatedAt: updated > 0 ? updated : mtime,
+			fingerprint: `${Math.round(mtime)}:${size}`,
+			kind: "file"
+		});
+	}
+	if (index === null) {
+		let names = [];
+		try {
+			names = readdirSync(sessionsDir);
+		} catch {}
+		for (const name of names) {
+			if (!name.endsWith(".jsonl")) continue;
+			const file = join(sessionsDir, name);
+			let mtime = 0, size = 0;
+			try {
+				const st = statSync(file);
+				if (!st.isFile()) continue;
+				mtime = st.mtimeMs;
+				size = st.size;
+			} catch {
+				continue;
+			}
+			out.push({
+				agent,
+				id: file,
+				title: openclawHeadTitle(readHead$1(file)) || basename(name, ".jsonl").slice(0, 18),
+				cwd: "",
+				updatedAt: mtime,
+				fingerprint: `${Math.round(mtime)}:${size}`,
+				kind: "file"
+			});
+		}
+	}
+	return out;
+}
+const openclawAdapter = {
+	name: "openclaw",
+	root: OPENCLAW_ROOT,
+	supported: true,
+	discover() {
+		const out = [];
+		let note = void 0;
+		let entries = [];
+		try {
+			entries = readdirSync(OPENCLAW_AGENTS_DIR, { withFileTypes: true });
+		} catch {
+			this.note = void 0;
+			return out;
+		}
+		for (const entry of entries) {
+			if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+			const agentDir = join(OPENCLAW_AGENTS_DIR, entry.name);
+			// 新形态：agent/openclaw-agent.sqlite（node:sqlite 缺席时优雅跳过，旧形态仍可读）
+			if (DatabaseSync$3 !== null) {
+				const db = openFamilyDb(join(agentDir, "agent", "openclaw-agent.sqlite"));
+				if (db !== null) try {
+					const refs = openclawSqliteRefs(this.name, db);
+					if (refs === null) note = "agent 库在册但未识别 session_nodes 表（列名探测不中）——上游可能已迁移存储布局";
+					else out.push(...refs);
+				} finally {
+					db.close();
+				}
+			}
+			// 旧形态：sessions/sessions.json 索引 + sessions/*.jsonl（两者都探测）
+			out.push(...openclawLegacyRefs(this.name, join(agentDir, "sessions")));
+		}
+		if (out.length === 0 && note === void 0 && existsSync(OPENCLAW_AGENTS_DIR)) note = FAKE_ZERO_NOTE;
+		this.note = note;
+		return out.sort((a, b) => b.updatedAt - a.updatedAt);
+	},
+	parse(id) {
+		try {
+			if (id.toLowerCase().endsWith(".jsonl")) return parseOpenclawTranscriptText(readFileSync(id, "utf8"));
+			return parseOpenclawSession(id);
+		} catch {
+			return [];
+		}
+	}
+};
+//#endregion
+//#region src/goose.ts
+/**
+* Goose（Block）适配器（自研 TS 实现；会话存储格式对上游源码核实，2026-11：
+* crates/goose/src/session/session_manager.rs 的 sessions.db 建表语句与
+* session/legacy.rs 的旧版 JSONL 实录 fixture）。
+*
+* 存储形态（<数据目录>/sessions/ 下两形态都探测，命中哪个走哪个）：
+*   sessions.db                    新版：SQLite（sessions 表 + messages 表）
+*     sessions  id / name / working_dir / created_at / updated_at …
+*     messages  session_id / role / content_json（text 块数组）/ created_timestamp
+*   <YYYYMMDD_HHMMSS>.jsonl        旧版：首行会话元数据（description / id /
+*                                  updated_at …），其后一行一消息（role / created
+*                                  epoch 秒 / content [{type:'text',text}]）
+*
+* 数据目录路径：上游按 etcetera 应用策略解析（GOOSE_PATH_ROOT/data、Windows
+* %APPDATA%\Block\goose、macOS ~/Library/Application Support/Block/goose、Linux
+* $XDG_DATA_HOME/goose ?? ~/.local/share/goose，另探历史候选 ~/.config/goose），
+* 但候选未在实机逐一核实——候选目录扫描命中（sessions/ 在册）才启用；全不命中
+* → supported=false + note 诚实标注（绝不臆造固定路径），HANDOFF_ROOT_GOOSE 可
+* 直指数据目录（sessions/ 所在层）。
+* 只读不写、不复活 Goose 进程；坏行/损坏文件静默跳过或返回空流。
+*/
+const GOOSE_ROOT_CANDIDATES = [
+	typeof process.env["GOOSE_PATH_ROOT"] === "string" && process.env["GOOSE_PATH_ROOT"] !== "" ? join(process.env["GOOSE_PATH_ROOT"], "data") : "",
+	typeof process.env["APPDATA"] === "string" && process.env["APPDATA"] !== "" ? join(process.env["APPDATA"], "Block", "goose") : "",
+	join(homedir(), "Library", "Application Support", "Block", "goose"),
+	join(process.env["XDG_DATA_HOME"] ?? join(homedir(), ".local", "share"), "goose"),
+	join(homedir(), ".config", "goose")
+].filter((p) => p !== "");
+/** Goose 数据目录解析：HANDOFF_ROOT_GOOSE 直指优先（存在与否不门 supported）；
+* 否则候选目录扫描（sessions/ 在册即命中）；全不中回 null（诚实降级）。 */
+function resolveGooseRoot() {
+	const override = process.env["HANDOFF_ROOT_GOOSE"];
+	if (typeof override === "string" && override !== "") return override;
+	for (const dir of GOOSE_ROOT_CANDIDATES) if (existsSync(join(dir, "sessions"))) return dir;
+	return null;
+}
+const GOOSE_ROOT = resolveGooseRoot();
+const GOOSE_ROOT_DEFAULT = GOOSE_ROOT_CANDIDATES[0] ?? join(homedir(), ".config", "goose");
+const GOOSE_NOTE_UNRESOLVED = `未找到 Goose 数据目录——候选 ${GOOSE_ROOT_CANDIDATES.join(" / ")} 均不在册（路径按上游应用策略推导，未在实机核实，待社区确认）；确认后可用 HANDOFF_ROOT_GOOSE 指定 sessions/ 所在的数据目录`;
+/** 旧版 JSONL 文本 → Turn 流：首行会话元数据（无 role）与未知行静默跳过，
+* 消息行只取 text 块（created epoch 秒自适应转 ISO）。 */
+function parseGooseLegacyText(text) {
+	const turns = [];
+	for (const raw of text.split("\n")) {
+		const line = raw.trim();
+		if (line === "") continue;
+		let record;
+		try {
+			record = JSON.parse(line);
+		} catch {
+			continue;
+		}
+		if (record === null || typeof record !== "object" || Array.isArray(record)) continue;
+		const role = record.role === "user" ? "user" : record.role === "assistant" ? "assistant" : "";
+		if (role === "") continue;
+		const blocks = Array.isArray(record.content) ? record.content : [];
+		const body = blocks.filter((b) => b !== null && typeof b === "object" && b.type === "text" && typeof b.text === "string").map((b) => b.text).join("\n").trim();
+		if (body === "") continue;
+		const tsMs = toMillis$1(record.created);
+		turns.push(makeTurn({
+			role,
+			text: body,
+			ts: tsMs !== 0 ? new Date(tsMs).toISOString() : ""
+		}));
+	}
+	return turns;
+}
+/** sessionId + dbPath 可注入（单测用临时库），缺省探测命中的 sessions/sessions.db。
+* content_json 是 text 块数组的 JSON——解出 text 拼正文，解不开原样透出（不粉饰）。 */
+function parseGooseSession(sessionId, dbPath = GOOSE_ROOT !== null ? join(GOOSE_ROOT, "sessions", "sessions.db") : "") {
+	const db = openFamilyDb(dbPath);
+	if (db === null) return [];
+	try {
+		const cols = tableColumns(db, "messages");
+		const sessionCol = firstCol(cols, ["session_id", "sessionId"]);
+		const contentCol = firstCol(cols, ["content_json", "content"]);
+		if (sessionCol === void 0 || contentCol === void 0) return [];
+		const roleCol = firstCol(cols, ["role"]);
+		const tsCol = firstCol(cols, ["created_timestamp", "timestamp"]);
+		const idCol = firstCol(cols, ["id"]);
+		const order = idCol !== void 0 ? `"${idCol}"` : "rowid";
+		let rows = [];
+		try {
+			rows = db.prepare(`SELECT * FROM "messages" WHERE "${sessionCol}" = ? ORDER BY ${order}`).all(sessionId);
+		} catch {
+			return [];
+		}
+		const turns = [];
+		for (const row of rows) {
+			const role = turnRole(roleCol !== void 0 ? row[roleCol] : "assistant");
+			if (role === null) continue;
+			const raw = row[contentCol];
+			let body = "";
+			if (typeof raw === "string" && raw.trim() !== "") {
+				try {
+					const value = JSON.parse(raw);
+					const blocks = Array.isArray(value) ? value : [value];
+					body = blocks.filter((b) => b !== null && typeof b === "object" && b.type === "text" && typeof b.text === "string").map((b) => b.text).join("\n").trim();
+				} catch {
+					body = raw.trim();
+				}
+			}
+			if (body === "") continue;
+			const tsMs = tsCol !== void 0 ? cellToMs(row[tsCol]) : 0;
+			turns.push(makeTurn({
+				role,
+				text: body,
+				ts: tsMs > 0 ? new Date(tsMs).toISOString() : ""
+			}));
+		}
+		return turns;
+	} finally {
+		db.close();
+	}
+}
+const gooseAdapter = {
+	name: "goose",
+	root: GOOSE_ROOT ?? GOOSE_ROOT_DEFAULT,
+	supported: GOOSE_ROOT !== null,
+	note: GOOSE_ROOT === null ? GOOSE_NOTE_UNRESOLVED : void 0,
+	discover() {
+		const out = [];
+		if (GOOSE_ROOT === null) return out;
+		const sessionsDir = join(GOOSE_ROOT, "sessions");
+		let note = void 0;
+		// 新形态：sessions.db（sessions / messages 表，sqlite-common 列名探测自适应）
+		const db = openFamilyDb(join(sessionsDir, "sessions.db"));
+		if (db !== null) try {
+			const st = sqliteSessionsTable(db);
+			if (st === null) note = "sessions.db 在册但未识别会话表（列名探测不中）——上游可能已迁移存储布局";
+			else {
+				out.push(...sqliteDiscoverRefs(this.name, db, st));
+				if (sqliteTurnTable(db) === null) note = "已识别 sessions 表但未识别 messages 表——正文解析为空（列名探测不中）";
+			}
+		} finally {
+			db.close();
+		}
+		// 旧形态：sessions/<时间戳>.jsonl（首行会话元数据作标题）
+		let names = [];
+		try {
+			names = readdirSync(sessionsDir);
+		} catch {}
+		for (const name of names) {
+			if (!name.endsWith(".jsonl")) continue;
+			const file = join(sessionsDir, name);
+			let mtime = 0, size = 0;
+			try {
+				const st = statSync(file);
+				if (!st.isFile()) continue;
+				mtime = st.mtimeMs;
+				size = st.size;
+			} catch {
+				continue;
+			}
+			let meta = null;
+			try {
+				const first = readHead$1(file, 4096).split("\n")[0] ?? "";
+				const value = JSON.parse(first);
+				if (value !== null && typeof value === "object" && !Array.isArray(value)) meta = value;
+			} catch {}
+			const metaDescription = meta !== null && typeof meta.description === "string" ? meta.description.trim() : "";
+			const metaId = meta !== null && typeof meta.id === "string" ? meta.id.trim() : "";
+			const updated = meta !== null ? cellToMs(meta.updated_at) : 0;
+			out.push({
+				agent: this.name,
+				id: file,
+				title: (metaDescription !== "" ? metaDescription : metaId !== "" ? metaId : basename(name, ".jsonl")).slice(0, 80),
+				cwd: "",
+				updatedAt: updated > 0 ? updated : mtime,
+				fingerprint: `${Math.round(mtime)}:${size}`,
+				kind: "file"
+			});
+		}
+		if (out.length === 0 && note === void 0 && existsSync(sessionsDir)) note = FAKE_ZERO_NOTE;
+		this.note = note;
+		return out.sort((a, b) => b.updatedAt - a.updatedAt);
+	},
+	parse(id) {
+		try {
+			if (id.toLowerCase().endsWith(".jsonl")) return parseGooseLegacyText(readFileSync(id, "utf8"));
+			return parseGooseSession(id);
+		} catch {
+			return [];
+		}
+	}
+};
+//#endregion
 //#region src/index.ts
 /**
-* @agent-handoff/readers：十九家 agent 会话的只读读取层。
+* @agent-handoff/readers：二十三家 agent 会话的只读读取层。
 * 移植自 dsh-hippo src/agents/，零三方运行时依赖（zcode / cursor store / copilot /
-* devin / mimo 用 Node 内建 node:sqlite）。
+* devin / mimo / openclaw / goose 用 Node 内建 node:sqlite）。
 * cursor / grok / gemini / kimi / codebuddy / qoder / kiro / copilot / devin / mimo /
-* aider / cline / continue 十三家为自研实现（格式为公开逆向调研）。
+* aider / cline / continue / qwen / antigravity / openclaw / goose 十七家为自研实现
+* （格式为公开逆向调研；qwen / antigravity / openclaw / goose 对上游源码与社区
+* 读取器核实）。
 *
 * 公共 API：
 *   listSessions(agent?) → SessionRef[]   发现 + 按更新时间倒序
@@ -3307,7 +4334,11 @@ const AGENTS = [
 	mimoAdapter,
 	aiderAdapter,
 	clineAdapter,
-	continueAdapter
+	continueAdapter,
+	qwenAdapter,
+	antigravityAdapter,
+	openclawAdapter,
+	gooseAdapter
 ];
 const byName = new Map(AGENTS.map((a) => [a.name, a]));
 /** 取适配器；未知名抛中文错（CLI 层转成用户可读信息）。 */
@@ -3418,4 +4449,4 @@ function inventory() {
 	}));
 }
 //#endregion
-export { AGENTS, clearSessionCache, decodeCursorBlob, entryToTurns, inventory, listSessions, makeTurn, parseAiderHistoryText, parseAiderInputText, parseClineConversationText, parseCodexText, parseContinueSessionText, parseCopilotSession, parseCursorStore, parseCursorTranscriptText, parseDevinSession, parseGeminiJson, parseGeminiSession, parseGeminiText, parseGrokSession, parseGrokUpdatesText, parseJsonl, parseKimiWireText, parseKiroSessionText, parseMimoSession, parseOpenCodeSession, parsePiText, parseWorkbuddyKernelText, parseZcodeSession, readSession, renderCursorValue, resolveAgentReference, resolveReference, resolveMimoDb, summarizeToolCall };
+export { AGENTS, clearSessionCache, decodeCursorBlob, entryToTurns, inventory, listSessions, makeTurn, parseAiderHistoryText, parseAiderInputText, parseAntigravityTranscriptText, parseClineConversationText, parseCodexText, parseContinueSessionText, parseCopilotSession, parseCursorStore, parseCursorTranscriptText, parseDevinSession, parseGeminiJson, parseGeminiSession, parseGeminiText, parseGooseLegacyText, parseGooseSession, parseGrokSession, parseGrokUpdatesText, parseJsonl, parseKimiWireText, parseKiroSessionText, parseMimoSession, parseOpenCodeSession, parseOpenclawSession, parseOpenclawTranscriptText, parsePiText, parseQwenSession, parseQwenText, parseWorkbuddyKernelText, parseZcodeSession, readSession, renderCursorValue, resolveAgentReference, resolveGooseRoot, resolveMimoDb, summarizeToolCall };
