@@ -43,6 +43,7 @@ function fakeUserHome(label: string): string {
   mk('.dsh/profiles/web/package.json', '{"name":"web"}')
   mk('.agents/skills/myskill/SKILL.md', '# my skill\n')
   mk('.agents/skills/junk/node_modules/deep/blob.bin', 'should-not-collect')
+  mk('.agents/skills/myskill/.state/last-run.json', 'runtime-state-not-a-skill')
   mk('.agents/.skill-lock.json', '{"version":1}')
   mk('.zcode/v2/setting.json', '{"locale":"zh"}')
   mk('.zcode/v2/credentials.json', '{"token":"SECRET-TOKEN-CONTENT"}')

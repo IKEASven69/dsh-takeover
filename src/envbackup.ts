@@ -76,8 +76,8 @@ export const SCOPE: readonly ScopeRule[] = [
   { category: 'zcode-secret', pattern: '.zcode/v2/credentials.json', secret: true },
 ]
 
-/** 收集/恢复的目录黑名单（防未来 scope 改动把可重植巨物卷进来） */
-const PRUNE_DIRS = new Set(['node_modules', '.git', 'hf-cache', 'logs', 'crash', 'cache'])
+/** 收集/恢复的目录黑名单（防未来 scope 改动把可重植巨物卷进来；.state = 技能运行时状态，跨机恢复会拿 A 机状态覆盖 B 机） */
+const PRUNE_DIRS = new Set(['node_modules', '.git', 'hf-cache', 'logs', 'crash', 'cache', '.state'])
 
 /** 相对路径合法性：正斜杠、无 .. 段、非绝对、无盘符（恢复路径的穿越硬闸） */
 export function validateRelPath(p: string): string {
