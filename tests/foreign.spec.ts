@@ -1,6 +1,6 @@
 /**
  * v0.2 测试：foreign_session_read 的 list / show / 歧义 / 降级，
- * 以及 /resume-* 九条 skill 的注册形态。
+ * 以及 /resume-* 十三条 skill 的注册形态。
  * 大部分用例注入假货读取层（ForeignReaders），不碰真实 ~/.claude 等目录；
  * gemini（第 9 家）另有一组真实适配器用例：HANDOFF_ROOT_GEMINI 指向临时目录，
  * 本地构造 JSONL 新格式 / JSON 旧格式 / 子代理会话三层 fixture（corpus-golden
@@ -246,7 +246,7 @@ test('foreign：适配器不可用（如 Node<22 的 zcode）降级为规范错�
 
 // ---------- gemini（第 9 家）：接线 + 真实适配器双格式 fixture ----------
 
-test('foreign gemini：provider 门内（adapter=gemini），未知 provider 报错文案带全九家', async () => {
+test('foreign gemini：provider 门内（adapter=gemini），未知 provider 报错文案带全十三家', async () => {
   // 门内：假货层记录 adapterNote 收到的 adapter 名
   const seen: string[] = []
   const r = await foreignSessionRead({ provider: 'gemini', action: 'list' }, fakeReaders({
@@ -256,10 +256,10 @@ test('foreign gemini：provider 门内（adapter=gemini），未知 provider 报
   if (!r.ok || r.action !== 'list') return
   assert.equal(r.provider, 'gemini')
   assert.deepEqual(seen, ['gemini'], 'provider 名必须原样映射到 readers 适配器名 gemini')
-  // 门外：未知 provider 的报错候选列表要带上 gemini（九家文案）
+  // 门外：未知 provider 的报错候选列表要带上 gemini 与 jsonl 族四家（十三家文案）
   const bad = await foreignSessionRead({ provider: 'emacs', action: 'list' }, fakeReaders())
   assert.equal(bad.ok, false)
-  if (!bad.ok) assert.match(bad.error, /gemini/)
+  if (!bad.ok) { assert.match(bad.error, /gemini/); for (const p of ['kimi', 'codebuddy', 'qoder', 'kiro']) assert.match(bad.error, new RegExp(p)) }
 })
 
 test('foreign gemini list：真实适配器对双格式 + 子代理 fixture 全发现，按更新时间倒序', async () => {
@@ -338,14 +338,15 @@ test('summarizeTurns：cwd 为空时骨架 warnings 追加确认目录警告，�
 
 // ---------- skill 注册形态 ----------
 
-test('skill 注册面：/handoff /inbox + /resume-* 九条，共 11 条', () => {
+test('skill 注册面：/handoff /inbox + /resume-* 十三条，共 15 条', () => {
   const regs = skillRegistrations()
-  assert.equal(regs.length, 11)
+  assert.equal(regs.length, 15)
   const names = regs.map((r) => r.name)
   assert.deepEqual(names, [
     'handoff', 'inbox',
     'resume-claude', 'resume-codex', 'resume-opencode', 'resume-zcode', 'resume-pi', 'resume-workbuddy',
     'resume-cursor', 'resume-grok', 'resume-gemini',
+    'resume-kimi', 'resume-codebuddy', 'resume-qoder', 'resume-kiro',
   ])
   for (const reg of regs) {
     assert.equal(reg.source, 'bundled')
@@ -355,8 +356,8 @@ test('skill 注册面：/handoff /inbox + /resume-* 九条，共 11 条', () => 
   }
 })
 
-test('resume skill 内容：九条共用模板，含 inert-history / 四态账本 / 六段 / verify / 寄存询问', () => {
-  assert.equal(RESUME_SKILL_SPECS.length, 9)
+test('resume skill 内容：十三条共用模板，含 inert-history / 四态账本 / 六段 / verify / 寄存询问', () => {
+  assert.equal(RESUME_SKILL_SPECS.length, 13)
   for (const spec of RESUME_SKILL_SPECS) {
     assert.ok(FOREIGN_PROVIDERS.includes(spec.provider))
     const content = resumeSkillContent(spec)
@@ -387,6 +388,17 @@ test('resume skill 内容：九条共用模板，含 inert-history / 四态账�
   assert.match(gemini.description, /子代理/)
   const geminiContent = resumeSkillContent(gemini)
   assert.match(geminiContent, /"gemini"/)
+  // jsonl 族四家（0.3.0）：描述含各家存储形态关键词，恢复边界诚实声明伴生文件不读
+  const jsonlFamily = RESUME_SKILL_SPECS.filter((s) => ['kimi', 'codebuddy', 'qoder', 'kiro'].includes(s.provider))
+  assert.equal(jsonlFamily.length, 4, '缺 jsonl 族 resume 规格')
+  for (const spec of jsonlFamily) {
+    const content = resumeSkillContent(spec)
+    assert.match(content, new RegExp(`"${spec.provider}"`))
+    assert.match(content, /JSONL|wire\.jsonl|事件流/, `${spec.name} 描述未点名记录形态`)
+  }
+  const kiro = jsonlFamily.find((s) => s.provider === 'kiro')
+  assert.ok(kiro !== undefined)
+  assert.match(kiro.recoveryBoundary, /\.history 不读/)
 })
 
 test('handoff / inbox skill 内容：同款核验降级纪律', () => {

@@ -1,9 +1,9 @@
 /**
- * /resume-<provider> 九条 slash skill（注册表驱动、单一模板）：
+ * /resume-<provider> 逐家 slash skill（注册表驱动、单一模板）：
  * 解析引用 → 调 foreign_session_read → inert-history 边界 → 证据账本四态 →
  * 生成六段协议卡注入当轮 → verify-then-continue → 末尾问一句要不要寄存进收件箱。
  * userInvocable 而非 modelInvocable（slash 纪律），模型不可自行触发。
- * 九家规格不再手抄：id / 产品名 / 描述 / 恢复边界全部取自 providers.ts 注册表的
+ * 逐家规格不再手抄：id / 产品名 / 描述 / 恢复边界全部取自 providers.ts 注册表的
  * resume 段（单一真源派生，曾经的手抄数组与 foreign.ts 名单靠注释口头约定一致）。
  * @module dsh-takeover/skills/resume
  */
@@ -21,7 +21,7 @@ export interface ResumeSkillSpec {
   readonly recoveryBoundary: string
 }
 
-/** 九家注册规格：providers.ts 注册表 × 本文件模板函数生成（顺序即注册表声明序） */
+/** 逐家注册规格：providers.ts 注册表 × 本文件模板函数生成（顺序即注册表声明序） */
 export const RESUME_SKILL_SPECS: readonly ResumeSkillSpec[] = PROVIDERS.map((p) => ({
   // resume.id 与 name 严格一一对应（resume-<provider>），注册表一致性测试钉死等式
   name: p.resume.id as ResumeSkillSpec['name'],
@@ -31,7 +31,7 @@ export const RESUME_SKILL_SPECS: readonly ResumeSkillSpec[] = PROVIDERS.map((p) 
   recoveryBoundary: p.resume.recoveryBoundary,
 }))
 
-/** 单条 skill 内容模板：九条共用一个模板函数 */
+/** 单条 skill 内容模板：逐家共用一个模板函数 */
 export function resumeSkillContent(spec: ResumeSkillSpec): string {
   const slash = `/${spec.name}`
   return `# 拉取 ${spec.product} 会话（${slash}）
@@ -129,7 +129,7 @@ export function resumeSkillRegistration(spec: ResumeSkillSpec): SkillRegistratio
   }
 }
 
-/** 九条注册项（注册表驱动，与 RESUME_SKILL_SPECS 一一对应） */
+/** 逐家注册项（注册表驱动，与 RESUME_SKILL_SPECS 一一对应） */
 export function resumeSkillRegistrations(): SkillRegistration[] {
   return RESUME_SKILL_SPECS.map(resumeSkillRegistration)
 }

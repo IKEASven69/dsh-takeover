@@ -1,7 +1,7 @@
 /**
  * dsh-takeover 浏览器半：设置页「dsh-takeover」卡 + 接力工作台（composer 浮层）。
  * 设置卡（DESIGN.md §4 设置卡页签，三段页签、禁止长滚动）：命令速览（/handoff · /inbox ·
- * /resume-*，mono 键+说明）/ 支持矩阵（九家读取器：规范名+品牌图标、会话数、状态 pill、
+ * /resume-*，mono 键+说明）/ 支持矩阵（十三家读取器：规范名+品牌图标、会话数、状态 pill、
  * 启用开关）/ 开关语义说明。工作台（收件箱概览即时过滤 + 相邻重复卡分组 + 「新」卡徽标
  * （localStorage 已见集，键含 HANDOFF_HOME 散列）+ 展开看目标段预览 + 单卡/全部导出 .md +
  * 导出 HTML 报告（自包含单文件，state→html 为可单测纯函数）+ archived 计数 + 清空归档）
@@ -619,7 +619,7 @@ const CSS = `
 .bt-icon-full { border-radius: 50%; }
 .bt-icon-full svg { width: 100%; height: 100%; }
 .bt-icon-letter { color: #fff; font-weight: 700; font-size: 11px; line-height: 1; letter-spacing: -.02em; user-select: none; }
-/* 支持矩阵（九家）：名称列（品牌图标+规范名+mono id+哨兵提示）/ 会话数 / 状态 pill / 开关 */
+/* 支持矩阵（十三家）：名称列（品牌图标+规范名+mono id+哨兵提示）/ 会话数 / 状态 pill / 开关 */
 .tk-mx { display: flex; flex-direction: column; }
 .tk-mxr { display: grid; grid-template-columns: minmax(170px, auto) 1fr auto auto; gap: 11px; align-items: center;
   padding: 8px 4px; border-bottom: 1px solid var(--tk-line); border-radius: 8px;
@@ -936,7 +936,7 @@ export function coverageTextOf(state: TakeoverState): string | null {
 // ---------------------------------------------------------------------------
 // HTML 单文件报告导出（对齐 对标 Claude Code /export 需求）。
 // state→html 是可导出纯函数：单测直接喂 state + 双语词典 + 固定时刻，无 DOM。
-// 诚实纪律：内容仅来自 state 真有字段（pending 全卡 / 九家矩阵 / archived 计数 /
+// 诚实纪律：内容仅来自 state 真有字段（pending 全卡 / 十三家矩阵 / archived 计数 /
 // pendingSkipped / inboxError），不硬造；卡片标题与预览是模型生成文本，进 HTML
 // 前一律过 escHtml——自包含单文件没有 CSP 兜底，转义是唯一防线。
 // ---------------------------------------------------------------------------
@@ -1078,7 +1078,7 @@ body { margin: 0; background: #f4f5fb; color: #1e293b;
  *   单测喂固定串即可逐字断言；
  * - 内容面：头部品牌渐变 + 三张统计卡（待取件 / 已消费 / 读取器已启用-总数）+
  *   边界说明 + 收件箱全卡（空态出横幅；inboxError / pendingSkipped 诚实浮出）+
- *   九家支持矩阵（启用与否、支持 pill、会话数、note 浮出）。
+ *   十三家支持矩阵（启用与否、支持 pill、会话数、note 浮出）。
  */
 export function buildReportHtml(
   state: TakeoverState,
@@ -1533,7 +1533,7 @@ export function ProviderMatrix({ rows, busy, onToggle, t }: {
 // 交接出去（outbound）+ 记忆快照：右栏新增两卡。与 ForeignBrowser 同层。
 // ---------------------------------------------------------------------------
 
-/** 接收方 chips：交接出去与记忆快照共用（任意 agent + 九家） */
+/** 接收方 chips：交接出去与记忆快照共用（any + 交接轴八家；gemini 与 jsonl 族四家在读取器轴、不在交接轴） */
 export function TargetChips({ sel, lang, onSelect, ariaLabel }: {
   sel: string
   lang: Lang
@@ -1865,7 +1865,7 @@ export function HelpCard({ t }: { t: Translate }): ReturnType<typeof createEleme
 // 外部会话浏览器：浏览 + 一键投递。面板不产卡——蒸馏都在会话里由
 // 模型完成（卡片质量跟着模型能力走，这正是「跟着模型升级」的接法）；
 // 一键投递只是把与手动复制同源的指令送进新会话，失败退回复制。
-// 列表走轻量发现层（默认不自动扫九家，点哪家读哪家）；预览按需单会话拉结构化摘要。
+// 列表走轻量发现层（默认不自动扫全家族，点哪家读哪家）；预览按需单会话拉结构化摘要。
 // ---------------------------------------------------------------------------
 
 interface PreviewEntry {
@@ -2534,7 +2534,7 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
       setError(e instanceof Error ? e.message : String(e))
     }
   }
-  // 导出 HTML 报告：自包含单文件（九家矩阵 + 全部待取件 + 已消费计数；pending 为空也
+  // 导出 HTML 报告：自包含单文件（十三家矩阵 + 全部待取件 + 已消费计数；pending 为空也
   // 有矩阵与计数可报，故不随 pending 禁用）。state→html 组装在 buildReportHtml 纯函数，
   // 文案按当前语言现取（reportWords）；文件名带导出时刻，生成失败进错误横幅不塌卡
   const exportHtmlReport = (): void => {
@@ -3251,7 +3251,7 @@ export function Panel({ t, locale, navigate, slim }: { t: Translate; locale: Loc
         createElement('div', { className: 'tk-pane-lead' }, t('cmdBadge')),
         createElement(CommandsGrid, { state, t }),
       ),
-      // 支持矩阵（九家读取器）
+      // 支持矩阵（十三家读取器）
       pane('matrix',
         state !== null
           ? createElement(ProviderMatrix, { rows: state.providers, busy, onToggle: toggle, t })

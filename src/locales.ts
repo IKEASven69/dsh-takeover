@@ -74,16 +74,16 @@ export const zh: Record<string, string> = {
     '完整卡片请回会话用 /inbox 取件。',
   exportSectionMissing: '（该段全文不在此文件：设置卡 state 未提供。回会话用 /inbox 取件查看完整卡片。）',
   exportHtml: '导出 HTML 报告',
-  exportHtmlTitle: '生成自包含单文件 HTML 报告并下载（九家支持矩阵 + 全部待取件卡片 + 已消费计数；' +
+  exportHtmlTitle: '生成自包含单文件 HTML 报告并下载（十三家支持矩阵 + 全部待取件卡片 + 已消费计数；' +
     '零依赖纯前端生成，内容与 state 逐字段一致）',
   envelopeArchived: '信封附件 {v}',
   envelopeArchivedTitle: '信封附件：已消费卡的随卡附件（机器信封 JSON）总字符数，取件时用于核对环境',
   coverageBadge: '进展可查证 {v}',
   coverageBadgeTitle: '账本覆盖：交接卡「做到哪」段标注了证据状态的陈述占比（x/y）。四态：当下事实 / 历史汇报 / 不符 / 不可用——历史汇报永远建议先核对再执行',
-  matrixTitle: '支持矩阵（九家读取器）',
+  matrixTitle: '支持矩阵（十三家读取器）',
   browserTitle: '外部会话浏览器',
   sidebarTabTitle: '接力',
-  sidebarTabDesc: '浏览九家外部 agent 会话、一键接管与会话收件箱——agent 之间传上下文接着干',
+  sidebarTabDesc: '浏览十三家外部 agent 会话、一键接管与会话收件箱——agent 之间传上下文接着干',
   popoverTitle: '接力工作台',
   popoverSubtitle: '在多个 agent 之间接力干活：接管外部会话接着跑、把当前会话交接出去、用收件箱传交接卡。',
   onboard1: '在右侧点一家 agent 的名字，浏览它的最近会话',
@@ -176,10 +176,10 @@ export const zh: Record<string, string> = {
   noTime: '（无时间）',
   renderErrorTitle: 'dsh-takeover 渲染出错（把下面这段发给维护者）',
   reportTitle: 'dsh-takeover 交接报告',
-  reportSubtitle: '会话接管收件箱快照（九家读取器 · 待取件卡片 · 已消费计数）',
+  reportSubtitle: '会话接管收件箱快照（十三家读取器 · 待取件卡片 · 已消费计数）',
   reportGenerated: '生成于 {n}',
   reportNote: '本报告由 dsh-takeover 设置卡导出，为自包含单文件 HTML，内容仅来自 /dsh-takeover/state 当前返回：' +
-    '待取件卡片（编号 / 来源 / 标题 / 项目 / 推送时间与「目标」段预览）、九家支持矩阵与已消费计数。' +
+    '待取件卡片（编号 / 来源 / 标题 / 项目 / 推送时间与「目标」段预览）、十三家支持矩阵与已消费计数。' +
     '卡片其余五段全文、来源会话与 git 快照不在 state 内，未作臆造——完整卡片请回会话用 /inbox 取件。',
   reportStatPending: '待取件',
   reportStatArchived: '已存档',
@@ -345,7 +345,7 @@ export const en: Record<string, string> = {
   matrixTitle: 'Support matrix (9 readers)',
   browserTitle: 'External session browser',
   sidebarTabTitle: 'Relay',
-  sidebarTabDesc: "Browse nine agents' sessions, one-click takeover, and the session inbox — pass context between agents and continue",
+  sidebarTabDesc: "Browse thirteen agents' sessions, one-click takeover, and the session inbox — pass context between agents and continue",
   popoverTitle: 'Relay workbench',
   popoverSubtitle: 'Relay work across agents: take over external sessions, send the current one out, and pass handoff cards through the inbox.',
   onboard1: 'Click an agent on the right to browse its recent sessions',

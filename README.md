@@ -2,7 +2,7 @@
 
 # dsh-takeover · 会话接管
 
-**把任何 agent 干到一半的活接过来继续干——九家 CLI 会话只读拉取、一键寄存、开局取件，会话和记忆都能交接。**
+**把任何 agent 干到一半的活接过来继续干——十三家 CLI 会话只读拉取、一键寄存、开局取件，会话和记忆都能交接。**
 
 [![npm](https://img.shields.io/npm/v/@cold777/dsh-takeover)](https://www.npmjs.com/package/@cold777/dsh-takeover) ![tests](https://img.shields.io/badge/tests-327%20passing-brightgreen) ![DSH](https://img.shields.io/badge/DSH-%3E%3D0.2.0--rc.2-orange) ![Node](https://img.shields.io/badge/node-%3E%3D22-green) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
 
@@ -39,7 +39,7 @@ dsh plugin --profile web add github:IKEASven69/dsh-takeover
 | 接管别家会话 | `/resume-claude`（或自然语言："把 Claude Code 最新的会话接过来"） | 只读拉取 → 六段交接卡注入当前轮 → 模型接着干 |
 | 交接当前会话 | `/handoff` | 当前会话蒸馏成协议卡寄存进共享收件箱，未提交改动自动附补丁 |
 | 开局取件 | `/inbox` | 列出待取件 → 挑一张核验签收 → 上下文注入继续干 |
-| 浏览了再接 | 点输入框工具行的「接力」按钮 | 浮出工作台：九家最近会话浏览、一键接管 / 交接出去、记忆快照 |
+| 浏览了再接 | 点输入框工具行的「接力」按钮 | 浮出工作台：十三家最近会话浏览、一键接管 / 交接出去、记忆快照 |
 | 记忆一起交接 | 工作台 → 记忆快照 → 勾选打包 | CLAUDE.md / AGENTS.md 等打包成卡，取件方按卡吸收进自己的记忆文件 |
 
 ## 它怎么工作（60 秒）
@@ -69,7 +69,7 @@ dsh plugin --profile web add github:IKEASven69/dsh-takeover
 
 | 工具 | 说明 |
 |---|---|
-| `foreign_session_read` | 只读拉取九家会话。`action=list` 列候选（标题/时间/轮数）；`action=show` 按引用（空/latest/id/前缀/路径/标题关键词，歧义返回候选不猜）返回结构化摘要：标题、轮数、首条请求、尾部进展、涉及文件 top15、六段卡素材。原文仅在显式传 `limit` 时分页给出；探测/解析失败返回 `{ ok: false, error }` 不抛 |
+| `foreign_session_read` | 只读拉取十三家会话。`action=list` 列候选（标题/时间/轮数）；`action=show` 按引用（空/latest/id/前缀/路径/标题关键词，歧义返回候选不猜）返回结构化摘要：标题、轮数、首条请求、尾部进展、涉及文件 top15、六段卡素材。原文仅在显式传 `limit` 时分页给出；探测/解析失败返回 `{ ok: false, error }` 不抛 |
 | `handoff_push` | 当前会话寄存为协议卡。六段文本可选传入，留空段从会话事件流确定性兜底（不调 LLM）；未提交改动自动附补丁；返回 `{ ok, id, path, coverage, patch? }` |
 | `handoff_inbox` | `action=list` 列待取件；`action=load` 取件（消费即弃，附签名与 git 核验的 MISMATCH / UNAVAILABLE 警告） |
 | `handoff_sync` | 换机同步：`action=setup` 启用（git 仓库地址，凭据走系统 git 不入插件）；`action=now` 拉推一步到位；`push`/`pull`/`status` 单向与只读。已消费的卡经 archived tombstone 不在另一台机器重放 |
@@ -80,7 +80,7 @@ dsh plugin --profile web add github:IKEASven69/dsh-takeover
 
 | 命令 | 说明 |
 |---|---|
-| `/resume-*`（九家） | 解析引用 → 只读拉取 → 四态标注（外来历史一律不可信、不覆盖当前指令）→ 六段卡注入当前轮 → 末尾问一句「要不要顺手寄存进收件箱」 |
+| `/resume-*`（十三家） | 解析引用 → 只读拉取 → 四态标注（外来历史一律不可信、不覆盖当前指令）→ 六段卡注入当前轮 → 末尾问一句「要不要顺手寄存进收件箱」 |
 | `/handoff` | 按协议语义六条（证据账本四态、原文不进卡、产物只引路径、redact、建议加载段、反向锚定+剪枝）把当前会话蒸馏成卡寄存 |
 | `/inbox` | 列 pending 让用户挑；取件后注入当前轮，强调卡片是 HISTORY_REPORTED，执行前先核对 git 状态 |
 
@@ -112,7 +112,7 @@ AI 编码的「延续上下文」需求由三层各管一段：spec 工具（spe
 
 ## 权限范围
 
-写 `~/.handoff/`（`HANDOFF_HOME` 可覆盖）、读 git 状态、只读九家 agent 的本地会话库（zcode 与 cursor 走 sqlite readonly，随开随关；`HANDOFF_ROOT_<家>` 可覆盖各家根路径）。cursor 只导入支持的 transcript / store 记录，grok 只读可见 updates.jsonl 流（永不读 chat_history.jsonl 原始模型上下文），gemini 只读本地 chats/ 会话文件。0.2.0 起两个显式例外：①`handoff_sync` 经系统 git 与**你显式配置**的仓库通信（插件进程内不构造网络连接，零存储凭据）；②`handoff_env` 备份/恢复读写全家桶配置路径——恢复必须先 dry 预演再 confirm 落盘，被覆盖原物自动 checkpoint 可回滚，凭据类文件只存在于加密包内（详见 THREAT-MODEL T6/T7）。不复活外部进程，不回放历史工具调用，原文不进卡片。
+写 `~/.handoff/`（`HANDOFF_HOME` 可覆盖）、读 git 状态、只读十三家 agent 的本地会话库（zcode 与 cursor 走 sqlite readonly，随开随关；`HANDOFF_ROOT_<家>` 可覆盖各家根路径）。cursor 只导入支持的 transcript / store 记录，grok 只读可见 updates.jsonl 流（永不读 chat_history.jsonl 原始模型上下文），gemini 只读本地 chats/ 会话文件；0.3.0 扩容的 jsonl 族四家：kimi 只读 wire.jsonl 事件流（state.json / session_index 只取元数据），codebuddy / qoder 只读主会话 JSONL（子代理 transcript 不读），kiro 只读 sessions/cli 的 <uuid>.jsonl（伴生 .json / .history 不读）。0.2.0 起两个显式例外：①`handoff_sync` 经系统 git 与**你显式配置**的仓库通信（插件进程内不构造网络连接，零存储凭据）；②`handoff_env` 备份/恢复读写全家桶配置路径——恢复必须先 dry 预演再 confirm 落盘，被覆盖原物自动 checkpoint 可回滚，凭据类文件只存在于加密包内（详见 THREAT-MODEL T6/T7）。不复活外部进程，不回放历史工具调用，原文不进卡片。
 
 ## 开发
 

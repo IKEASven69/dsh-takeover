@@ -28,7 +28,7 @@ export declare function entryToTurns(entry: Entry): Turn[];
 //#region src/types.d.ts
 /** 一个已发现的会话（发现层产物，轻量：不含内容）。 */
 interface SessionRef {
-  /** 归属适配器名：claude-code | codex | opencode | zcode | pi | workbuddy | cursor | grok | gemini */
+  /** 归属适配器名：claude-code | codex | opencode | zcode | pi | workbuddy | cursor | grok | gemini | kimi | codebuddy | qoder | kiro */
   agent: string;
   /** 稳定 id：文件系=绝对路径；SQLite 系=会话 id。 */
   id: string;
@@ -122,6 +122,18 @@ export declare function parseGeminiText(text: string, cwd?: string): Turn[];
 export declare function parseGeminiJson(text: string, cwd?: string): Turn[];
 /** 会话文件路径（.jsonl 新格式 / .json 旧格式）→ Turn 流。文件缺失/损坏返回 []。 */
 export declare function parseGeminiSession(id: string): Turn[];
+//#endregion
+//#region src/kimi.d.ts
+/** wire.jsonl 文本 → Turn 流：已知事件分派，metadata / step 边界与未知行静默跳过。 */
+export declare function parseKimiWireText(text: string, cwd?: string): Turn[];
+//#endregion
+//#region src/codebuddy.d.ts
+/** WorkBuddy 内核记录 JSONL 文本 → Turn 流（workbuddy / codebuddy 两家共用归一）。 */
+export declare function parseWorkbuddyKernelText(text: string): Turn[];
+//#endregion
+//#region src/kiro.d.ts
+/** cli/<uuid>.jsonl 文本 → Turn 流：Prompt / AssistantMessage / ToolResults 分派。 */
+export declare function parseKiroSessionText(text: string): Turn[];
 //#endregion
 //#region src/index.d.ts
 export declare const AGENTS: SessionAdapter[];

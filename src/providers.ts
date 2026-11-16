@@ -1,22 +1,24 @@
 /**
- * provider 注册表 —— 九家外部 agent 会话的单一真源。
+ * provider 注册表 —— 十三家外部 agent 会话的单一真源。
  * 收敛前存在四份平行名单（互相靠注释口头约定一致，改一家要四处同步）：
  * - foreign.ts 的 FOREIGN_PROVIDERS / PROVIDER_TO_ADAPTER（读取器轴）
  * - client.ts 的 RESUME_PROVIDERS（客户端 /resume-* 命令速览 chips）
- * - skills/resume.ts 的 RESUME_SKILL_SPECS 手抄数组（九条 slash skill 文案）
+ * - skills/resume.ts 的 RESUME_SKILL_SPECS 手抄数组（逐条 slash skill 文案）
  * - brand-icons.ts 的图标与显示名（BRAND_MARKS / BRAND_FULL_SVG / PROVIDER_LABEL）
  * 现在四者全部从本表派生；确有差异的轴显式入表，不留隐式：
  * - adapter：readers 适配器名（claude 的适配器叫 claude-code，其余同名）
  * - outboundEligible：是否进交接目标轴（OUTBOUND_TARGETS）。交接目标与读取器
- *   两轴独立：gemini 是第 9 家读取器但不进交接目标，显式 false。
- * - icon：gemini 暂无核实过的官方矢量，显式 'none' 走中性兜底——未经核实的
- *   「官方 path」不入表，不出冒牌标。
+ *   两轴独立：gemini 与 0.3.0 新增的 kimi / codebuddy / qoder / kiro 是读取器
+ *   但不进交接目标，显式 false。
+ * - icon：gemini / kimi / codebuddy / qoder / kiro 暂无核实过的官方矢量，显式
+ *   'none' 走中性兜底——未经核实的「官方 path」不入表，不出冒牌标。
  * 纪律：本文件必须是纯数据叶（不 import 任何模块）。它同时打进 host 半
  * （tsdown）与 client 半（esbuild 浏览器 bundle）——任何 host 侧依赖
  * （cordis / dsh-tools / readers）都会把宿主拖进浏览器包或让客户端包炸裂。
  * 声明序有语义：即工具 enum、支持矩阵、命令速览 chips、skill 注册面的展示序
  * （历史 FOREIGN_PROVIDERS 序：claude → codex → opencode → zcode → pi →
- * workbuddy → cursor → grok → gemini），改动即改序。
+ * workbuddy → cursor → grok → gemini → kimi → codebuddy → qoder → kiro），
+ * 改动即改序。
  * @module dsh-takeover/providers
  */
 
@@ -48,7 +50,7 @@ export interface ProviderResume {
   readonly recoveryBoundary: string
 }
 
-/** 九家外部 provider 的注册表条目（全部字段显式声明，消费面各自派生） */
+/** 十三家外部 provider 的注册表条目（全部字段显式声明，消费面各自派生） */
 export interface ProviderMeta {
   /** 面向用户的 provider 名（工具 enum / 设置卡矩阵 / slash skill / 交接目标同用） */
   readonly name: string
@@ -231,7 +233,7 @@ export const PROVIDERS = [
     name: 'gemini',
     adapter: 'gemini',
     label: 'Gemini CLI',
-    // 双轴独立：gemini 是第 9 家读取器（进 FOREIGN_PROVIDERS），但交接目标轴不收——
+    // 双轴独立：gemini 是读取器（进 FOREIGN_PROVIDERS），但交接目标轴不收——
     // 「把会话交接给 Gemini CLI」与「读取 Gemini CLI 的会话」是两个方向。
     outboundEligible: false,
     // 暂无官方矢量在册：图标走 ProviderIcon 中性兜底——未经核实的「官方 path」不入表
@@ -243,9 +245,64 @@ export const PROVIDERS = [
       recoveryBoundary: '读取器只读 Gemini CLI 本地 chats/ 下的会话文件（JSONL 新格式 / 整块 JSON 旧格式，含子代理会话目录）；info/error/warning CLI 提示与斜杠命令行不进对话流；只读不写、不复活 Gemini CLI 进程。',
     },
   },
+  {
+    // 0.3.0 jsonl 族扩容（kimi / codebuddy / qoder / kiro）：与 gemini 同款双轴纪律——
+    // 只进读取器轴，不进交接目标轴（outboundEligible: false）；暂无核实过的官方
+    // 矢量，icon 显式 'none' 走中性兜底——未经核实的「官方 path」不入表。
+    name: 'kimi',
+    adapter: 'kimi',
+    label: 'Kimi Code',
+    outboundEligible: false,
+    icon: { kind: 'none' },
+    resume: {
+      id: 'resume-kimi',
+      product: 'Kimi Code',
+      description: '把一条 Kimi Code 会话拉进当前会话，生成六段交接卡接手工作；记录是 wd_<目录>/<会话>/agents/main/wire.jsonl 事件流，可附会话目录名、记录路径或标题关键词。',
+      recoveryBoundary: '读取器只读各会话 agents/main/wire.jsonl 可见事件流（turn.prompt / 文本与 think 内容块 / 工具调用与结果），think 块以 [thinking] 标记保留；伴生 state.json / session_index.jsonl 只取标题与工作目录；只读不写、不复活 Kimi CLI 进程。',
+    },
+  },
+  {
+    name: 'codebuddy',
+    adapter: 'codebuddy',
+    label: 'CodeBuddy',
+    outboundEligible: false,
+    icon: { kind: 'none' },
+    resume: {
+      id: 'resume-codebuddy',
+      product: 'CodeBuddy',
+      description: '把一条 CodeBuddy 会话拉进当前会话，生成六段交接卡接手工作；主会话是一文件一会的 JSONL，可附会话 id、记录路径或标题关键词。',
+      recoveryBoundary: '读取器只读 projects 下 cwd 转义目录一层的主会话 JSONL（WorkBuddy 内核记录族）；子代理 transcript 不在本期范围；只读不写、不回放存储的调用。',
+    },
+  },
+  {
+    name: 'qoder',
+    adapter: 'qoder',
+    label: 'Qoder',
+    outboundEligible: false,
+    icon: { kind: 'none' },
+    resume: {
+      id: 'resume-qoder',
+      product: 'Qoder',
+      description: '把一条 Qoder 会话拉进当前会话，生成六段交接卡接手工作；主会话是一文件一会的 JSONL（与 Claude Code 同族记录），可附会话 id（记录路径）、记录路径或标题关键词。',
+      recoveryBoundary: '读取器只读 projects 下项目目录一层的主会话 JSONL，cwd 取自记录本身（目录名反解有歧义，不猜）；子代理 transcript 不读；只读不写、不复活 Qoder。',
+    },
+  },
+  {
+    name: 'kiro',
+    adapter: 'kiro',
+    label: 'Kiro',
+    outboundEligible: false,
+    icon: { kind: 'none' },
+    resume: {
+      id: 'resume-kiro',
+      product: 'Kiro',
+      description: '把一条 Kiro 会话拉进当前会话，生成六段交接卡接手工作；CLI 会话是 <uuid>.jsonl 事件流（另有 .json/.history 伴生但不读），可附会话 id、JSONL 路径或标题关键词。',
+      recoveryBoundary: '读取器只读 sessions/cli 下的 <uuid>.jsonl 事件流（Prompt / AssistantMessage / ToolResults）；伴生 .json 与 .history 不读；事件流没有 cwd 字段时如实留空；只读不写、不复活 Kiro。',
+    },
+  },
 ] as const satisfies readonly ProviderMeta[]
 
-/** 九家 provider 名的字面量并集类型（注册表声明序） */
+/** 十三家 provider 名的字面量并集类型（注册表声明序） */
 export type ProviderName = (typeof PROVIDERS)[number]['name']
 
 /** /resume-* 命令速览 chips 的 provider 名单（client 命令速览同用；与读取器轴同源同序） */

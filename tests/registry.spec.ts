@@ -1,8 +1,8 @@
-// 注册表一致性：src/providers.ts 是九家外部 provider 的单一真源。
+// 注册表一致性：src/providers.ts 是十三家外部 provider 的单一真源。
 // 消费面——foreign.ts 的名单与适配器映射、skills/resume.ts 的 skill 规格、
 // brand-icons.ts 的图标与显示名、browser-view.ts 的交接目标轴、client.ts 的
 // /resume-* chips 名单——必须与注册表逐字段一致；任何一边手抄漂移在此红灯。
-// 双轴独立在此钉住：gemini 进读取器轴、不进交接目标轴（注册表显式声明）。
+// 双轴独立在此钉住：gemini 与 jsonl 族四家（kimi/codebuddy/qoder/kiro）进读取器轴、不进交接目标轴（注册表显式声明）。
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { PROVIDERS, RESUME_PROVIDERS } from '../src/providers.ts'
@@ -11,18 +11,21 @@ import { BRAND_MARKS, BRAND_FULL_SVG, PROVIDER_LABEL } from '../src/brand-icons.
 import { OUTBOUND_TARGETS, OUTBOUND_LABELS } from '../src/browser-view.ts'
 import { RESUME_SKILL_SPECS, resumeSkillRegistrations } from '../skills/resume.ts'
 
-test('注册表九家：name / adapter / label 显式齐全，声明序 = 历史 FOREIGN_PROVIDERS 序', () => {
-  assert.equal(PROVIDERS.length, 9)
+test('注册表十三家：name / adapter / label 显式齐全，声明序 = 历史 FOREIGN_PROVIDERS 序 + jsonl 族扩容序', () => {
+  assert.equal(PROVIDERS.length, 13)
   assert.deepEqual(PROVIDERS.map((p) => p.name), [
     'claude', 'codex', 'opencode', 'zcode', 'pi', 'workbuddy', 'cursor', 'grok', 'gemini',
+    'kimi', 'codebuddy', 'qoder', 'kiro',
   ])
   assert.deepEqual(Object.fromEntries(PROVIDERS.map((p) => [p.name, p.adapter])), {
     claude: 'claude-code', codex: 'codex', opencode: 'opencode', zcode: 'zcode',
     pi: 'pi', workbuddy: 'workbuddy', cursor: 'cursor', grok: 'grok', gemini: 'gemini',
+    kimi: 'kimi', codebuddy: 'codebuddy', qoder: 'qoder', kiro: 'kiro',
   })
   assert.deepEqual(Object.fromEntries(PROVIDERS.map((p) => [p.name, p.label])), {
     claude: 'Claude Code', codex: 'Codex CLI', opencode: 'OpenCode', zcode: 'ZCode',
     pi: 'Pi', workbuddy: 'WorkBuddy', cursor: 'Cursor', grok: 'Grok CLI', gemini: 'Gemini CLI',
+    kimi: 'Kimi Code', codebuddy: 'CodeBuddy', qoder: 'Qoder', kiro: 'Kiro',
   })
 })
 
@@ -67,7 +70,7 @@ test('图标轴：BRAND_MARKS / BRAND_FULL_SVG / PROVIDER_LABEL 与注册表 ico
   assert.deepEqual(Object.keys(BRAND_MARKS).sort(), [...marks, 'dsh'].sort())
   const fulls = PROVIDERS.filter((p) => p.icon.kind === 'full').map((p) => p.name)
   assert.deepEqual(Object.keys(BRAND_FULL_SVG).sort(), fulls)
-  // 显示名表 = 注册表九家 + 宿主自有 dsh（dsh 不是外部 provider，不进注册表）
+  // 显示名表 = 注册表十三家 + 宿主自有 dsh（dsh 不是外部 provider，不进注册表）
   assert.deepEqual(Object.keys(PROVIDER_LABEL).sort(), [...PROVIDERS.map((p) => p.name), 'dsh'].sort())
   assert.equal(PROVIDER_LABEL.dsh, 'DeepSeek Harness')
   assert.ok('dsh' in BRAND_MARKS, '宿主自有 dsh tile 标保留')
@@ -75,16 +78,19 @@ test('图标轴：BRAND_MARKS / BRAND_FULL_SVG / PROVIDER_LABEL 与注册表 ico
 
 test('交接目标轴：OUTBOUND_TARGETS / OUTBOUND_LABELS 与注册表 outboundEligible 派生一致', () => {
   const eligible = PROVIDERS.filter((p) => p.outboundEligible)
-  assert.equal(PROVIDERS.filter((p) => !p.outboundEligible).length, 1, '不进交接轴的恰好一家（gemini）')
+  // 0.3.0 jsonl 族扩容（kimi / codebuddy / qoder / kiro）与 gemini 同款：只进读取器轴
+  assert.equal(PROVIDERS.filter((p) => !p.outboundEligible).length, 5, '不进交接轴的恰好五家（gemini + jsonl 族四家）')
   assert.deepEqual([...OUTBOUND_TARGETS], ['any', ...eligible.map((p) => p.name)])
   assert.deepEqual(OUTBOUND_LABELS.any, { zh: '任意 agent', en: 'Any agent' })
   for (const p of eligible) {
     assert.deepEqual(OUTBOUND_LABELS[p.name], { zh: p.label, en: p.label }, `label ${p.name}`)
   }
-  // 双轴独立：gemini 在读取器轴在场、在交接轴缺席
-  assert.ok(FOREIGN_PROVIDERS.includes('gemini'))
-  assert.ok(!(OUTBOUND_TARGETS as readonly string[]).includes('gemini'))
-  assert.ok(!('gemini' in OUTBOUND_LABELS))
+  // 双轴独立逐家钉住：五家在读取器轴在场、在交接轴缺席
+  for (const p of ['gemini', 'kimi', 'codebuddy', 'qoder', 'kiro'] as const) {
+    assert.ok(FOREIGN_PROVIDERS.includes(p))
+    assert.ok(!(OUTBOUND_TARGETS as readonly string[]).includes(p))
+    assert.ok(!(p in OUTBOUND_LABELS))
+  }
 })
 
 test('client /resume-* chips 名单（RESUME_PROVIDERS）与注册表同源同序', () => {

@@ -363,7 +363,7 @@ interface Turn {
 //#region src/types.d.ts
 /** 一个已发现的会话（发现层产物，轻量：不含内容）。 */
 interface SessionRef {
-  /** 归属适配器名：claude-code | codex | opencode | zcode | pi | workbuddy | cursor | grok | gemini */
+  /** 归属适配器名：claude-code | codex | opencode | zcode | pi | workbuddy | cursor | grok | gemini | kimi | codebuddy | qoder | kiro */
   agent: string;
   /** 稳定 id：文件系=绝对路径；SQLite 系=会话 id。 */
   id: string;
@@ -572,12 +572,68 @@ declare const PROVIDERS: readonly [{
     readonly description: '把一条 Gemini CLI 会话拉进当前会话，生成六段交接卡接手工作；本地记录是新旧双格式 JSONL/JSON，子代理会话单独存盘，可附会话 id（记录路径）、记录路径或标题关键词。';
     readonly recoveryBoundary: '读取器只读 Gemini CLI 本地 chats/ 下的会话文件（JSONL 新格式 / 整块 JSON 旧格式，含子代理会话目录）；info/error/warning CLI 提示与斜杠命令行不进对话流；只读不写、不复活 Gemini CLI 进程。';
   };
+}, {
+  readonly name: 'kimi';
+  readonly adapter: 'kimi';
+  readonly label: 'Kimi Code';
+  readonly outboundEligible: false;
+  readonly icon: {
+    readonly kind: 'none';
+  };
+  readonly resume: {
+    readonly id: 'resume-kimi';
+    readonly product: 'Kimi Code';
+    readonly description: '把一条 Kimi Code 会话拉进当前会话，生成六段交接卡接手工作；记录是 wd_<目录>/<会话>/agents/main/wire.jsonl 事件流，可附会话目录名、记录路径或标题关键词。';
+    readonly recoveryBoundary: '读取器只读各会话 agents/main/wire.jsonl 可见事件流（turn.prompt / 文本与 think 内容块 / 工具调用与结果），think 块以 [thinking] 标记保留；伴生 state.json / session_index.jsonl 只取标题与工作目录；只读不写、不复活 Kimi CLI 进程。';
+  };
+}, {
+  readonly name: 'codebuddy';
+  readonly adapter: 'codebuddy';
+  readonly label: 'CodeBuddy';
+  readonly outboundEligible: false;
+  readonly icon: {
+    readonly kind: 'none';
+  };
+  readonly resume: {
+    readonly id: 'resume-codebuddy';
+    readonly product: 'CodeBuddy';
+    readonly description: '把一条 CodeBuddy 会话拉进当前会话，生成六段交接卡接手工作；主会话是一文件一会的 JSONL，可附会话 id、记录路径或标题关键词。';
+    readonly recoveryBoundary: '读取器只读 projects 下 cwd 转义目录一层的主会话 JSONL（WorkBuddy 内核记录族）；子代理 transcript 不在本期范围；只读不写、不回放存储的调用。';
+  };
+}, {
+  readonly name: 'qoder';
+  readonly adapter: 'qoder';
+  readonly label: 'Qoder';
+  readonly outboundEligible: false;
+  readonly icon: {
+    readonly kind: 'none';
+  };
+  readonly resume: {
+    readonly id: 'resume-qoder';
+    readonly product: 'Qoder';
+    readonly description: '把一条 Qoder 会话拉进当前会话，生成六段交接卡接手工作；主会话是一文件一会的 JSONL（与 Claude Code 同族记录），可附会话 id（记录路径）、记录路径或标题关键词。';
+    readonly recoveryBoundary: '读取器只读 projects 下项目目录一层的主会话 JSONL，cwd 取自记录本身（目录名反解有歧义，不猜）；子代理 transcript 不读；只读不写、不复活 Qoder。';
+  };
+}, {
+  readonly name: 'kiro';
+  readonly adapter: 'kiro';
+  readonly label: 'Kiro';
+  readonly outboundEligible: false;
+  readonly icon: {
+    readonly kind: 'none';
+  };
+  readonly resume: {
+    readonly id: 'resume-kiro';
+    readonly product: 'Kiro';
+    readonly description: '把一条 Kiro 会话拉进当前会话，生成六段交接卡接手工作；CLI 会话是 <uuid>.jsonl 事件流（另有 .json/.history 伴生但不读），可附会话 id、JSONL 路径或标题关键词。';
+    readonly recoveryBoundary: '读取器只读 sessions/cli 下的 <uuid>.jsonl 事件流（Prompt / AssistantMessage / ToolResults）；伴生 .json 与 .history 不读；事件流没有 cwd 字段时如实留空；只读不写、不复活 Kiro。';
+  };
 }];
-/** 九家 provider 名的字面量并集类型（注册表声明序） */
+/** 十三家 provider 名的字面量并集类型（注册表声明序） */
 type ProviderName = (typeof PROVIDERS)[number]['name'];
 //#endregion
 //#region src/foreign.d.ts
-/** 面向用户的九家提供方名（providers.ts 注册表派生，顺序即注册表声明序） */
+/** 面向用户的十三家提供方名（providers.ts 注册表派生，顺序即注册表声明序） */
 export declare const FOREIGN_PROVIDERS: readonly ForeignProvider[];
 type ForeignProvider = ProviderName;
 /** 面向用户的 provider 名 → readers 适配器名（注册表派生；claude 是 claude-code 的别名，设置卡支持矩阵同用） */
@@ -937,7 +993,7 @@ export declare function switchesPath(dir?: string): string;
 export declare function loadSwitches(dir?: string): TakeoverSwitches;
 /** 写开关：tmp+rename 原子替换（进程中断不再留下半截 config.json） */
 export declare function saveSwitches(switches: TakeoverSwitches, dir?: string): void;
-/** 某家是否启用（默认启用；只认九家名单内的停用条目） */
+/** 某家是否启用（默认启用；只认注册表名单内的停用条目） */
 export declare function isProviderEnabled(provider: string, dir?: string): boolean;
 /** 切某家开关并持久化；未知 provider 抛中文错（路由层转 400） */
 export declare function setProviderEnabled(provider: string, enabled: boolean, dir?: string): TakeoverSwitches;
@@ -1262,15 +1318,15 @@ interface ResumeSkillSpec {
   /** 各家恢复边界文案（读取器排除什么、永不做什么） */
   readonly recoveryBoundary: string;
 }
-/** 九家注册规格：providers.ts 注册表 × 本文件模板函数生成（顺序即注册表声明序） */
+/** 逐家注册规格：providers.ts 注册表 × 本文件模板函数生成（顺序即注册表声明序） */
 export declare const RESUME_SKILL_SPECS: readonly ResumeSkillSpec[];
-/** 单条 skill 内容模板：九条共用一个模板函数 */
+/** 单条 skill 内容模板：逐家共用一个模板函数 */
 export declare function resumeSkillContent(spec: ResumeSkillSpec): string;
-/** 九条注册项（注册表驱动，与 RESUME_SKILL_SPECS 一一对应） */
+/** 逐家注册项（注册表驱动，与 RESUME_SKILL_SPECS 一一对应） */
 export declare function resumeSkillRegistrations(): SkillRegistration[];
 //#endregion
 //#region skills/index.d.ts
-/** 全部 bundled slash skill 注册项（/handoff /inbox + /resume-* 九条） */
+/** 全部 bundled slash skill 注册项（/handoff /inbox + /resume-* 逐家衍生） */
 export declare function skillRegistrations(): SkillRegistration[];
 //#endregion
 //#region src/index.d.ts

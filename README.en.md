@@ -2,7 +2,7 @@
 
 # dsh-takeover · Session Takeover
 
-**Take over any agent's half-finished work and keep going — read-only session pull from nine CLIs, one-click check-in, pickup on start. Sessions and memory both hand over.**
+**Take over any agent's half-finished work and keep going — read-only session pull from thirteen CLIs, one-click check-in, pickup on start. Sessions and memory both hand over.**
 
 [![npm](https://img.shields.io/npm/v/@cold777/dsh-takeover)](https://www.npmjs.com/package/@cold777/dsh-takeover) ![tests](https://img.shields.io/badge/tests-327%20passing-brightgreen) ![DSH](https://img.shields.io/badge/DSH-%3E%3D0.2.0--rc.2-orange) ![Node](https://img.shields.io/badge/node-%3E%3D22-green) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
 
@@ -39,7 +39,7 @@ Works out of the box (built artifacts are committed — no local toolchain). Pin
 | Take over a foreign session | `/resume-claude` (or plain words: "take over the latest Claude Code session") | Read-only pull → six-section card injected into the live turn → the model continues |
 | Hand the current session off | `/handoff` | Current session distilled into a protocol card, uncommitted changes attached as a patch |
 | Pick up on start | `/inbox` | List pending cards → verify and sign for one → context injected, keep working |
-| Browse before deciding | Click the "Relay" chip next to the composer | Workstation opens: browse nine agents' recent sessions, one-click takeover / check-out, memory snapshot |
+| Browse before deciding | Click the "Relay" chip next to the composer | Workstation opens: browse thirteen agents' recent sessions, one-click takeover / check-out, memory snapshot |
 | Hand memory over too | Workstation → Memory snapshot → select and pack | CLAUDE.md / AGENTS.md and friends packed into a card; the receiver absorbs them per its "suggested loads" |
 
 ## How it works (60 seconds)
@@ -69,7 +69,7 @@ What does one card carry? After one `handoff_sync` command, the other machine's 
 
 | Tool | What it does |
 |---|---|
-| `foreign_session_read` | Read-only pull across nine agents. `action=list` lists candidates (title/time/turns); `action=show` resolves a reference (empty/`latest`, id, prefix, path, title keyword — ambiguity returns candidates, never guesses) into a structured summary: title, turns, first user message, recent progress, top-15 files, six-section card material. Raw turns only when `limit` is passed explicitly; probe/parse failures return `{ ok: false, error }` instead of throwing |
+| `foreign_session_read` | Read-only pull across thirteen agents. `action=list` lists candidates (title/time/turns); `action=show` resolves a reference (empty/`latest`, id, prefix, path, title keyword — ambiguity returns candidates, never guesses) into a structured summary: title, turns, first user message, recent progress, top-15 files, six-section card material. Raw turns only when `limit` is passed explicitly; probe/parse failures return `{ ok: false, error }` instead of throwing |
 | `handoff_push` | Check the current session out as a protocol card. Sections left empty are deterministically backfilled from the session event stream (no LLM call); uncommitted changes attach as a patch; returns `{ ok, id, path, coverage, patch? }` |
 | `handoff_inbox` | `action=list` pending cards; `action=load` picks one up (consume-and-archive, with signature and git-verified MISMATCH / UNAVAILABLE warnings) |
 | `handoff_sync` | Machine-switch sync: `action=setup` enables (git repo URL; credentials stay with system git, never in the plugin); `action=now` pulls and pushes in one step; `push`/`pull`/`status` for one-way and read-only. Consumed cards do not replay on the other machine — archived/ is the tombstone |
@@ -80,7 +80,7 @@ What does one card carry? After one `handoff_sync` command, the other machine's 
 
 | Command | What it does |
 |---|---|
-| `/resume-*` (nine) | Resolve reference → read-only pull → four-state marking (foreign history is untrusted and never overrides current instructions) → six-section card injected into the live turn → ends by asking whether to check the session into the inbox |
+| `/resume-*` (thirteen) | Resolve reference → read-only pull → four-state marking (foreign history is untrusted and never overrides current instructions) → six-section card injected into the live turn → ends by asking whether to check the session into the inbox |
 | `/handoff` | Distills the current session per the protocol's six rules (four-state ledger, no raw text, artifacts as paths only, redact, suggested-loads section, reverse-anchoring + pruning) and checks it in |
 | `/inbox` | Lists pending cards for the user to pick; after pickup the card is injected as HISTORY_REPORTED — verify git state before executing |
 
@@ -112,7 +112,7 @@ The one-sentence mechanical distinction: **they do "convert, then natively resum
 
 ## Permission scope
 
-Writes `~/.handoff/` (override via `HANDOFF_HOME`), reads git status, read-only access to the nine agents' local session stores (zcode and cursor via sqlite readonly, opened on demand; per-agent roots overridable via `HANDOFF_ROOT_<agent>`). cursor imports only supported transcript / store records; grok reads only the visible updates.jsonl stream (never the raw chat_history.jsonl model context); gemini reads only local chats/ session files. Two explicit exceptions since 0.2.0: (1) `handoff_sync` talks to the git repository **you explicitly configure**, via system git (the plugin process builds no network connection and stores no credentials); (2) `handoff_env` backs up and restores family-wide config paths — restore requires a dry preview then explicit confirm before anything is written, overwritten originals are auto-checkpointed for rollback, and credential files exist only inside the encrypted archive (see THREAT-MODEL T6/T7). No reviving external processes, no replaying historical tool calls, raw text never enters cards.
+Writes `~/.handoff/` (override via `HANDOFF_HOME`), reads git status, read-only access to the thirteen agents' local session stores (zcode and cursor via sqlite readonly, opened on demand; per-agent roots overridable via `HANDOFF_ROOT_<agent>`). cursor imports only supported transcript / store records; grok reads only the visible updates.jsonl stream (never the raw chat_history.jsonl model context); gemini reads only local chats/ session files; the four jsonl-family readers added in 0.3.0: kimi reads only the wire.jsonl event stream (state.json / session_index used for metadata only), codebuddy / qoder read only main-session JSONL files (subagent transcripts excluded), kiro reads only sessions/cli <uuid>.jsonl (companion .json / .history files are never read). Two explicit exceptions since 0.2.0: (1) `handoff_sync` talks to the git repository **you explicitly configure**, via system git (the plugin process builds no network connection and stores no credentials); (2) `handoff_env` backs up and restores family-wide config paths — restore requires a dry preview then explicit confirm before anything is written, overwritten originals are auto-checkpointed for rollback, and credential files exist only inside the encrypted archive (see THREAT-MODEL T6/T7). No reviving external processes, no replaying historical tool calls, raw text never enters cards.
 
 ## Development
 
