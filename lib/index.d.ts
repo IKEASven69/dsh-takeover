@@ -1088,6 +1088,20 @@ interface BackupManifestRead {
  * 密文 blob 原样留在 env-backup/。错口令 = GCM 认证失败诚实报错（同解包口径）。
  */
 export declare function readBackupManifest(file: string, passphrase: string, dir?: string): BackupManifestRead;
+/** 备份包内单条目的原文（配置写回 inject 的读取形态；不落盘，纯读） */
+interface BackupEntryBlob {
+  /** 包内相对 user home 的路径（正斜杠） */
+  path: string;
+  category: string;
+  content: Buffer;
+}
+/**
+ * 读备份包内若干条目的原文：口令解密容器后按谓词挑条目取 blob（**只读**——
+ * 与 readBackupManifest 同口径，错口令 = GCM 认证失败诚实报错，不吐半个字节）。
+ * handoff_env action=inject 用它取 `.mcp.json` 与 `.agents/skills/**` 两类源条目；
+ * 谓词缺省 = 全部条目（调用方自己过滤也行）。
+ */
+export declare function readBackupEntryBlobs(file: string, passphrase: string, dir?: string, pred?: (rel: string) => boolean): BackupEntryBlob[];
 interface BackupResult {
   ok: true;
   file: string;
@@ -1466,6 +1480,218 @@ export declare function renderMemory(_args: unknown, value: unknown): Array<{
   text: string;
 }>;
 //#endregion
+//#region src/absorb.d.ts
+/** 单次吸收追加总字符上限（与 memory.ts SUGGESTED_TOTAL_MAX 同量级：写回也要封顶，最坏有界） */
+export declare const ABSORB_TOTAL_MAX = 120000;
+/** 吸收目标定义：从 MEMORY_SOURCES 选（复用同一份路径真源），hippo-db（引擎目录）除外 */
+interface AbsorbTargetDef {
+  key: string;
+  agent: string;
+  scope: 'user' | 'project';
+  path: (home: string, cwd: string) => string;
+}
+/**
+ * 吸收目标注册表：MEMORY_SOURCES 的文件型子集，AGENTS.md 族事实标准优先排序
+ * （展示口径——工具错误文案按此序列候选）。hippo-db 特意不在册：zvec 原生目录
+ * 不接受文件写回（写了就是砸库），absorb 对它单独给诚实报错。
+ */
+export declare const ABSORB_TARGETS: readonly AbsorbTargetDef[];
+/** 「建议加载」段条目：一行为一条（空行/段标题/截断标记行不算条目），sha 取 trim 后内容的 sha256 */
+interface AbsorbEntry {
+  line: string;
+  sha256: string;
+  /** 条目来自卡内哪个来源块（`## <路径>` 标题；无标题块为「未标注来源」） */
+  source: string;
+}
+/**
+ * 解析「建议加载」段为条目列表（确定性）：
+ * - `## <路径>` 行是来源块标题（memorySections 的组装形态），不算条目，只记来源；
+ * - 其余非空行各算一条（trim 后参与哈希与追加）；
+ * - 截断标记行（`…（`开头，memory.ts 截断口径的产物）与块内小节标题形态跳过；
+ * - 无任何 `##` 标题的外来卡：整段按「未标注来源」单块处理。
+ */
+export declare function parseSuggestedEntries(suggested: string): AbsorbEntry[];
+/** absorb 参数（工具面与核心函数共用） */
+interface AbsorbArgs {
+  id?: string;
+  target?: string;
+  confirm?: boolean;
+  /** project 级目标必填：目标记忆文件所在项目目录 */
+  cwd?: string;
+}
+/** absorb 依赖注入（测试用：dir=HANDOFF_HOME、home=user home、now=事件时刻） */
+interface AbsorbDeps {
+  dir?: string;
+  home?: string;
+  now?: Date;
+}
+type AbsorbResult = {
+  ok: true;
+  action: 'absorb';
+  id: string;
+  target: string;
+  agent: string;
+  /** 落盘的记忆文件绝对路径 */
+  path: string;
+  /** 实际追加条数 */
+  appended: number;
+  /** 按 sha 去重跳过的条数（目标已有，未重写） */
+  deduped: number;
+  /** 写前原物快照路径（目标原本不存在时缺省） */
+  snapshot?: string;
+  detail: string;
+} | {
+  ok: false;
+  error: string;
+};
+/**
+ * 记忆卡吸收核心（可脱离 host 单测）。全流程：
+ * 参数校验 → 目标解析（闭集 + 会话存储守门）→ 读 archived 卡（未取件明确拒）
+ * → axis=memory 校验 → 建议段解析 + sha 去重 → confirm 闸（缺省拒 + 计划回显）
+ * → 快照 → tmp+rename 落盘 → lifecycle absorbed-write 留痕。
+ * 任何失败都只回 { ok: false, error }，不抛异常。
+ */
+export declare function absorbCard(args: AbsorbArgs, deps?: AbsorbDeps): AbsorbResult;
+/** execute 规范值 → 模型可见文本 */
+export declare function renderAbsorb(_args: unknown, value: unknown): Array<{
+  type: 'text';
+  text: string;
+}>;
+/** 注册 handoff_absorb 工具（写回面唯一记忆入口：confirm 两步 + 去重 + 快照 + 留痕） */
+export declare function registerAbsorbTool(ctx: Context): void;
+//#endregion
+//#region src/configinject.d.ts
+/**
+ * 配置写回最小闭环（0.2.x）：handoff_env action=inject——把备份包内的
+ * `.mcp.json`（MCP servers 事实标准形态）与 `.agents/skills/**`（用户 skills
+ * 事实标准目录）两类条目**合并**进目标 harness 的对应配置。
+ *
+ * 映射面（事实标准可映射的才做；其余明确不做并如实标注——hooks/权限/插件登记
+ * 语义不等价，绝不半吊子映射）：
+ * - MCP：目标闭集 = INJECT_TARGETS 里带 mcp 映射的家（JSON 配置 + mcpServers 键）。
+ *   Codex 的 MCP 配置是 config.toml（TOML），JSON 合并语义不等价——明确不做。
+ * - skills：目标闭集 = 带 skills 映射的家（用户级 skills 目录惯例）。
+ *
+ * 安全纪律（THREAT-MODEL T8 · 与 handoff_absorb 同款硬线）：
+ * 1. confirm 两步强制：缺 confirm 一律拒绝，并把「将写什么」逐条列出回显；
+ * 2. 只新增不覆盖：同名 MCP server / 已存在的 skill 文件一律跳过（同内容 skip-same、
+ *    不同内容 skip-conflict），用户既有配置永不被本动作改写值；
+ * 3. 既有配置文件被修改（新增键）前，原物快照进 env-backup/restore-checkpoint-inject-*
+ *    （checkpoint-manifest.json 与 applyRestore 同款）——handoff_env action=rollback
+ *    一键回滚，零新增回滚通路；
+ * 4. 落盘全部 tmp+rename 原子替换；写后 lifecycle 记 config-injected 事件留痕；
+ * 5. 目标路径来自注册表闭集（无自由路径入参），会话存储路径段结构守门与 absorb 同款。
+ *
+ * 源条目经 readBackupEntryBlobs 从加密备份包读取（错口令 = GCM 认证失败诚实报错）；
+ * 内容密钥闸在备份时已扫（packEncrypted 对非凭据类配置 secretscan 计数），与本插件
+ * 的整包还原（applyRestore）同口径——inject 是用户自己的加密备份的恢复路径之一。
+ * @module dsh-takeover/configinject
+ */
+/** inject 依赖注入（测试用：dir=HANDOFF_HOME、home=user home、now=事件时刻） */
+interface InjectDeps {
+  dir?: string;
+  home?: string;
+  now?: Date;
+}
+/** MCP 合并目标：JSON 配置路径 + 服务器表键名（事实标准均为 mcpServers） */
+interface InjectMcpMapping {
+  path: (home: string) => string;
+  key: 'mcpServers';
+}
+/** inject 目标定义：映射缺省 = 该家该项明确不做（limits 里如实标注原因） */
+interface InjectTargetDef {
+  key: string;
+  agent: string;
+  /** MCP 合并目标；undefined = 无等价映射，明确不做 */
+  mcp?: InjectMcpMapping;
+  /** 用户级 skills 目录目标；undefined = 无公开惯例，明确不做 */
+  skills?: (home: string) => string;
+  /** 不做项的诚实标注（渲染给模型/用户看） */
+  limits: string;
+}
+/**
+ * 配置写回目标注册表（事实标准口径，路径全部可注入测试）：
+ * - claude：MCP 用户级在 ~/.claude.json 顶层 mcpServers；用户 skills 目录 ~/.claude/skills。
+ * - cursor：MCP 全局在 ~/.cursor/mcp.json；skills 无用户级目录公开惯例——不做。
+ * - gemini：MCP 在 ~/.gemini/settings.json 的 mcpServers；skills 无公开惯例——不做。
+ * - codex：MCP 是 ~/.codex/config.toml（TOML），与 { mcpServers } JSON 合并语义不等价——
+ *   不做；skills 无公开惯例——不做。
+ * - zcode：用户 skills 即 ~/.agents/skills 事实标准目录（源即目标，注入天然幂等去重）；
+ *   MCP 无与 .mcp.json 等价的公开 JSON 映射——不做。
+ * hooks / 权限 / 插件登记：语义不等价，任何一家都明确不做（T8 硬线）。
+ */
+export declare const INJECT_TARGETS: readonly InjectTargetDef[];
+/** inject 参数（工具面与核心函数共用） */
+interface InjectArgs {
+  /** 备份文件名（.dshenv）；缺省取最近一次 */
+  file?: string;
+  passphrase?: string;
+  target?: string;
+  confirm?: boolean;
+}
+/** 计划单条：kind=动作面，action=add/create=将写入、skip-same/skip-conflict=明确不写 */
+interface InjectPlanItem {
+  kind: 'mcp' | 'skill';
+  /** mcp=server 名；skill=包内相对路径 */
+  name: string;
+  action: 'add' | 'create' | 'skip-same' | 'skip-conflict';
+  /** 目标绝对路径（将写入处 / 冲突处） */
+  path: string;
+}
+interface InjectPlan {
+  ok: true;
+  target: string;
+  agent: string;
+  /** 备份文件名 */
+  file: string;
+  items: InjectPlanItem[];
+  /** MCP 目标配置路径（无映射时缺省） */
+  mcpConfigPath?: string;
+  /** skills 目标目录（无映射时缺省） */
+  skillsDir?: string;
+  /** 诚实标注（源条目存在但目标无映射等） */
+  notes: string[];
+}
+type InjectPlanResult = InjectPlan | {
+  ok: false;
+  error: string;
+};
+/**
+ * 注入预演（纯读零写盘）：目标闭集校验 → 源条目解密读取 → 逐条比对出计划。
+ * planInject 的任何失败都回 { ok: false, error }；成功返回逐条计划（add/create 才会写）。
+ */
+export declare function planInject(args: InjectArgs, deps?: InjectDeps): InjectPlanResult;
+/** 计划 → 逐条人读文本（confirm 缺省拒绝时整段回显） */
+export declare function renderInjectPlan(plan: InjectPlan): string;
+type InjectResult = {
+  ok: true;
+  action: 'inject';
+  target: string;
+  agent: string;
+  file: string;
+  /** 新增的 MCP server 名列表 */
+  mcpAdded: string[];
+  /** 跳过的 MCP server 数（同名同内容 + 同名冲突） */
+  mcpSkipped: number;
+  /** 新建的 skill 文件相对路径列表 */
+  skillsCreated: string[];
+  /** 跳过的 skill 文件数 */
+  skillsSkipped: number;
+  /** 既有配置被改写前的 checkpoint 目录名（回滚入口）；无既有文件被改时缺省 */
+  checkpointDir?: string;
+  detail: string;
+} | {
+  ok: false;
+  error: string;
+};
+/**
+ * 注入执行：先预演出计划 → confirm 闸（缺 confirm 一律拒绝并回显逐条计划，零写盘）
+ * → 既有 MCP 配置文件原物快照进 restore-checkpoint-inject-*（rollback 可回滚）
+ * → MCP 合并（tmp+rename）+ skill 文件新建（tmp+rename）→ config-injected 留痕。
+ * 只新增不覆盖：任何与目标现存内容不同的条目都跳过并在结果里如实报告。
+ */
+export declare function applyInject(args: InjectArgs, deps?: InjectDeps): InjectResult;
+//#endregion
 //#region skills/handoff.d.ts
 /** /handoff 注册项 */
 export declare function handoffSkillRegistration(): SkillRegistration;
@@ -1499,5 +1725,5 @@ export declare const name = "dsh-takeover";
 export declare const inject: string[];
 export declare function apply(ctx: Context): void;
 //#endregion
-export type { ApplyResult, BackupManifestRead, BackupResult, BackupRow, CardAxis, CardPayload, ConfigCardPayload, ConfigCardResult, DryRunResult, ForeignCandidate, ForeignEnv, ForeignListResult, ForeignListRow, ForeignPreviewResult, ForeignProvider, ForeignReadArgs, ForeignReadResult, ForeignReaders, ForeignResolve, ForeignSkeleton, ForeignSummary, ForeignTurn, HistoryItem, InboxHistoryResult, InboxItem, InboxListResult, InboxLoadResult, ManifestFileRow, MemoryPushArgs, MemoryPushResult, MemorySourceDef, MemorySourceRow, MemoryStoreDef, MemoryStoreEntry, OutboundTarget, PendingRow, ProbeResult, ProviderRow, PushArgs, PushResult, RepoBaseline, RestoreDiffRow, ResumeSkillSpec, ScopeFile, SessionControllerLike, SessionFacts, StoreEntriesRead, SyncConfig, SyncOutcome, SyncStatus, TakeoverMode, TakeoverOutcome, TakeoverState, TakeoverSwitches };
+export type { AbsorbArgs, AbsorbDeps, AbsorbEntry, AbsorbResult, AbsorbTargetDef, ApplyResult, BackupEntryBlob, BackupManifestRead, BackupResult, BackupRow, CardAxis, CardPayload, ConfigCardPayload, ConfigCardResult, DryRunResult, ForeignCandidate, ForeignEnv, ForeignListResult, ForeignListRow, ForeignPreviewResult, ForeignProvider, ForeignReadArgs, ForeignReadResult, ForeignReaders, ForeignResolve, ForeignSkeleton, ForeignSummary, ForeignTurn, HistoryItem, InboxHistoryResult, InboxItem, InboxListResult, InboxLoadResult, InjectArgs, InjectDeps, InjectPlan, InjectPlanItem, InjectPlanResult, InjectResult, InjectTargetDef, ManifestFileRow, MemoryPushArgs, MemoryPushResult, MemorySourceDef, MemorySourceRow, MemoryStoreDef, MemoryStoreEntry, OutboundTarget, PendingRow, ProbeResult, ProviderRow, PushArgs, PushResult, RepoBaseline, RestoreDiffRow, ResumeSkillSpec, ScopeFile, SessionControllerLike, SessionFacts, StoreEntriesRead, SyncConfig, SyncOutcome, SyncStatus, TakeoverMode, TakeoverOutcome, TakeoverState, TakeoverSwitches };
 //# sourceMappingURL=index.d.ts.map

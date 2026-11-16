@@ -283,7 +283,7 @@ export function memorySections(
     goal,
     files: `随卡记忆文件 ${picks.length} 份（全文在「建议加载」段）：\n${list}`,
     done: `（资料卡：无可蒸馏的完成项。全部记忆正文见「建议加载」段，共约 ${kb(total)}，全部 HISTORY_REPORTED。）`,
-    remaining: '取件方：把与本工作区相关的条目吸收进自己的记忆文件（CLAUDE.md / AGENTS.md / 记忆库），吸收后按己方惯例归档本卡。',
+    remaining: '取件方：把与本工作区相关的条目吸收进自己的记忆文件（CLAUDE.md / AGENTS.md / 记忆库）——本机装了 dsh-takeover 可用 handoff_absorb({ id, target, confirm: true }) 两步确认落盘（按条目 sha 去重、写前快照可回滚），否则手动吸收；吸收后按己方惯例归档本卡。',
     stopped: `停在记忆快照时刻（${meta.at}）。最安全的第一步：只吸收与当前工作相关的条目，过期约定不盲信。`,
     warnings: [
       '记忆内容全部按 HISTORY_REPORTED 处理：是快照，不是当下事实；可能含过期约定、废弃路径或已被推翻的决定。',

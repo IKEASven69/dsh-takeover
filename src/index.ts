@@ -1,7 +1,8 @@
 /**
  * dsh-takeover host 半：会话接管插件（拉取 + 寄存 + 取件）。
- * 注册面 = 工具 handoff_push / handoff_inbox / foreign_session_read
- *        + slash /handoff /inbox + /resume-*×8。
+ * 注册面 = 工具 handoff_push / handoff_inbox / handoff_memory / handoff_absorb /
+ *          handoff_sync / handoff_env / foreign_session_read
+ *        + slash /handoff /inbox + /resume-*×23。
  * 权限范围：写 ~/.handoff（可由 HANDOFF_HOME 覆盖）、读 git 状态、只读二十三家本地会话库。
  * @module dsh-takeover
  */
@@ -12,6 +13,7 @@ import type {} from '@deepseek-ai/dsh-skill'
 import { registerEnvBackupTool, registerInboxTool, registerPushTool, registerSyncTool } from './tools.ts'
 import { registerForeignTool } from './foreign.ts'
 import { registerMemoryTool } from './memory.ts'
+import { registerAbsorbTool } from './absorb.ts'
 import { registerTakeoverRoutes } from './server.ts'
 import { isProviderEnabled } from './settings.ts'
 import { createBackup, dryRunRestore, applyRestore, rollbackRestore, listBackups } from './envbackup.ts'
@@ -26,11 +28,13 @@ export function apply(ctx: Context): void {
   // 设置卡停用闸：每次调用现读 config.json（开关改动即刻生效，无需重启）
   registerForeignTool(ctx, { isEnabled: (p) => isProviderEnabled(p) })
   registerMemoryTool(ctx)
+  // 记忆写回（T8 显式授权动作）：confirm 两步 + 去重 + 快照可回滚，外部会话存储永不写
+  registerAbsorbTool(ctx)
   registerSyncTool(ctx)
   registerEnvBackupTool(ctx)
   registerTakeoverRoutes(ctx)
   for (const reg of skillRegistrations()) ctx.skills.register(reg)
-  ctx.logger.info('dsh-takeover: 会话接管已加载（工具 handoff_push / handoff_inbox / handoff_memory / handoff_sync / handoff_env / foreign_session_read + slash /handoff /inbox /resume-*×8 + 设置卡 API /dsh-takeover/*）')
+  ctx.logger.info('dsh-takeover: 会话接管已加载（工具 handoff_push / handoff_inbox / handoff_memory / handoff_absorb / handoff_sync / handoff_env / foreign_session_read + slash /handoff /inbox /resume-*×8 + 设置卡 API /dsh-takeover/*）')
 }
 
 export { pushHandoff, inboxList, inboxLoad, inboxHistory, pushConfigCard, factsToSections, handoffHostNotice, baselineFromExtras, axisFromExtras, renderBaselineGuidance, inheritParentRemaining, HISTORY_TAIL_MAX, HISTORY_STOPPED_MAX, RELAY_REMAINING_MAX_BYTES } from './tools.ts'
@@ -84,6 +88,12 @@ export { registerTakeoverRoutes, admitTakeover, sessionControllerOf } from './se
 export type { SessionControllerLike, TakeoverMode, TakeoverOutcome } from './server.ts'
 export { scanMemorySources, pushMemoryCard, registerMemoryTool, renderMemory, MEMORY_SOURCES, MEMORY_STORES, readStoreEntries } from './memory.ts'
 export type { MemorySourceDef, MemorySourceRow, MemoryStoreDef, MemoryStoreEntry, StoreEntriesRead, MemoryPushArgs, MemoryPushResult } from './memory.ts'
+export { absorbCard, registerAbsorbTool, renderAbsorb, parseSuggestedEntries, ABSORB_TARGETS, ABSORB_TOTAL_MAX } from './absorb.ts'
+export type { AbsorbArgs, AbsorbDeps, AbsorbResult, AbsorbEntry, AbsorbTargetDef } from './absorb.ts'
+export { planInject, applyInject, renderInjectPlan, INJECT_TARGETS } from './configinject.ts'
+export type { InjectArgs, InjectDeps, InjectTargetDef, InjectPlan, InjectPlanItem, InjectPlanResult, InjectResult } from './configinject.ts'
+export { readBackupEntryBlobs } from './envbackup.ts'
+export type { BackupEntryBlob } from './envbackup.ts'
 export { outboundCommand, pickupCommand, humanChars, OUTBOUND_TARGETS, OUTBOUND_LABELS } from './browser-view.ts'
 export type { OutboundTarget } from './browser-view.ts'
 export {

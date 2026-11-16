@@ -125,7 +125,45 @@ Host 回环校验 + 同源（Origin/Sec-Fetch-Site）读写守卫；插件进程
 拉取的远端内容经卡闸与签名校验，但环境备份包只认口令；两台机器各自先 push 过会各生
 一把签名密钥，汇合后败者签的卡对端呈 `no-key`（先开同步再在第二台机器干活）。
 
+### T8 写回面（写回最小闭环新增）
+
+**向量**：①写回内容来自卡/备份（外来数据），吸收动作把外部文本**持久化**进记忆文件/配置——
+此后目标 harness 每次启动都加载它，比单次取件的注入面更持久；②未经确认的自动写回覆盖
+用户既有记忆与配置；③写回通路被放大成对外部 harness **会话存储**的写入（外部会话库一旦
+被写坏，用户丢失的是原生会话历史——此类事故的严重度远高于写坏一张卡）。
+
+**防线**：写回 = 显式授权动作，全插件只允许两个，目标都是**闭集注册表**（无自由路径入参）：
+
+- `handoff_absorb`（记忆写回）：已取件（archived/）的 memory 轴卡「建议加载」段 → 目标
+  记忆文件。confirm 两步强制（先 `handoff_inbox load` 看卡、再 absorb 落盘；缺 confirm
+  一律拒绝并把「将写什么」逐条回显）；追加前按条目 sha256 去重（已有内容不重写，重复
+  absorb 幂等 = 0 追加）；写前把目标原物快照进 `archived/absorb-backup/<id>-<target>.md`
+  （同名快照不被覆盖，回滚 = 用快照覆盖目标）；tmp+rename 原子替换；写后记
+  `absorbed-write` 生命周期事件。目标闭集 = MEMORY_SOURCES 的八条文件型记忆路径；
+  hippo-db（zvec 引擎目录）明确拒收并回退指引 `hippo import`。
+- `handoff_env action=inject`（配置写回）：备份包内的 `.mcp.json`（MCP servers）与
+  `.agents/skills/**` 条目合并进目标 harness 对应配置。confirm 两步强制、逐条列出将写入
+  什么；**只新增不覆盖**（同名 MCP server / 已存在 skill 文件一律跳过：同内容 skip-same、
+  不同内容 skip-conflict，如实报告）；既有配置被改前原物快照进
+  `env-backup/restore-checkpoint-inject-*`（与 applyRestore 同款 checkpoint 布局，
+  `action=rollback` 一键回滚，零新增回滚通路）；tmp+rename；写后记 `config-injected` 事件。
+  映射闭集 = INJECT_TARGETS（事实标准 JSON 配置 + skills 目录惯例）；hooks / 权限 /
+  插件登记语义不等价，明确不做（codex 的 TOML、无映射家均如实拒绝/标注，不半吊子写）。
+
+**会话存储零写入（硬线）**：两套写回实现与目标注册表都不含任何会话/存储路径；注册表
+解析路径另有会话存储段结构守门（projects/sessions/storages 等段命中即拒）。负向断言随
+CI（`tests/writeback.spec.ts`）：会话文件全树指纹逐字节不变、confirm 缺省拒零写盘、
+去重不重写、快照可回滚、多目标各留各的账。
+
+**残余风险（诚实边界）**：absorb 把外来文本写进记忆文件 = 持久化提示注入面——两步确认
+只保证「看过了卡」，不甄别卡内容是否有注入；sha 去重只防重复重写，不做内容审查。缓解
+依赖既有纪律：卡面全部 HISTORY_REPORTED、confirm 前逐条判断、快照可回滚。inject 的
+源内容是用户自己的加密备份（备份时已过 secretscan 计数），与整包还原（applyRestore）
+同口径。
+
 ## 红队套件与 CI
 
 `tests/redteam.spec.ts` 随 `npm test` 进 CI（GitHub Actions）：8 组攻击向量全部为合成
-载荷，任何一组红即构建失败——防线退化在合并前现形，不等真实事故。
+载荷，任何一组红即构建失败——防线退化在合并前现形，不等真实事故。写回面的负向断言
+（T8：confirm 缺省拒、会话存储零写入全树对账、去重幂等、快照回滚）同样随 CI，见
+`tests/writeback.spec.ts`。

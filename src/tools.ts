@@ -18,6 +18,7 @@ import { recordLifecycleEvent } from './lifecycle.ts'
 import { loadOrCreateSigningKey, signEnvelope, verifyEnvelopeSig, type SigVerdict } from './signing.ts'
 import { syncNow, syncPull, syncPush, syncSetup, syncStatusLine, syncStatusOf, type SyncOutcome, type SyncStatus } from './sync.ts'
 import { applyRestore, createBackup, dryRunRestore, listBackups, readBackupManifest, rollbackRestore, type BackupRow, type RestoreDiffRow } from './envbackup.ts'
+import { applyInject } from './configinject.ts'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -534,9 +535,10 @@ export function renderInbox(_args: unknown, value: unknown): Array<{ type: 'text
   }
   // load
   const lines = ['📥 已取件（消费即弃，卡片已归档）：', '', v.text ?? '']
-  // 吸收回执提示：memory 轴卡取件即注入完成，按建议加载段吸收（生命周期已记 memory-absorbed）
+  // 吸收回执提示：memory 轴卡取件即注入完成，按建议加载段吸收（生命周期已记 memory-absorbed）；
+  // 落盘通路指向 handoff_absorb（写回闭环：confirm 两步 + 去重 + 快照可回滚）
   if (v.axis === 'memory') {
-    lines.push('🧠 记忆已随卡注入，按建议加载段吸收')
+    lines.push('🧠 记忆已随卡注入，按建议加载段吸收；要写进本机记忆文件用 handoff_absorb({ id, target, confirm: true })（目标从记忆文件注册表选，两步确认后落盘）')
   }
   const patchPath = typeof v.patchPath === 'string' ? v.patchPath : undefined
   if (patchPath !== undefined) {
@@ -1613,12 +1615,13 @@ export function pushConfigCard(
 export function registerEnvBackupTool(ctx: Context): void {
   ctx.tools.register(defineTool({
     name: 'handoff_env',
-    description: '环境备份/恢复：把 DSH 全家桶（settings/插件登记/会话库/用户 skills/工作区登记）打包成单个 AES-256-GCM 加密文件（口令 scrypt 派生，口令不落盘），随换机同步跨机；新机器 dry 预演（新建/覆盖/相同三态 diff）→ confirm 还原 → 可 rollback 回滚到还原前。凭据类文件（credentials/typesafe-key 等）只存在于加密包内。action=card 配置轴出卡：把最近一次备份的清单（files[{path,sha256,category}] + backupFile + bytes）写成 axis=\'config\' 载荷卡寄存进共享收件箱（writeCard + 信封签名全套纪律；密文 blob 仍在 env-backup/，卡只带清单+指针，口令永不进卡）。返回 { ok, ... } 规范值。',
+    description: '环境备份/恢复：把 DSH 全家桶（settings/插件登记/会话库/用户 skills/工作区登记）打包成单个 AES-256-GCM 加密文件（口令 scrypt 派生，口令不落盘），随换机同步跨机；新机器 dry 预演（新建/覆盖/相同三态 diff）→ confirm 还原 → 可 rollback 回滚到还原前。凭据类文件（credentials/typesafe-key 等）只存在于加密包内。action=card 配置轴出卡：把最近一次备份的清单（files[{path,sha256,category}] + backupFile + bytes）写成 axis=\'config\' 载荷卡寄存进共享收件箱（writeCard + 信封签名全套纪律；密文 blob 仍在 env-backup/，卡只带清单+指针，口令永不进卡）。action=inject 配置写回（显式授权动作）：把备份包内的 .mcp.json（MCP servers）与 .agents/skills/** 条目合并进目标 harness 的对应配置（target 闭集 = claude/cursor/gemini/codex/zcode；只新增不覆盖，被改的既有配置先 checkpoint 可回滚；confirm 两步强制，缺省拒绝并逐条回显将写入什么；hooks/权限/插件登记语义不等价明确不做）。返回 { ok, ... } 规范值。',
     parameters: {
-      action: { type: 'string', required: true, enum: ['backup', 'dry', 'apply', 'rollback', 'list', 'card'], description: 'backup 打包加密备份（passphrase 必填 ≥8 位）；dry 还原预演（file+passphrase）；apply 确认还原（file+passphrase+confirm:true）；rollback 回滚 checkpoint（file=checkpoint 目录名）；list 列备份；card 备份清单出配置轴卡（passphrase 必填；file 缺省取最近一次）' },
-      passphrase: { type: 'string', description: 'backup/dry/apply/card 必填：加密口令（≥8 位，永不落盘；注意会进本会话转录——敏感场景用面板输入）' },
-      file: { type: 'string', description: 'dry/apply/card：备份文件名（card 缺省取最近一次）；rollback：checkpoint 目录名（restore-checkpoint-*）' },
-      confirm: { type: 'boolean', description: 'apply 必须显式 true（覆盖性动作的两步确认）' },
+      action: { type: 'string', required: true, enum: ['backup', 'dry', 'apply', 'rollback', 'list', 'card', 'inject'], description: 'backup 打包加密备份（passphrase 必填 ≥8 位）；dry 还原预演（file+passphrase）；apply 确认还原（file+passphrase+confirm:true）；rollback 回滚 checkpoint（file=checkpoint 目录名）；list 列备份；card 备份清单出配置轴卡（passphrase 必填；file 缺省取最近一次）；inject 备份条目写回目标 harness 配置（file+passphrase+target+confirm:true）' },
+      passphrase: { type: 'string', description: 'backup/dry/apply/card/inject 必填：加密口令（≥8 位，永不落盘；注意会进本会话转录——敏感场景用面板输入）' },
+      file: { type: 'string', description: 'dry/apply/card/inject：备份文件名（缺省取最近一次）；rollback：checkpoint 目录名（restore-checkpoint-*）' },
+      confirm: { type: 'boolean', description: 'apply / inject 必须显式 true（覆盖性动作的两步确认）' },
+      target: { type: 'string', description: 'inject 必填：写回目标 harness（claude / cursor / gemini / codex / zcode；无等价映射的项如实跳过）' },
     },
     output: {
       schema: {
@@ -1638,12 +1641,17 @@ export function registerEnvBackupTool(ctx: Context): void {
           applied: { type: 'number', description: 'apply：实际落盘文件数' },
           checkpointDir: { type: 'string', description: 'apply：checkpoint 目录（回滚入口）' },
           backups: { type: 'json', description: 'list：备份清单' },
+          target: { type: 'string', description: 'inject：写回目标 harness 键' },
+          mcpAdded: { type: 'json', description: 'inject：新增的 MCP server 名列表' },
+          mcpSkipped: { type: 'number', description: 'inject：跳过的 MCP server 数（同内容/冲突，只新增不覆盖）' },
+          skillsCreated: { type: 'json', description: 'inject：新建的 skill 文件相对路径列表' },
+          skillsSkipped: { type: 'number', description: 'inject：跳过的 skill 文件数' },
           error: { type: 'string', description: '失败原因' },
         },
       },
       render: renderEnv,
     },
-    async execute(args: { action?: string; passphrase?: string; file?: string; confirm?: boolean }): Promise<EnvToolValue> {
+    async execute(args: { action?: string; passphrase?: string; file?: string; confirm?: boolean; target?: string }): Promise<EnvToolValue> {
       const action = args.action ?? 'list'
       try {
         if (action === 'backup') {
@@ -1669,7 +1677,24 @@ export function registerEnvBackupTool(ctx: Context): void {
           if (!r.ok) return { ok: false, action, error: r.error }
           return { ok: true, action, id: r.id, path: r.path, file: r.file, detail: `配置轴载荷卡已寄存：${r.id}（清单 ${r.files} 个文件 + 密文包指针 ${r.file}，${Math.max(1, Math.round(r.bytes / 1024))} KB——密文 blob 仍在 env-backup/，口令未进卡）${r.note !== undefined ? `；${r.note}` : ''}` }
         }
-        return { ok: false, action, error: `未知 action：${action}（支持 backup / dry / apply / rollback / list / card）` }
+        if (action === 'inject') {
+          // 配置写回（T8 显式授权动作）：confirm 两步在 applyInject 内强制——缺省拒绝并逐条回显计划
+          const r = applyInject({ file: args.file, passphrase: args.passphrase, target: args.target, confirm: args.confirm })
+          if (!r.ok) return { ok: false, action, error: r.error }
+          return {
+            ok: true,
+            action,
+            file: r.file,
+            target: r.target,
+            mcpAdded: r.mcpAdded,
+            mcpSkipped: r.mcpSkipped,
+            skillsCreated: r.skillsCreated,
+            skillsSkipped: r.skillsSkipped,
+            checkpointDir: r.checkpointDir,
+            detail: r.detail,
+          }
+        }
+        return { ok: false, action, error: `未知 action：${action}（支持 backup / dry / apply / rollback / list / card / inject）` }
       } catch (e) {
         return { ok: false, action, error: e instanceof Error ? e.message : String(e) }
       }
@@ -1691,6 +1716,11 @@ type EnvToolValue = {
   checkpointDir?: string
   diff?: RestoreDiffRow[]
   backups?: BackupRow[]
+  target?: string
+  mcpAdded?: string[]
+  mcpSkipped?: number
+  skillsCreated?: string[]
+  skillsSkipped?: number
   error?: string
 }
 

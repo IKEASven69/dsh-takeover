@@ -4,7 +4,7 @@
 
 **把任何 agent 干到一半的活接过来继续干——二十三家 CLI 会话只读拉取、一键寄存、开局取件，会话和记忆都能交接。**
 
-[![npm](https://img.shields.io/npm/v/@cold777/dsh-takeover)](https://www.npmjs.com/package/@cold777/dsh-takeover) ![tests](https://img.shields.io/badge/tests-327%20passing-brightgreen) ![DSH](https://img.shields.io/badge/DSH-%3E%3D0.2.0--rc.2-orange) ![Node](https://img.shields.io/badge/node-%3E%3D22-green) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
+[![npm](https://img.shields.io/npm/v/@cold777/dsh-takeover)](https://www.npmjs.com/package/@cold777/dsh-takeover) ![tests](https://img.shields.io/badge/tests-459%20passing-brightgreen) ![DSH](https://img.shields.io/badge/DSH-%3E%3D0.2.0--rc.2-orange) ![Node](https://img.shields.io/badge/node-%3E%3D22-green) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
 
 - **接过来**：Claude Code 里干到一半的任务，`/resume-claude` 一条命令——六段交接卡注入当前会话，模型直接接着干；
 - **交出去**：会话太长想换环境？`/handoff` 把当前会话寄存成一张卡，任何 agent 开局取件继续；
@@ -50,7 +50,7 @@ dsh plugin --profile web add github:IKEASven69/dsh-takeover
 
 **信任长在文件里。** 首次寄存自动生成总线密钥，卡片带机器签名；取件侧三态裁决 `ok / tampered / no-key`，篡改可检出、跨信任域不误报。
 
-**只读承诺。** 不写任何外部 agent 的会话库，不访问网络，不回放历史工具调用；原文不进卡片，卡里只有指针。
+**读取零写入；写回仅记忆/配置且两步确认、原物可回滚。** 拉取与取件对外部 agent 的会话库零写入、不回放历史工具调用，原文不进卡片、卡里只有指针。写回只有两个显式动作：`handoff_absorb`（已取件的记忆卡落进目标记忆文件——confirm 两步、按条目去重、写前快照）与 `handoff_env inject`（备份包内 MCP/skills 合并进目标配置——confirm 两步、只新增不覆盖、checkpoint 可回滚）；外部会话存储永不写（威胁模型 T8 硬线），hooks/权限/插件登记语义不等价、明确不做。
 
 ## 一即是全 · 四轴一根链
 
@@ -73,8 +73,9 @@ dsh plugin --profile web add github:IKEASven69/dsh-takeover
 | `handoff_push` | 当前会话寄存为协议卡。六段文本可选传入，留空段从会话事件流确定性兜底（不调 LLM）；未提交改动自动附补丁；返回 `{ ok, id, path, coverage, patch? }` |
 | `handoff_inbox` | `action=list` 列待取件；`action=load` 取件（消费即弃，附签名与 git 核验的 MISMATCH / UNAVAILABLE 警告） |
 | `handoff_sync` | 换机同步：`action=setup` 启用（git 仓库地址，凭据走系统 git 不入插件）；`action=now` 拉推一步到位；`push`/`pull`/`status` 单向与只读。已消费的卡经 archived tombstone 不在另一台机器重放 |
-| `handoff_env` | 环境备份/恢复：全家桶（设置/插件登记/会话库/用户 skills/工作区登记）打包成单个 AES-256-GCM 加密文件随同步跨机；`dry` 预演三态 diff → `apply`（confirm 确认，被覆盖原物自动 checkpoint）→ `rollback` 可逆 |
+| `handoff_env` | 环境备份/恢复：全家桶（设置/插件登记/会话库/用户 skills/工作区登记/.mcp.json）打包成单个 AES-256-GCM 加密文件随同步跨机；`dry` 预演三态 diff → `apply`（confirm 确认，被覆盖原物自动 checkpoint）→ `rollback` 可逆；`inject` 配置写回（显式授权动作）：备份包内 .mcp.json（MCP servers）与 .agents/skills 条目合并进目标 harness 配置（confirm 两步逐条确认、只新增不覆盖、checkpoint 可回滚；hooks/权限/插件登记语义不等价明确不做） |
 | `handoff_memory` | 记忆快照。`action=scan` 只读列各 agent 记忆文件（含大小/预览）；`action=push` 勾选打包成卡寄存，取件方按「建议加载」吸收 |
+| `handoff_absorb` | 记忆写回（显式授权动作）：把已取件的 memory 轴记忆卡条目写进目标 harness 的记忆文件（CLAUDE.md / AGENTS.md / .cursorrules 族闭集）。confirm 两步强制（先 load 看卡再落盘，缺省拒绝并回显计划）、追加前按条目 sha 去重（已有内容不重写）、写前原物快照进 archived/absorb-backup/ 可回滚；外部会话存储永不写 |
 
 **slash 命令（用户敲，agent 按指引执行）**
 
@@ -122,7 +123,7 @@ AI 编码的「延续上下文」需求由三层各管一段：spec 工具（spe
 
 ## 权限范围
 
-写 `~/.handoff/`（`HANDOFF_HOME` 可覆盖）、读 git 状态、只读二十三家 agent 的本地会话库（zcode 与 cursor 走 sqlite readonly，随开随关；`HANDOFF_ROOT_<家>` 可覆盖各家根路径）与 `~/.handoff/exports/<provider>/` 下用户自行放入的导出会话文件（见[跨机器 / 云端](#跨机器--云端)）。cursor 只导入支持的 transcript / store 记录，grok 只读可见 updates.jsonl 流（永不读 chat_history.jsonl 原始模型上下文），gemini 只读本地 chats/ 会话文件；0.3.0 扩容的 jsonl 族四家：kimi 只读 wire.jsonl 事件流（state.json / session_index 只取元数据），codebuddy / qoder 只读主会话 JSONL（子代理 transcript 不读），kiro 只读 sessions/cli 的 <uuid>.jsonl（伴生 .json / .history 不读）；0.25 扩容的 sqlite/文件族六家：copilot / devin / mimo 只读各家的明文 SQLite（node:sqlite readonly 随开随关，列名探测自适应、探测不中如实报降级；mimo 的应用目录名未完全核实，候选扫描全不命中时该家不可用并如实标注），aider 只读项目根的 .aider.chat.history.md / .aider.input.history（半结构化 markdown，解析尽力而为并以 note 标注），cline 只读 VS Code 变体 globalStorage 的 api_conversation_history.json（ui_messages.json 不读），continue 只读 ~/.continue/sessions 的索引与会话文件；适配器收尾四家：qwen 只读 ~/.qwen 的双布局会话记录（tmp/ 的 Gemini 族与 projects/ 的 ChatRecord，QWEN.md 记忆文件不在会话轴），antigravity 只读 brain 目录的 transcript.jsonl（conversation_summaries.db 只作工作目录索引），openclaw 只读各 agent 的 openclaw-agent.sqlite 与旧版 sessions/ JSONL（zstd 压缩事件行在缺 zstd 支持的 Node 上跳过并如实降级），goose 的数据目录按上游源码推导的候选路径探测（全不命中时该家不可用并诚实标注「未实机核实，待社区确认」，HANDOFF_ROOT_GOOSE 可直指）。0.2.0 起两个显式例外：①`handoff_sync` 经系统 git 与**你显式配置**的仓库通信（插件进程内不构造网络连接，零存储凭据）；②`handoff_env` 备份/恢复读写全家桶配置路径——恢复必须先 dry 预演再 confirm 落盘，被覆盖原物自动 checkpoint 可回滚，凭据类文件只存在于加密包内（详见 THREAT-MODEL T6/T7）。不复活外部进程，不回放历史工具调用，原文不进卡片。
+写 `~/.handoff/`（`HANDOFF_HOME` 可覆盖）、读 git 状态、只读二十三家 agent 的本地会话库（zcode 与 cursor 走 sqlite readonly，随开随关；`HANDOFF_ROOT_<家>` 可覆盖各家根路径）与 `~/.handoff/exports/<provider>/` 下用户自行放入的导出会话文件（见[跨机器 / 云端](#跨机器--云端)）。cursor 只导入支持的 transcript / store 记录，grok 只读可见 updates.jsonl 流（永不读 chat_history.jsonl 原始模型上下文），gemini 只读本地 chats/ 会话文件；0.3.0 扩容的 jsonl 族四家：kimi 只读 wire.jsonl 事件流（state.json / session_index 只取元数据），codebuddy / qoder 只读主会话 JSONL（子代理 transcript 不读），kiro 只读 sessions/cli 的 <uuid>.jsonl（伴生 .json / .history 不读）；0.25 扩容的 sqlite/文件族六家：copilot / devin / mimo 只读各家的明文 SQLite（node:sqlite readonly 随开随关，列名探测自适应、探测不中如实报降级；mimo 的应用目录名未完全核实，候选扫描全不命中时该家不可用并如实标注），aider 只读项目根的 .aider.chat.history.md / .aider.input.history（半结构化 markdown，解析尽力而为并以 note 标注），cline 只读 VS Code 变体 globalStorage 的 api_conversation_history.json（ui_messages.json 不读），continue 只读 ~/.continue/sessions 的索引与会话文件；适配器收尾四家：qwen 只读 ~/.qwen 的双布局会话记录（tmp/ 的 Gemini 族与 projects/ 的 ChatRecord，QWEN.md 记忆文件不在会话轴），antigravity 只读 brain 目录的 transcript.jsonl（conversation_summaries.db 只作工作目录索引），openclaw 只读各 agent 的 openclaw-agent.sqlite 与旧版 sessions/ JSONL（zstd 压缩事件行在缺 zstd 支持的 Node 上跳过并如实降级），goose 的数据目录按上游源码推导的候选路径探测（全不命中时该家不可用并诚实标注「未实机核实，待社区确认」，HANDOFF_ROOT_GOOSE 可直指）。0.2.0 起两个显式例外：①`handoff_sync` 经系统 git 与**你显式配置**的仓库通信（插件进程内不构造网络连接，零存储凭据）；②`handoff_env` 备份/恢复读写全家桶配置路径——恢复必须先 dry 预演再 confirm 落盘，被覆盖原物自动 checkpoint 可回滚，凭据类文件只存在于加密包内（详见 THREAT-MODEL T6/T7）。0.2.x 起写回最小闭环是第三个显式例外（详见 THREAT-MODEL T8）：`handoff_absorb` 与 `handoff_env inject` 两个**显式授权动作**可写回记忆/配置——confirm 两步确认、写前原物快照可回滚、目标闭集注册表无自由路径入参，**外部 harness 的会话存储永不写**。不复活外部进程，不回放历史工具调用，原文不进卡片。
 
 ## 开发
 

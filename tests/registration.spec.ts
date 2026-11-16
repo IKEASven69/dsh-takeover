@@ -43,13 +43,27 @@ test('registerInboxTool：注册 handoff_inbox 且 action 枚举齐全', async (
   assert.deepEqual(def.parameters.properties.action?.enum, ['list', 'load', 'history'])
 })
 
-test('registerEnvBackupTool：注册 handoff_env 且 action 枚举含 card（配置轴转正）', async () => {
+test('registerEnvBackupTool：注册 handoff_env 且 action 枚举含 card 与 inject（配置轴转正 + 写回闭环）', async () => {
   const { registerEnvBackupTool } = await import('../src/tools.ts')
   const { ctx, registered } = fakeToolsCtx()
   registerEnvBackupTool(ctx)
   assert.equal(registered[0]?.name, 'handoff_env')
   const def = registered[0]?.def as { parameters: { properties: Record<string, { enum?: string[] }> } }
-  assert.deepEqual(def.parameters.properties.action?.enum, ['backup', 'dry', 'apply', 'rollback', 'list', 'card'])
+  // 卡链检索（history）与配置写回（inject）为后续功能扩展：枚举追加，断言形式不变（deepEqual 精确闭集）
+  assert.deepEqual(def.parameters.properties.action?.enum, ['backup', 'dry', 'apply', 'rollback', 'list', 'card', 'inject'])
+})
+
+test('registerAbsorbTool：注册 handoff_absorb 且参数含 id/target/confirm（写回面 confirm 两步）', async () => {
+  const { registerAbsorbTool } = await import('../src/absorb.ts')
+  const { ctx, registered } = fakeToolsCtx()
+  registerAbsorbTool(ctx)
+  assert.equal(registered[0]?.name, 'handoff_absorb')
+  const def = registered[0]?.def as { parameters: { properties: Record<string, unknown>; required?: string[] } }
+  for (const key of ['id', 'target', 'confirm', 'cwd']) {
+    assert.ok(key in def.parameters.properties, `参数缺 ${key}`)
+  }
+  // defineTool 把 required 归一为 schema 级数组：id/target 必填、confirm 可选
+  assert.deepEqual(def.parameters.required?.sort(), ['id', 'target'])
 })
 
 test('registerForeignTool：注册 foreign_session_read，二十三家 provider 枚举齐全', async () => {
@@ -260,7 +274,7 @@ test('宿主 apply（src/index）：工具/技能/路由全注册，logger 收�
       }),
     }
     mod.apply(ctx as never)
-    assert.deepEqual(toolNames.sort(), ['foreign_session_read', 'handoff_env', 'handoff_inbox', 'handoff_memory', 'handoff_push', 'handoff_sync'])
+    assert.deepEqual(toolNames.sort(), ['foreign_session_read', 'handoff_absorb', 'handoff_env', 'handoff_inbox', 'handoff_memory', 'handoff_push', 'handoff_sync'])
     assert.ok(skillNames.length >= 10, `skill 数不足: ${skillNames.length}`)
     assert.ok(routes.includes('/dsh-takeover'))
     assert.ok(logs[0]?.includes('会话接管已加载'))

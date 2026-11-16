@@ -63,6 +63,8 @@ export const SCOPE: readonly ScopeRule[] = [
   // 用户全局 skills（宿主内置/缓存 skills 不在 ~/.agents，天然不进来）
   { category: 'agents-skills', pattern: '.agents/skills/**' },
   { category: 'agents-skills', pattern: '.agents/.skill-lock.json' },
+  // MCP servers 事实标准配置（{ mcpServers: … } 形态）——配置写回（action=inject）的源条目
+  { category: 'mcp-config', pattern: '.mcp.json' },
   // ZCode 宿主用户层（db/缓存/工件全排除；凭据类只进加密包）
   { category: 'zcode-core', pattern: '.zcode/AGENTS.md' },
   { category: 'zcode-core', pattern: '.zcode/cli/AGENTS.md' },
@@ -332,6 +334,33 @@ export function readBackupManifest(file: string, passphrase: string, dir?: strin
     secretHits: m.secretHits,
     files: m.files.map((f) => ({ ...f })),
   }
+}
+
+/** 备份包内单条目的原文（配置写回 inject 的读取形态；不落盘，纯读） */
+export interface BackupEntryBlob {
+  /** 包内相对 user home 的路径（正斜杠） */
+  path: string
+  category: string
+  content: Buffer
+}
+
+/**
+ * 读备份包内若干条目的原文：口令解密容器后按谓词挑条目取 blob（**只读**——
+ * 与 readBackupManifest 同口径，错口令 = GCM 认证失败诚实报错，不吐半个字节）。
+ * handoff_env action=inject 用它取 `.mcp.json` 与 `.agents/skills/**` 两类源条目；
+ * 谓词缺省 = 全部条目（调用方自己过滤也行）。
+ */
+export function readBackupEntryBlobs(file: string, passphrase: string, dir?: string, pred?: (rel: string) => boolean): BackupEntryBlob[] {
+  const name = basenameSafe(file)
+  if (!name.endsWith('.dshenv')) throw new Error('备份文件名不合法（须为 .dshenv）')
+  const m = unpackEncrypted(readFileSync(join(envBackupDir(dir), name)), passphrase)
+  const out: BackupEntryBlob[] = []
+  for (let i = 0; i < m.files.length; i++) {
+    const f = m.files[i]!
+    if (pred !== undefined && !pred(f.path)) continue
+    out.push({ path: f.path, category: f.category, content: Buffer.from(blobAt(m, i)) })
+  }
+  return out
 }
 
 export interface BackupResult {

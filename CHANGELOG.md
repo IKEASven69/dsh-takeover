@@ -1,5 +1,16 @@
 # Changelog — dsh-takeover
 
+## [未发布]
+
+写回最小闭环：产品第一次从只读转向受控写回。硬线不动摇——**外部 harness 的会话存储永不写**，写回仅限记忆/配置，且全部是显式授权动作（confirm 两步）、写前原物快照可回滚。THREAT-MODEL 新增 T8（写回面）。
+
+- **记忆写回 `handoff_absorb`**：把已取件（archived/）的 memory 轴记忆卡「建议加载」段条目写进目标 harness 的记忆文件。目标闭集 = MEMORY_SOURCES 的八条文件型记忆路径（AGENTS.md 族事实标准优先；hippo-db 是 zvec 引擎目录，明确拒收并回退指引 `hippo import`）。confirm 两步强制（先 `handoff_inbox load` 看卡、再 absorb 落盘，缺 confirm 一律拒绝并逐条回显计划）；追加前按条目 sha256 去重（已有内容不重写，重复 absorb 幂等 = 0 追加）；写前把目标原物快照进 `archived/absorb-backup/<id>-<target>.md`（同名快照不被覆盖）；tmp+rename 原子替换；写后记 `absorbed-write` 生命周期事件。
+- **配置写回 `handoff_env action=inject`**（最小面：MCP servers 与 skills 两样，事实标准可映射）：把备份包内的 `.mcp.json`（`{ mcpServers }` 形态）与 `.agents/skills/**` 条目合并进目标 harness 对应配置。映射闭集 `INJECT_TARGETS`：claude（`~/.claude.json` 的 mcpServers + `~/.claude/skills`）、cursor（`~/.cursor/mcp.json`）、gemini（`~/.gemini/settings.json`）、zcode（skills 即 `~/.agents/skills` 事实标准目录）；codex 的 config.toml（TOML）语义不等价——明确不做。confirm 两步强制、逐条列出将写入什么；**只新增不覆盖**（同名 MCP server / 已存在 skill 文件一律跳过，同内容/冲突分开如实报告）；既有配置被改前原物快照进 `env-backup/restore-checkpoint-inject-*`（与 applyRestore 同款 checkpoint 布局，`action=rollback` 直接可回滚）；写后记 `config-injected` 事件。hooks / 权限 / 插件登记语义不等价，明确不做并如实标注。
+- **备份范围补 `.mcp.json`**（category `mcp-config`）：备份清单从此携带用户级 MCP servers 事实标准配置（inject 的源条目）；新增 `readBackupEntryBlobs`（口令解密按谓词取包内条目原文，纯读不落盘）。
+- **生命周期闭集新增**：`absorbed-write`（记忆写回正向回执）与 `config-injected`（配置写回正向回执）——写回动作全部入账本。
+- **文档**：README「只读承诺」措辞改为「读取零写入；写回仅记忆/配置且两步确认、原物可回滚」；THREAT-MODEL 新增 T8（写回面：显式授权、闭集注册表、会话存储零写入硬线、快照可回滚与诚实残余风险）。
+- 质量闸：新增 `tests/writeback.spec.ts`——confirm 缺省拒零写盘、去重幂等、快照回滚、多目标各留各账、**会话存储零写入全树指纹对账**（负向断言）、无映射家诚实拒绝；typecheck 零错误、全量测试绿（数字以实测为准，见质量徽标）。
+
 ## [0.2.0] — 2026-11-12
 
 四轴贯通完整版：会话 / 上下文 / 记忆 / 配置四轴协议内立约（各卡带 `axis`/`payload` 轴标记）、同走一根同步链跨机——「寄存 A 机、取件 B 机」从一句文档变成两条命令。卡同步走用户自己的 git 仓库（零存储凭据），环境备份是单文件加密包随同步走。
