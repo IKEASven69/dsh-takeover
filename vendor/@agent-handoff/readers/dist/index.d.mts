@@ -28,7 +28,7 @@ export declare function entryToTurns(entry: Entry): Turn[];
 //#region src/types.d.ts
 /** 一个已发现的会话（发现层产物，轻量：不含内容）。 */
 interface SessionRef {
-  /** 归属适配器名：claude-code | codex | opencode | zcode | pi | workbuddy | cursor | grok | gemini | kimi | codebuddy | qoder | kiro */
+  /** 归属适配器名：claude-code | codex | opencode | zcode | pi | workbuddy | cursor | grok | gemini | kimi | codebuddy | qoder | kiro | copilot | devin | mimo | aider | cline | continue */
   agent: string;
   /** 稳定 id：文件系=绝对路径；SQLite 系=会话 id。 */
   id: string;
@@ -134,6 +134,34 @@ export declare function parseWorkbuddyKernelText(text: string): Turn[];
 //#region src/kiro.d.ts
 /** cli/<uuid>.jsonl 文本 → Turn 流：Prompt / AssistantMessage / ToolResults 分派。 */
 export declare function parseKiroSessionText(text: string): Turn[];
+//#endregion
+//#region src/copilot.d.ts
+/** sessionId + dbPath 可注入（单测用临时库），缺省真实 ~/.copilot/session-store.db。 */
+export declare function parseCopilotSession(sessionId: string, dbPath?: string): Turn[];
+//#endregion
+//#region src/devin.d.ts
+/** sessionId + dbPath 可注入（单测用临时库），缺省 XDG 数据根探测结果。 */
+export declare function parseDevinSession(sessionId: string, dbPath?: string): Turn[];
+//#endregion
+//#region src/mimo.d.ts
+/** sessionId + dbPath 可注入（单测用临时库），缺省模块加载时解析的 MiMo 库。 */
+export declare function parseMimoSession(sessionId: string, dbPath?: string): Turn[];
+/** MiMo db 解析（测试钩子）：HANDOFF_ROOT_MIMO 直指优先；候选目录扫描不中回 null。 */
+export declare function resolveMimoDb(): string | null;
+//#endregion
+//#region src/aider.d.ts
+/** markdown 历史文本 → Turn 流：`> ` 行聚用户轮、其余非空行聚 assistant 轮（尽力而为）。 */
+export declare function parseAiderHistoryText(text: string): Turn[];
+/** 输入历史文本 → Turn 流（兜底）：非空输入行逐条记用户轮。 */
+export declare function parseAiderInputText(text: string): Turn[];
+//#endregion
+//#region src/cline.d.ts
+/** api_conversation_history.json 文本 → Turn 流：{role, content} 数组复用 Claude 同族归一。 */
+export declare function parseClineConversationText(text: string): Turn[];
+//#endregion
+//#region src/continue.d.ts
+/** Continue 会话文件文本 → Turn 流：history 消息流逐条取 user/assistant 文本。 */
+export declare function parseContinueSessionText(text: string): Turn[];
 //#endregion
 //#region src/index.d.ts
 export declare const AGENTS: SessionAdapter[];

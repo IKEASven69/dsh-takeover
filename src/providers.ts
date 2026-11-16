@@ -1,5 +1,5 @@
 /**
- * provider 注册表 —— 十三家外部 agent 会话的单一真源。
+ * provider 注册表 —— 十九家外部 agent 会话的单一真源。
  * 收敛前存在四份平行名单（互相靠注释口头约定一致，改一家要四处同步）：
  * - foreign.ts 的 FOREIGN_PROVIDERS / PROVIDER_TO_ADAPTER（读取器轴）
  * - client.ts 的 RESUME_PROVIDERS（客户端 /resume-* 命令速览 chips）
@@ -8,17 +8,19 @@
  * 现在四者全部从本表派生；确有差异的轴显式入表，不留隐式：
  * - adapter：readers 适配器名（claude 的适配器叫 claude-code，其余同名）
  * - outboundEligible：是否进交接目标轴（OUTBOUND_TARGETS）。交接目标与读取器
- *   两轴独立：gemini 与 0.3.0 新增的 kimi / codebuddy / qoder / kiro 是读取器
- *   但不进交接目标，显式 false。
- * - icon：gemini / kimi / codebuddy / qoder / kiro 暂无核实过的官方矢量，显式
- *   'none' 走中性兜底——未经核实的「官方 path」不入表，不出冒牌标。
+ *   两轴独立：gemini、0.3.0 jsonl 族（kimi / codebuddy / qoder / kiro）与
+ *   0.25 sqlite/文件族（copilot / devin / mimo / aider / cline / continue）是
+ *   读取器但不进交接目标，显式 false。
+ * - icon：gemini / kimi / codebuddy / qoder / kiro / copilot / devin / mimo /
+ *   aider / cline / continue 暂无核实过的官方矢量，显式 'none' 走中性兜底——
+ *   未经核实的「官方 path」不入表，不出冒牌标。
  * 纪律：本文件必须是纯数据叶（不 import 任何模块）。它同时打进 host 半
  * （tsdown）与 client 半（esbuild 浏览器 bundle）——任何 host 侧依赖
  * （cordis / dsh-tools / readers）都会把宿主拖进浏览器包或让客户端包炸裂。
  * 声明序有语义：即工具 enum、支持矩阵、命令速览 chips、skill 注册面的展示序
  * （历史 FOREIGN_PROVIDERS 序：claude → codex → opencode → zcode → pi →
- * workbuddy → cursor → grok → gemini → kimi → codebuddy → qoder → kiro），
- * 改动即改序。
+ * workbuddy → cursor → grok → gemini → kimi → codebuddy → qoder → kiro →
+ * copilot → devin → mimo → aider → cline → continue），改动即改序。
  * @module dsh-takeover/providers
  */
 
@@ -50,7 +52,7 @@ export interface ProviderResume {
   readonly recoveryBoundary: string
 }
 
-/** 十三家外部 provider 的注册表条目（全部字段显式声明，消费面各自派生） */
+/** 十九家外部 provider 的注册表条目（全部字段显式声明，消费面各自派生） */
 export interface ProviderMeta {
   /** 面向用户的 provider 名（工具 enum / 设置卡矩阵 / slash skill / 交接目标同用） */
   readonly name: string
@@ -300,9 +302,90 @@ export const PROVIDERS = [
       recoveryBoundary: '读取器只读 sessions/cli 下的 <uuid>.jsonl 事件流（Prompt / AssistantMessage / ToolResults）；伴生 .json 与 .history 不读；事件流没有 cwd 字段时如实留空；只读不写、不复活 Kiro。',
     },
   },
+  {
+    // 0.25 sqlite/文件族扩容（copilot / devin / mimo / aider / cline / continue）：
+    // 与 jsonl 族同款双轴纪律——只进读取器轴，不进交接目标轴（outboundEligible: false）；
+    // 暂无核实过的官方矢量，icon 显式 'none' 走中性兜底——未经核实的「官方 path」不入表。
+    name: 'copilot',
+    adapter: 'copilot',
+    label: 'Copilot CLI',
+    outboundEligible: false,
+    icon: { kind: 'none' },
+    resume: {
+      id: 'resume-copilot',
+      product: 'GitHub Copilot CLI',
+      description: '把一条 GitHub Copilot CLI 会话拉进当前会话，生成六段交接卡接手工作；记录是 ~/.copilot/session-store.db 明文 SQLite（sessions/turns 表），可附会话 id 或标题关键词。',
+      recoveryBoundary: '读取器只读 session-store.db（node:sqlite readonly、随开随关，需 Node ≥22）；列名探测不中时如实报降级，不粉饰成空会话；不回放调用、不复活 Copilot CLI。',
+    },
+  },
+  {
+    name: 'devin',
+    adapter: 'devin',
+    label: 'Devin CLI',
+    outboundEligible: false,
+    icon: { kind: 'none' },
+    resume: {
+      id: 'resume-devin',
+      product: 'Devin CLI',
+      description: '把一条 Devin CLI 会话拉进当前会话，生成六段交接卡接手工作；记录是 XDG 数据根下 cli/sessions.db（sessions 表带 main_chain_id 血缘字段），可附会话 id 或标题关键词。',
+      recoveryBoundary: '读取器只读 sessions.db（node:sqlite readonly、随开随关，需 Node ≥22）；链式会话按 sessions 表逐条展示、链首尾不合并；逐轮记录表探测不中时正文解析为空并如实浮出 note。',
+    },
+  },
+  {
+    name: 'mimo',
+    adapter: 'mimo',
+    label: 'MiMo Code',
+    outboundEligible: false,
+    icon: { kind: 'none' },
+    resume: {
+      id: 'resume-mimo',
+      product: 'MiMo Code',
+      description: '把一条 MiMo Code（小米）会话拉进当前会话，生成六段交接卡接手工作；记录是 ~/.local/share 应用数据目录的 SQLite（session 表），目录名未完全核实、候选目录逐个扫描，可附会话 id 或标题关键词。',
+      recoveryBoundary: '读取器只读候选目录扫描命中的明文库（node:sqlite readonly、随开随关，需 Node ≥22）；目录名未完全核实——全不命中时 supported=false 并诚实标注（不盲猜固定路径），确认后可用 HANDOFF_ROOT_MIMO 指定库文件；不回放调用、不复活 MiMo Code。',
+    },
+  },
+  {
+    name: 'aider',
+    adapter: 'aider',
+    label: 'Aider',
+    outboundEligible: false,
+    icon: { kind: 'none' },
+    resume: {
+      id: 'resume-aider',
+      product: 'Aider',
+      description: '把一条 Aider 会话拉进当前会话，生成六段交接卡接手工作；无会话库——历史在各 git 项目根的 .aider.chat.history.md / .aider.input.history，从起点向上探测项目根，可附记录路径或标题关键词。',
+      recoveryBoundary: '读取器只读项目根的历史文件：markdown 对话历史为半结构化日志，`> ` 行记用户轮、其余正文记 assistant 轮，解析尽力而为（工具输出/截断段可能混入）并以 note 标注；只读不写、不复活 Aider。',
+    },
+  },
+  {
+    name: 'cline',
+    adapter: 'cline',
+    label: 'Cline',
+    outboundEligible: false,
+    icon: { kind: 'none' },
+    resume: {
+      id: 'resume-cline',
+      product: 'Cline',
+      description: '把一条 Cline（VS Code 扩展）任务拉进当前会话，生成六段交接卡接手工作；记录是 globalStorage/tasks/<taskId>/api_conversation_history.json（Anthropic 风格消息数组），可附任务 id、记录路径或标题关键词。',
+      recoveryBoundary: '读取器只读各 VS Code 变体 globalStorage（saoudrizwan.claude-dev / cline.cline）下的 api_conversation_history.json；ui_messages.json（say/ask UI 事件流）不读；api 历史没有 cwd 字段时如实留空；只读不写、不复活 Cline。',
+    },
+  },
+  {
+    name: 'continue',
+    adapter: 'continue',
+    label: 'Continue',
+    outboundEligible: false,
+    icon: { kind: 'none' },
+    resume: {
+      id: 'resume-continue',
+      product: 'Continue',
+      description: '把一条 Continue（IDE 扩展）会话拉进当前会话，生成六段交接卡接手工作；记录是 ~/.continue/sessions/ 的 sessions.json 索引 + <sessionId>.json 会话文件，可附会话 id、记录路径或标题关键词。',
+      recoveryBoundary: '读取器只读 sessions 目录下的索引与会话文件（history 消息流取 user/assistant 文本，system/tool 角色跳过）；索引缺席时退化为目录扫描；没有 cwd 字段时只在 workspace 路径在场时尽力提取，否则留空；只读不写、不复活 Continue。',
+    },
+  },
 ] as const satisfies readonly ProviderMeta[]
 
-/** 十三家 provider 名的字面量并集类型（注册表声明序） */
+/** 十九家 provider 名的字面量并集类型（注册表声明序） */
 export type ProviderName = (typeof PROVIDERS)[number]['name']
 
 /** /resume-* 命令速览 chips 的 provider 名单（client 命令速览同用；与读取器轴同源同序） */

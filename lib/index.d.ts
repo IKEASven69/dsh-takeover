@@ -363,7 +363,7 @@ interface Turn {
 //#region src/types.d.ts
 /** 一个已发现的会话（发现层产物，轻量：不含内容）。 */
 interface SessionRef {
-  /** 归属适配器名：claude-code | codex | opencode | zcode | pi | workbuddy | cursor | grok | gemini | kimi | codebuddy | qoder | kiro */
+  /** 归属适配器名：claude-code | codex | opencode | zcode | pi | workbuddy | cursor | grok | gemini | kimi | codebuddy | qoder | kiro | copilot | devin | mimo | aider | cline | continue */
   agent: string;
   /** 稳定 id：文件系=绝对路径；SQLite 系=会话 id。 */
   id: string;
@@ -628,12 +628,96 @@ declare const PROVIDERS: readonly [{
     readonly description: '把一条 Kiro 会话拉进当前会话，生成六段交接卡接手工作；CLI 会话是 <uuid>.jsonl 事件流（另有 .json/.history 伴生但不读），可附会话 id、JSONL 路径或标题关键词。';
     readonly recoveryBoundary: '读取器只读 sessions/cli 下的 <uuid>.jsonl 事件流（Prompt / AssistantMessage / ToolResults）；伴生 .json 与 .history 不读；事件流没有 cwd 字段时如实留空；只读不写、不复活 Kiro。';
   };
+}, {
+  readonly name: 'copilot';
+  readonly adapter: 'copilot';
+  readonly label: 'Copilot CLI';
+  readonly outboundEligible: false;
+  readonly icon: {
+    readonly kind: 'none';
+  };
+  readonly resume: {
+    readonly id: 'resume-copilot';
+    readonly product: 'GitHub Copilot CLI';
+    readonly description: '把一条 GitHub Copilot CLI 会话拉进当前会话，生成六段交接卡接手工作；记录是 ~/.copilot/session-store.db 明文 SQLite（sessions/turns 表），可附会话 id 或标题关键词。';
+    readonly recoveryBoundary: '读取器只读 session-store.db（node:sqlite readonly、随开随关，需 Node ≥22）；列名探测不中时如实报降级，不粉饰成空会话；不回放调用、不复活 Copilot CLI。';
+  };
+}, {
+  readonly name: 'devin';
+  readonly adapter: 'devin';
+  readonly label: 'Devin CLI';
+  readonly outboundEligible: false;
+  readonly icon: {
+    readonly kind: 'none';
+  };
+  readonly resume: {
+    readonly id: 'resume-devin';
+    readonly product: 'Devin CLI';
+    readonly description: '把一条 Devin CLI 会话拉进当前会话，生成六段交接卡接手工作；记录是 XDG 数据根下 cli/sessions.db（sessions 表带 main_chain_id 血缘字段），可附会话 id 或标题关键词。';
+    readonly recoveryBoundary: '读取器只读 sessions.db（node:sqlite readonly、随开随关，需 Node ≥22）；链式会话按 sessions 表逐条展示、链首尾不合并；逐轮记录表探测不中时正文解析为空并如实浮出 note。';
+  };
+}, {
+  readonly name: 'mimo';
+  readonly adapter: 'mimo';
+  readonly label: 'MiMo Code';
+  readonly outboundEligible: false;
+  readonly icon: {
+    readonly kind: 'none';
+  };
+  readonly resume: {
+    readonly id: 'resume-mimo';
+    readonly product: 'MiMo Code';
+    readonly description: '把一条 MiMo Code（小米）会话拉进当前会话，生成六段交接卡接手工作；记录是 ~/.local/share 应用数据目录的 SQLite（session 表），目录名未完全核实、候选目录逐个扫描，可附会话 id 或标题关键词。';
+    readonly recoveryBoundary: '读取器只读候选目录扫描命中的明文库（node:sqlite readonly、随开随关，需 Node ≥22）；目录名未完全核实——全不命中时 supported=false 并诚实标注（不盲猜固定路径），确认后可用 HANDOFF_ROOT_MIMO 指定库文件；不回放调用、不复活 MiMo Code。';
+  };
+}, {
+  readonly name: 'aider';
+  readonly adapter: 'aider';
+  readonly label: 'Aider';
+  readonly outboundEligible: false;
+  readonly icon: {
+    readonly kind: 'none';
+  };
+  readonly resume: {
+    readonly id: 'resume-aider';
+    readonly product: 'Aider';
+    readonly description: '把一条 Aider 会话拉进当前会话，生成六段交接卡接手工作；无会话库——历史在各 git 项目根的 .aider.chat.history.md / .aider.input.history，从起点向上探测项目根，可附记录路径或标题关键词。';
+    readonly recoveryBoundary: '读取器只读项目根的历史文件：markdown 对话历史为半结构化日志，`> ` 行记用户轮、其余正文记 assistant 轮，解析尽力而为（工具输出/截断段可能混入）并以 note 标注；只读不写、不复活 Aider。';
+  };
+}, {
+  readonly name: 'cline';
+  readonly adapter: 'cline';
+  readonly label: 'Cline';
+  readonly outboundEligible: false;
+  readonly icon: {
+    readonly kind: 'none';
+  };
+  readonly resume: {
+    readonly id: 'resume-cline';
+    readonly product: 'Cline';
+    readonly description: '把一条 Cline（VS Code 扩展）任务拉进当前会话，生成六段交接卡接手工作；记录是 globalStorage/tasks/<taskId>/api_conversation_history.json（Anthropic 风格消息数组），可附任务 id、记录路径或标题关键词。';
+    readonly recoveryBoundary: '读取器只读各 VS Code 变体 globalStorage（saoudrizwan.claude-dev / cline.cline）下的 api_conversation_history.json；ui_messages.json（say/ask UI 事件流）不读；api 历史没有 cwd 字段时如实留空；只读不写、不复活 Cline。';
+  };
+}, {
+  readonly name: 'continue';
+  readonly adapter: 'continue';
+  readonly label: 'Continue';
+  readonly outboundEligible: false;
+  readonly icon: {
+    readonly kind: 'none';
+  };
+  readonly resume: {
+    readonly id: 'resume-continue';
+    readonly product: 'Continue';
+    readonly description: '把一条 Continue（IDE 扩展）会话拉进当前会话，生成六段交接卡接手工作；记录是 ~/.continue/sessions/ 的 sessions.json 索引 + <sessionId>.json 会话文件，可附会话 id、记录路径或标题关键词。';
+    readonly recoveryBoundary: '读取器只读 sessions 目录下的索引与会话文件（history 消息流取 user/assistant 文本，system/tool 角色跳过）；索引缺席时退化为目录扫描；没有 cwd 字段时只在 workspace 路径在场时尽力提取，否则留空；只读不写、不复活 Continue。';
+  };
 }];
-/** 十三家 provider 名的字面量并集类型（注册表声明序） */
+/** 十九家 provider 名的字面量并集类型（注册表声明序） */
 type ProviderName = (typeof PROVIDERS)[number]['name'];
 //#endregion
 //#region src/foreign.d.ts
-/** 面向用户的十三家提供方名（providers.ts 注册表派生，顺序即注册表声明序） */
+/** 面向用户的十九家提供方名（providers.ts 注册表派生，顺序即注册表声明序） */
 export declare const FOREIGN_PROVIDERS: readonly ForeignProvider[];
 type ForeignProvider = ProviderName;
 /** 面向用户的 provider 名 → readers 适配器名（注册表派生；claude 是 claude-code 的别名，设置卡支持矩阵同用） */

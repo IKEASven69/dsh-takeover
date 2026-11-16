@@ -144,9 +144,10 @@ function refOf(refs: SessionRef[], prefix: string): SessionRef {
 
 // ---------- AGENTS 注册 ----------
 
-test('jsonl 族四家在册：AGENTS 末尾追加，root 指向 HANDOFF_ROOT_<名>', () => {
-  assert.deepEqual(AGENTS.map((a) => a.name).slice(-4), ['kimi', 'codebuddy', 'qoder', 'kiro'])
-  assert.equal(AGENTS.length, 13)
+test('jsonl 族四家在册：AGENTS 声明序在 gemini 之后（0.25 sqlite/文件族六家再其后），root 指向 HANDOFF_ROOT_<名>', () => {
+  // 0.25 扩容后 jsonl 族四家不再居末尾：位置钉死在 kiro 之后、新六家之前（9..12）
+  assert.deepEqual(AGENTS.map((a) => a.name).slice(9, 13), ['kimi', 'codebuddy', 'qoder', 'kiro'])
+  assert.equal(AGENTS.length, 19)
   for (const [name, root] of [
     ['kimi', KIMI_ROOT], ['codebuddy', CODEBUDDY_ROOT], ['qoder', QODER_ROOT], ['kiro', KIRO_ROOT],
   ] as const) {
@@ -275,13 +276,13 @@ test('kiro parse：Prompt / AssistantMessage / ToolResults 归一 5 轮，status
 
 // ---------- 接线（工具轴 / 注册表轴 / 交接目标轴） ----------
 
-test('接线：FOREIGN_PROVIDERS 十三家带四家，adapter 映射同名，四家不进 OUTBOUND_TARGETS', () => {
+test('接线：FOREIGN_PROVIDERS 十九家带四家，adapter 映射同名，四家不进 OUTBOUND_TARGETS', () => {
   for (const p of ['kimi', 'codebuddy', 'qoder', 'kiro'] as const) {
     assert.ok(FOREIGN_PROVIDERS.includes(p), `缺 ${p}`)
     assert.equal(PROVIDER_TO_ADAPTER[p], p, `${p} 的适配器与 provider 同名`)
     assert.ok(!(OUTBOUND_TARGETS as readonly string[]).includes(p), `${p} 不进交接目标轴`)
   }
-  assert.equal(FOREIGN_PROVIDERS.length, 13)
+  assert.equal(FOREIGN_PROVIDERS.length, 19)
 })
 
 test('接线：foreignSessionRead 用真实适配器走通 kimi list / qoder show（标题关键词命中）', async () => {

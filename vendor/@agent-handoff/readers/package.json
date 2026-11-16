@@ -1,6 +1,6 @@
 {
   "name": "@agent-handoff/readers",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "type": "module",
   "main": "./dist/index.mjs",
   "types": "./dist/index.d.mts",

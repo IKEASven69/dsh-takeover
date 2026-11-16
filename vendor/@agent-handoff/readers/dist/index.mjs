@@ -2456,11 +2456,787 @@ const kiroAdapter = {
 	}
 };
 //#endregion
+//#region src/sqlite-common.ts
+/**
+ * sqlite 族公共件（copilot / devin / mimo 三家共用，2026-11）：
+ * 列名不做硬编码假设——PRAGMA table_info 探测常见命名，探测不中即降级并诚实浮出；
+ * 时间单元格 epoch 秒 / 毫秒 / ISO 字符串自适应。活库一律 readonly 随开随关（zcode 先例）。
+ */
+/** node:sqlite 可用性：createRequire 同步加载内建模块，失败即不支持（不拖垮其他适配器）。 */
+function loadSqliteFamily() {
+	try {
+		return createRequire(import.meta.url)("node:sqlite").DatabaseSync;
+	} catch {
+		return null;
+	}
+}
+const DatabaseSync$3 = loadSqliteFamily();
+/** 随开随关 readonly 打开：sqlite 缺席 / 文件不存在 / 打开失败一律 null。 */
+function openFamilyDb(dbPath) {
+	if (DatabaseSync$3 === null || !existsSync(dbPath)) return null;
+	try {
+		return new DatabaseSync$3(dbPath, { readOnly: true });
+	} catch {
+		return null;
+	}
+}
+/** 表列名集合（PRAGMA table_info）；表不存在 / 查询失败返回空集。 */
+function tableColumns(db, table) {
+	try {
+		return new Set(db.prepare(`PRAGMA table_info("${table}")`).all().map((c) => c.name));
+	} catch {
+		return new Set();
+	}
+}
+/** 列名集合里按候选序取第一个存在的列名。 */
+function firstCol(cols, names) {
+	for (const n of names) if (cols.has(n)) return n;
+	return void 0;
+}
+/** 单元格 → ms epoch：数字秒（<1e12）/毫秒自适应、字符串数字同走、ISO 串 Date.parse；不可解析回 0。 */
+function cellToMs(v) {
+	if (typeof v === "number" && Number.isFinite(v) && v > 0) return v < 1e12 ? v * 1e3 : v;
+	if (typeof v === "string" && v !== "") {
+		const n = Number(v);
+		if (Number.isFinite(n) && n > 0) return n < 1e12 ? n * 1e3 : n;
+		const parsed = Date.parse(v);
+		if (Number.isFinite(parsed)) return parsed;
+	}
+	return 0;
+}
+/** 单元格 → Turn 角色：user/human → user；assistant/model/ai/copilot → assistant；
+ * tool/tool_result/function → tool；其余回 null（未知角色整行跳过）。 */
+function turnRole(v) {
+	if (typeof v !== "string") return null;
+	const r = v.trim().toLowerCase();
+	if (r === "user" || r === "human") return "user";
+	if (r === "assistant" || r === "model" || r === "ai" || r === "copilot") return "assistant";
+	if (r === "tool" || r === "tool_result" || r === "function") return "tool";
+	return null;
+}
+/** 会话元数据表探测：sessions / session 等常见表名，需有 id 类列；探测不中回 null。 */
+function sqliteSessionsTable(db) {
+	for (const table of ["sessions", "session"]) {
+		const cols = tableColumns(db, table);
+		if (cols.size === 0) continue;
+		const idCol = firstCol(cols, ["id", "session_id", "sessionId"]);
+		if (idCol === void 0) continue;
+		return {
+			table,
+			idCol,
+			titleCol: firstCol(cols, ["title", "name", "summary"]),
+			cwdCol: firstCol(cols, ["cwd", "path", "working_directory", "directory", "workspace"]),
+			updatedCol: firstCol(cols, ["updated_at", "updatedAt", "last_updated", "updated", "last_active"]),
+			createdCol: firstCol(cols, ["created_at", "createdAt", "created", "started_at"])
+		};
+	}
+	return null;
+}
+/** 逐轮记录表探测：turns / messages / events 等常见表名，需同时有会话引用列与正文列；探测不中回 null。 */
+function sqliteTurnTable(db) {
+	for (const table of ["turns", "messages", "events", "session_turns", "session_messages"]) {
+		const cols = tableColumns(db, table);
+		if (cols.size === 0) continue;
+		const sessionCol = firstCol(cols, ["session_id", "sessionId", "session"]);
+		const textCol = firstCol(cols, ["content", "text", "message", "body", "output"]);
+		if (sessionCol === void 0 || textCol === void 0) continue;
+		return {
+			table,
+			sessionCol,
+			textCol,
+			roleCol: firstCol(cols, ["role", "sender", "type"]),
+			tsCol: firstCol(cols, ["created_at", "createdAt", "timestamp", "ts", "time"]),
+			seqCol: firstCol(cols, ["sequence", "seq", "idx", "turn_index", "position"]),
+			idCol: firstCol(cols, ["id"])
+		};
+	}
+	return null;
+}
+/** sessions 表全行 → SessionRef 列表（id/title/cwd/时间列名自适应；时间列缺失退 0）。 */
+function sqliteDiscoverRefs(agent, db, st) {
+	const orderCol = st.updatedCol ?? st.createdCol ?? st.idCol;
+	let rows = [];
+	try {
+		rows = db.prepare(`SELECT * FROM "${st.table}" ORDER BY "${orderCol}" DESC`).all();
+	} catch {
+		return [];
+	}
+	const out = [];
+	for (const row of rows) {
+		const idCell = row[st.idCol];
+		const id = typeof idCell === "string" || typeof idCell === "number" ? String(idCell) : "";
+		if (id === "") continue;
+		const updated = st.updatedCol !== void 0 ? cellToMs(row[st.updatedCol]) : st.createdCol !== void 0 ? cellToMs(row[st.createdCol]) : 0;
+		const titleCell = st.titleCol !== void 0 ? row[st.titleCol] : void 0;
+		const cwdCell = st.cwdCol !== void 0 ? row[st.cwdCol] : void 0;
+		out.push({
+			agent,
+			id,
+			title: typeof titleCell === "string" && titleCell.trim() !== "" ? titleCell : id.slice(0, 18),
+			cwd: typeof cwdCell === "string" ? cwdCell : "",
+			updatedAt: updated,
+			fingerprint: String(st.updatedCol !== void 0 ? row[st.updatedCol] ?? "" : updated),
+			kind: "sqlite"
+		});
+	}
+	return out.sort((a, b) => b.updatedAt - a.updatedAt);
+}
+/** 一个会话的逐轮记录 → Turn 流（按序号列/行号列稳定排序；空正文与坏行静默跳过）。 */
+function sqliteSessionTurns(db, sessionId, tt) {
+	const order = tt.seqCol !== void 0 ? `"${tt.seqCol}"` : tt.idCol !== void 0 ? `"${tt.idCol}"` : "rowid";
+	let rows = [];
+	try {
+		rows = db.prepare(`SELECT * FROM "${tt.table}" WHERE "${tt.sessionCol}" = ? ORDER BY ${order}`).all(sessionId);
+	} catch {
+		return [];
+	}
+	const turns = [];
+	for (const row of rows) {
+		const role = tt.roleCol !== void 0 ? turnRole(row[tt.roleCol]) : "assistant";
+		if (role === null) continue;
+		const body = typeof row[tt.textCol] === "string" ? row[tt.textCol].trim() : "";
+		if (body === "") continue;
+		const tsMs = tt.tsCol !== void 0 ? cellToMs(row[tt.tsCol]) : 0;
+		turns.push(makeTurn({
+			role,
+			text: body,
+			ts: tsMs > 0 ? new Date(tsMs).toISOString() : ""
+		}));
+	}
+	return turns;
+}
+//#endregion
+//#region src/copilot.ts
+/**
+ * GitHub Copilot CLI 适配器（自研 TS 实现；存储规格为调研口径，2026-11）。
+ *
+ * 存储形态（db 路径可用 HANDOFF_ROOT_COPILOT 覆盖，测试用；缺省 ~/.copilot/session-store.db）：
+ *   明文 SQLite：sessions 表（会话元数据）+ turns 表（逐轮记录）。
+ * 列名探测自适应（sqlite-common）；库缺表 / 列探测不中时 parse 恒空，note 诚实浮出
+ * （不粉饰成「没有会话」）。活库随开随关一律 readonly（zcode 先例）；
+ * node:sqlite 缺席 → supported=false 优雅降级，不引入任何原生模块。
+ * 只读不写、不复活 Copilot CLI。
+ */
+const COPILOT_DB = process.env["HANDOFF_ROOT_COPILOT"] ?? join(homedir(), ".copilot", "session-store.db");
+/** dbPath 可注入（单测用临时库），缺省真实 ~/.copilot/session-store.db。 */
+function parseCopilotSession(sessionId, dbPath = COPILOT_DB) {
+	const db = openFamilyDb(dbPath);
+	if (db === null) return [];
+	try {
+		const tt = sqliteTurnTable(db);
+		if (tt === null) return [];
+		return sqliteSessionTurns(db, sessionId, tt);
+	} finally {
+		db.close();
+	}
+}
+const copilotAdapter = {
+	name: "copilot",
+	root: COPILOT_DB,
+	supported: DatabaseSync$3 !== null,
+	note: DatabaseSync$3 === null ? "需要 Node ≥22（node:sqlite 内建模块）" : void 0,
+	discover() {
+		const db = openFamilyDb(COPILOT_DB);
+		if (db === null) return [];
+		try {
+			const st = sqliteSessionsTable(db);
+			if (st === null) {
+				this.note = "库文件在册但未识别会话元数据表（列名探测不中）——上游可能已迁移存储布局";
+				return [];
+			}
+			const out = sqliteDiscoverRefs(this.name, db, st);
+			this.note = sqliteTurnTable(db) === null ? "已识别会话表但未识别逐轮记录表——正文解析为空（列名探测不中，格式未完全核实）" : void 0;
+			return out;
+		} finally {
+			db.close();
+		}
+	},
+	parse(id) {
+		return parseCopilotSession(id);
+	}
+};
+//#endregion
+//#region src/devin.ts
+/**
+ * Devin CLI（Cognition）适配器（自研 TS 实现；存储规格为调研口径，2026-11）。
+ *
+ * 存储形态（db 路径可用 HANDOFF_ROOT_DEVIN 覆盖，测试用；缺省 XDG 数据根探测）：
+ *   <XDG_DATA_HOME>/devin/cli/sessions.db   sessions 表（main_chain_id 血缘字段）
+ * XDG 数据根 = XDG_DATA_HOME ?? ~/.local/share；app 目录层同时探测 devin/cli 与
+ * cli 两形态（公开资料未完全钉死，候选按序取第一个在册的）。
+ * main_chain_id 是链式会话的血缘字段：本读取器只读 sessions 表自身元数据与逐轮
+ * 记录表（探测不中则 parse 恒空并诚实浮出 note），链首尾合并不在本期范围。
+ * 只读不写、不复活 Devin。
+ */
+const XDG_DATA$1 = process.env["XDG_DATA_HOME"] ?? join(homedir(), ".local", "share");
+const DEVIN_DB_CANDIDATES = [join(XDG_DATA$1, "devin", "cli", "sessions.db"), join(XDG_DATA$1, "cli", "sessions.db")];
+const DEVIN_DB = process.env["HANDOFF_ROOT_DEVIN"] ?? (DEVIN_DB_CANDIDATES.find((p) => existsSync(p)) ?? DEVIN_DB_CANDIDATES[0]);
+/** sessionId + dbPath 可注入（单测用临时库），缺省 XDG 数据根探测结果。 */
+function parseDevinSession(sessionId, dbPath = DEVIN_DB) {
+	const db = openFamilyDb(dbPath);
+	if (db === null) return [];
+	try {
+		const tt = sqliteTurnTable(db);
+		if (tt === null) return [];
+		return sqliteSessionTurns(db, sessionId, tt);
+	} finally {
+		db.close();
+	}
+}
+const devinAdapter = {
+	name: "devin",
+	root: DEVIN_DB,
+	supported: DatabaseSync$3 !== null,
+	note: DatabaseSync$3 === null ? "需要 Node ≥22（node:sqlite 内建模块）" : void 0,
+	discover() {
+		const db = openFamilyDb(DEVIN_DB);
+		if (db === null) return [];
+		try {
+			const st = sqliteSessionsTable(db);
+			if (st === null) {
+				this.note = "库文件在册但未识别 sessions 表（列名探测不中）——上游可能已迁移存储布局";
+				return [];
+			}
+			const out = sqliteDiscoverRefs(this.name, db, st);
+			this.note = sqliteTurnTable(db) === null ? "已识别 sessions 表（main_chain_id 血缘）但未识别逐轮记录表——正文解析为空（格式未完全核实）" : void 0;
+			return out;
+		} finally {
+			db.close();
+		}
+	},
+	parse(id) {
+		return parseDevinSession(id);
+	}
+};
+//#endregion
+//#region src/mimo.ts
+/**
+ * 小米 MiMo Code 适配器（自研 TS 实现；目录名未完全核实——2026-11 候选扫描口径）。
+ *
+ * 存储形态：~/.local/share 下应用数据目录中的明文 SQLite（session 表）。
+ * 候选目录逐个探测（mimo-code / MiMoCode / mimo / xiaomi-mimo / mimo_code /
+ * xiaomi/mimo），命中含会话表的库即取用；全不命中 → supported=false + note
+ * 诚实标注——目录名未核实 ≠ 布局可信，盲猜固定路径只会造出假 0。
+ * HANDOFF_ROOT_MIMO 直接指定 db 文件（测试用；布局核实后可固化缺省）。
+ * 只读不写、不复活 MiMo Code。
+ */
+const MIMO_DIR_CANDIDATES = [
+	join(homedir(), ".local", "share", "mimo-code"),
+	join(homedir(), ".local", "share", "MiMoCode"),
+	join(homedir(), ".local", "share", "mimo"),
+	join(homedir(), ".local", "share", "xiaomi-mimo"),
+	join(homedir(), ".local", "share", "mimo_code"),
+	join(homedir(), ".local", "share", "xiaomi", "mimo")
+];
+/** MiMo db 解析：HANDOFF_ROOT_MIMO 直指优先（存在与否不门 supported）；否则候选
+ * 目录扫描，取首个「库可 readonly 打开且会话表探测命中」的文件；全不中回 null。 */
+function resolveMimoDb() {
+	const override = process.env["HANDOFF_ROOT_MIMO"];
+	if (typeof override === "string" && override !== "") return override;
+	for (const dir of MIMO_DIR_CANDIDATES) {
+		let files = [];
+		try {
+			files = readdirSync(dir, { withFileTypes: true }).filter((e) => e.isFile()).map((e) => join(dir, e.name));
+		} catch {
+			continue;
+		}
+		for (const f of files) {
+			if (!/\.(db|sqlite|sqlite3)$/i.test(f)) continue;
+			const db = openFamilyDb(f);
+			if (db === null) continue;
+			try {
+				if (sqliteSessionsTable(db) !== null) return f;
+			} finally {
+				db.close();
+			}
+		}
+	}
+	return null;
+}
+const MIMO_OVERRIDE = process.env["HANDOFF_ROOT_MIMO"];
+const MIMO_DB = resolveMimoDb();
+const MIMO_DEFAULT_ROOT = join(homedir(), ".local", "share", "mimo-code");
+const mimoAdapter = {
+	name: "mimo",
+	root: MIMO_DB ?? MIMO_DEFAULT_ROOT,
+	supported: DatabaseSync$3 !== null && (MIMO_DB !== null),
+	note: DatabaseSync$3 === null
+		? "需要 Node ≥22（node:sqlite 内建模块）"
+		: MIMO_DB === null
+			? "未找到 MiMo Code 应用数据目录——候选 ~/.local/share/{mimo-code,MiMoCode,mimo,xiaomi-mimo,mimo_code,xiaomi/mimo} 均不在册（目录名未完全核实）；确认后可用 HANDOFF_ROOT_MIMO 指定库文件"
+			: void 0,
+	discover() {
+		const db = openFamilyDb(MIMO_DB ?? "");
+		if (db === null) return [];
+		try {
+			const st = sqliteSessionsTable(db);
+			if (st === null) {
+				this.note = "库文件在册但未识别 session 表（列名探测不中）——上游可能已迁移存储布局";
+				return [];
+			}
+			const out = sqliteDiscoverRefs(this.name, db, st);
+			this.note = sqliteTurnTable(db) === null ? "已识别 session 表但未识别逐轮记录表——正文解析为空（MiMo 存储格式未完全核实）" : void 0;
+			return out;
+		} finally {
+			db.close();
+		}
+	},
+	parse(id) {
+		return parseMimoSession(id);
+	}
+};
+/** sessionId + dbPath 可注入（单测用临时库），缺省模块加载时解析的 MiMo 库。 */
+function parseMimoSession(sessionId, dbPath = MIMO_DB ?? "") {
+	const db = openFamilyDb(dbPath);
+	if (db === null) return [];
+	try {
+		const tt = sqliteTurnTable(db);
+		if (tt === null) return [];
+		return sqliteSessionTurns(db, sessionId, tt);
+	} finally {
+		db.close();
+	}
+}
+//#endregion
+//#region src/aider.ts
+/**
+ * Aider 适配器（自研 TS 实现；无会话库——历史直接落在各项目根，2026-11 口径）：
+ *   <项目根>/.aider.chat.history.md   对话历史（markdown，半结构化：`> ` 前缀为用户轮）
+ *   <项目根>/.aider.input.history     输入历史（readline 形态，仅当无对话历史时兜底为正文）
+ * discover：从起点（HANDOFF_ROOT_AIDER 覆盖，测试用；缺省 process.cwd()）向上逐层
+ * 探测含历史文件的项目根（到文件系统根为止，深度封顶防循环），每命中一个根收一条会话。
+ * parse：markdown 历史段尽力而为解析——`> ` 行聚用户轮、其余非空行聚 assistant 轮、
+ * 「# Aider chat conversation」头只作边界；半结构化日志不保证完整（工具输出/截断段
+ * 可能混入），note 诚实标注。只读不写、不复活 Aider。
+ */
+const AIDER_START = process.env["HANDOFF_ROOT_AIDER"] ?? process.cwd();
+const AIDER_NOTE = "Aider 无会话库：markdown 历史为半结构化日志，解析尽力而为（工具输出/截断段可能混入）";
+/** 向上探测：起点 → 文件系统根沿途含历史文件的目录（近根在前）。 */
+function aiderHistoryDirs(startDir) {
+	const out = [];
+	let dir = startDir;
+	for (let depth = 0; depth < 32; depth += 1) {
+		if (existsSync(join(dir, ".aider.chat.history.md")) || existsSync(join(dir, ".aider.input.history"))) out.push(dir);
+		const parent = dirname(dir);
+		if (parent === dir) break;
+		dir = parent;
+	}
+	return out;
+}
+/** 头部文本的首条用户输入（`> ` 行）前 40 字作标题；读不到回项目目录名。 */
+function aiderHeadTitle(head, fallback) {
+	const m = /^> ?(.*)$/m.exec(head);
+	if (m !== null && m[1].trim() !== "") return m[1].trim().slice(0, 40);
+	return fallback;
+}
+/** markdown 历史文本 → Turn 流：`> ` 行聚用户轮、其余非空行聚 assistant 轮，
+ * 会话头只作边界；连续同类行合并为一个 Turn（空行不断开同侧正文）。 */
+function parseAiderHistoryText(text) {
+	const turns = [];
+	let role = null;
+	let buf = [];
+	const flush = () => {
+		if (role === null) return;
+		const body = buf.join("\n").trim();
+		if (body !== "") turns.push(makeTurn({
+			role,
+			text: body
+		}));
+		role = null;
+		buf = [];
+	};
+	for (const raw of text.split("\n")) {
+		const line = raw.replace(/\r$/, "");
+		const m = /^> ?(.*)$/.exec(line);
+		if (m !== null) {
+			if (role !== "user") flush();
+			role = "user";
+			buf.push(m[1]);
+			continue;
+		}
+		if (line.startsWith("# Aider chat conversation")) {
+			flush();
+			continue;
+		}
+		if (line.trim() === "") {
+			if (role !== null) buf.push("");
+			continue;
+		}
+		if (role !== "assistant") flush();
+		role = "assistant";
+		buf.push(line);
+	}
+	flush();
+	return turns;
+}
+/** 输入历史文本 → Turn 流（兜底形态）：跳过 readline 时间戳分隔行（### … ###）
+ * 与历史文件头标记（_HiStOrY_V2_，写法不分大小写），每条非空输入记一个用户轮；
+ * 该文件没有 assistant 侧正文。 */
+function parseAiderInputText(text) {
+	const turns = [];
+	for (const raw of text.split("\n")) {
+		const line = raw.replace(/\r$/, "").trim();
+		if (line === "" || line.startsWith("###") || /^_history_v2_/i.test(line)) continue;
+		turns.push(makeTurn({
+			role: "user",
+			text: line
+		}));
+	}
+	return turns;
+}
+const aiderAdapter = {
+	name: "aider",
+	root: AIDER_START,
+	supported: true,
+	note: AIDER_NOTE,
+	discover() {
+		const out = [];
+		for (const dir of aiderHistoryDirs(AIDER_START)) {
+			const chat = join(dir, ".aider.chat.history.md");
+			const input = join(dir, ".aider.input.history");
+			const hasChat = existsSync(chat);
+			const body = hasChat ? chat : input;
+			let mtime = 0, size = 0;
+			try {
+				const st = statSync(body);
+				if (!st.isFile()) continue;
+				mtime = st.mtimeMs;
+				size = st.size;
+			} catch {
+				continue;
+			}
+			out.push({
+				agent: this.name,
+				id: body,
+				title: hasChat ? aiderHeadTitle(readHead$1(chat), basename(dir)) : basename(dir),
+				cwd: dir,
+				updatedAt: mtime,
+				fingerprint: `${Math.round(mtime)}:${size}`,
+				kind: "file"
+			});
+		}
+		return out.sort((a, b) => b.updatedAt - a.updatedAt);
+	},
+	parse(id) {
+		try {
+			const text = readFileSync(id, "utf8");
+			return basename(id) === ".aider.input.history" ? parseAiderInputText(text) : parseAiderHistoryText(text);
+		} catch {
+			return [];
+		}
+	}
+};
+//#endregion
+//#region src/cline.ts
+/**
+ * Cline（VS Code 扩展，原 Claude Dev）适配器（自研 TS 实现；格式为公开调研，2026-11）。
+ *
+ * 存储形态（root 可用 HANDOFF_ROOT_CLINE 覆盖，测试用；缺省 VS Code 各变体
+ * globalStorage 候选探测）：
+ *   <globalStorage>/<扩展目录>/tasks/<taskId>/api_conversation_history.json
+ *     Anthropic 风格 {role, content} 消息数组——content 为字符串或块数组
+ *     （text / thinking / tool_use / tool_result），Claude 同族，归一复用 entryToTurns。
+ * 扩展目录候选：saoudrizwan.claude-dev（原 publisher）与 cline.cline（改名后）；
+ * 变体候选：Code / Code - Insiders / VSCodium / Cursor / Windsurf 的 globalStorage。
+ * ui_messages.json（say/ask UI 事件流）不读；api 历史没有 cwd 字段——如实留空
+ * （上层有空 cwd 警告兜底）。只读不写、不复活 Cline；文件缺失/损坏返回空流。
+ */
+const CLINE_EXT_DIRS = ["saoudrizwan.claude-dev", "cline.cline"];
+const CLINE_VARIANTS = ["Code", "Code - Insiders", "VSCodium", "Cursor", "Windsurf"];
+/** 各平台 VS Code 变体的 globalStorage 候选（win32 APPDATA / darwin App Support / 其余 XDG config）。 */
+function clineGlobalStorageCandidates() {
+	if (process.platform === "win32") {
+		const base = process.env["APPDATA"] ?? join(homedir(), "AppData", "Roaming");
+		return CLINE_VARIANTS.map((v) => join(base, v, "User", "globalStorage"));
+	}
+	if (process.platform === "darwin") {
+		const base = join(homedir(), "Library", "Application Support");
+		return CLINE_VARIANTS.map((v) => join(base, v, "User", "globalStorage"));
+	}
+	const base = process.env["XDG_CONFIG_HOME"] ?? join(homedir(), ".config");
+	return CLINE_VARIANTS.map((v) => join(base, v, "User", "globalStorage"));
+}
+/** root 解析：HANDOFF_ROOT_CLINE 直指 > 候选里第一个在册的 tasks 目录 > 首个候选（显示兜底）。 */
+function resolveClineRoot() {
+	const override = process.env["HANDOFF_ROOT_CLINE"];
+	if (typeof override === "string" && override !== "") return override;
+	for (const gs of clineGlobalStorageCandidates()) for (const ext of CLINE_EXT_DIRS) {
+		const tasks = join(gs, ext, "tasks");
+		if (existsSync(tasks)) return tasks;
+	}
+	return join(clineGlobalStorageCandidates()[0], CLINE_EXT_DIRS[0], "tasks");
+}
+const CLINE_ROOT = resolveClineRoot();
+/** 头部文本里的任务标题：首个 text 块剥 <task> 壳后取首个非空行前 40 字
+ * （Cline 首条用户输入是 <task> 正文 + environment_details 连排，标题只取正文首行）。 */
+function clineTaskTitle(head, fallback) {
+	const m = head.match(/"text"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+	if (!m) return fallback.slice(0, 40);
+	let raw;
+	try {
+		raw = JSON.parse(`"${m[1]}"`);
+	} catch {
+		raw = m[1];
+	}
+	const t = raw.replace(/<\/?task>/g, " ");
+	const first = t.split("\n").map((s) => s.trim()).find((s) => s !== "") ?? "";
+	return (first !== "" ? first : fallback).slice(0, 40);
+}
+/** 任务目录 → SessionRef（正文取 api_conversation_history.json；文件缺席回 null）。 */
+function clineRefFromTask(taskDir) {
+	const file = join(taskDir, "api_conversation_history.json");
+	let mtime = 0, size = 0;
+	try {
+		const st = statSync(file);
+		if (!st.isFile()) return null;
+		mtime = st.mtimeMs;
+		size = st.size;
+	} catch {
+		return null;
+	}
+	return {
+		agent: "cline",
+		id: file,
+		title: clineTaskTitle(readHead$1(file), basename(taskDir)),
+		cwd: "",
+		updatedAt: mtime,
+		fingerprint: `${Math.round(mtime)}:${size}`,
+		kind: "file"
+	};
+}
+/** api_conversation_history.json 文本 → Turn 流：{role, content} 数组逐条包成
+ * Claude 同族 entry 复用 entryToTurns；非数组 / 坏 JSON / 未知 role 静默降级。 */
+function parseClineConversationText(text) {
+	let value;
+	try {
+		value = JSON.parse(text);
+	} catch {
+		return [];
+	}
+	if (!Array.isArray(value)) return [];
+	const turns = [];
+	for (const item of value) {
+		if (item === null || typeof item !== "object") continue;
+		const role = item.role === "user" ? "user" : item.role === "assistant" ? "assistant" : "";
+		if (role === "") continue;
+		turns.push(...entryToTurns({
+			type: role,
+			message: {
+				role,
+				content: item.content
+			}
+		}));
+	}
+	return turns;
+}
+const clineAdapter = {
+	name: "cline",
+	root: CLINE_ROOT,
+	supported: true,
+	discover() {
+		const out = [];
+		let taskDirs = [];
+		try {
+			taskDirs = readdirSync(CLINE_ROOT, { withFileTypes: true }).filter((d) => d.isDirectory() && !d.isSymbolicLink()).map((d) => join(CLINE_ROOT, d.name));
+		} catch {
+			this.note = out.length === 0 && existsSync(CLINE_ROOT) ? FAKE_ZERO_NOTE : void 0;
+			return out;
+		}
+		for (const dir of taskDirs) {
+			const ref = clineRefFromTask(dir);
+			if (ref !== null) out.push(ref);
+		}
+		this.note = out.length === 0 && existsSync(CLINE_ROOT) ? FAKE_ZERO_NOTE : void 0;
+		return out.sort((a, b) => b.updatedAt - a.updatedAt);
+	},
+	parse(id) {
+		try {
+			return parseClineConversationText(readFileSync(id, "utf8"));
+		} catch {
+			return [];
+		}
+	}
+};
+//#endregion
+//#region src/continue.ts
+/**
+ * Continue（continuedev/continue，IDE 扩展）适配器（自研 TS 实现；格式为公开调研，2026-11）。
+ *
+ * 存储形态（root 可用 HANDOFF_ROOT_CONTINUE 覆盖，测试用；缺省 ~/.continue/sessions）：
+ *   sessions.json        会话索引（元数据数组，sessionId / title / date 等）
+ *   <sessionId>.json     会话文件：history 消息流（{message: {role, content}}）
+ * 索引读取容忍 {sessions:[...]} 包装；索引缺席时退化为目录扫描兜底（sessions.json
+ * 自身排除）。content 字符串或块数组（text 块取 text）；没有 cwd 字段——只在索引
+ * / 会话文件带 workspace 路径时尽力提取（file:// URL 解码），否则如实留空。
+ * 只读不写、不复活 Continue；坏行/损坏文件静默跳过或返回空流。
+ */
+const CONTINUE_ROOT = process.env["HANDOFF_ROOT_CONTINUE"] ?? join(homedir(), ".continue", "sessions");
+/** continue content（字符串或块数组）→ 纯文本：取 text 部分，其余块跳过。 */
+function continueContentText(content) {
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	const parts = [];
+	for (const block of content) if (block !== null && typeof block === "object" && typeof block.text === "string") parts.push(block.text);
+	return parts.join("\n");
+}
+/** file:// URL 尽力转本地路径（Windows 盘符去前导斜杠）；非 file 协议原样返回。 */
+function fileUrlToPath(u) {
+	try {
+		const url = new URL(u);
+		if (url.protocol !== "file:") return u;
+		const p = decodeURIComponent(url.pathname);
+		return /^\/[A-Za-z]:/.test(p) ? p.slice(1) : p;
+	} catch {
+		return u;
+	}
+}
+/** 索引条目 / 会话文件的 workspace 字段 → cwd 尽力而为：字符串（file:// 解码）或
+ * 对象的 path/uri/folder/directory 字段；都缺回空串（不猜）。 */
+function continueWorkspaceCwd(ws) {
+	if (typeof ws === "string" && ws.trim() !== "") return fileUrlToPath(ws.trim());
+	if (ws !== null && typeof ws === "object") for (const key of ["path", "uri", "folder", "directory"]) {
+		const w = ws[key];
+		if (typeof w === "string" && w.trim() !== "") return fileUrlToPath(w.trim());
+	}
+	return "";
+}
+/** 索引条目 → 标题（title / name 字段，缺省空）。 */
+function continueItemTitle(item) {
+	if (typeof item.title === "string" && item.title.trim() !== "") return item.title;
+	if (typeof item.name === "string" && item.name.trim() !== "") return item.name;
+	return "";
+}
+/** sessions.json 索引 → 元数据条目数组（容忍 {sessions:[...]} 包装）；坏 JSON / 缺文件回 null。 */
+function readContinueIndex(root) {
+	try {
+		const value = JSON.parse(readFileSync(join(root, "sessions.json"), "utf8"));
+		if (Array.isArray(value)) return value;
+		if (value !== null && typeof value === "object" && Array.isArray(value.sessions)) return value.sessions;
+		return null;
+	} catch {
+		return null;
+	}
+}
+/** Continue 会话文件文本 → Turn 流：history 消息流逐条取 user/assistant 文本
+ * （content 字符串或 text 块数组；system/tool 角色与空正文跳过；fullState 包装容忍）。 */
+function parseContinueSessionText(text) {
+	let value;
+	try {
+		value = JSON.parse(text);
+	} catch {
+		return [];
+	}
+	if (value === null || typeof value !== "object" || Array.isArray(value)) return [];
+	const v = value;
+	const history = Array.isArray(v.history) ? v.history : v.fullState !== null && typeof v.fullState === "object" && Array.isArray(v.fullState.history) ? v.fullState.history : [];
+	const turns = [];
+	for (const item of history) {
+		if (item === null || typeof item !== "object") continue;
+		const message = item.message;
+		if (message === null || typeof message !== "object") continue;
+		const role = message.role === "user" ? "user" : message.role === "assistant" ? "assistant" : "";
+		if (role === "") continue;
+		const body = continueContentText(message.content).trim();
+		if (body === "") continue;
+		const tsMs = cellToMs(message.timestamp ?? item.timestamp ?? "");
+		turns.push(makeTurn({
+			role,
+			text: body,
+			ts: tsMs > 0 ? new Date(tsMs).toISOString() : ""
+		}));
+	}
+	return turns;
+}
+const continueAdapter = {
+	name: "continue",
+	root: CONTINUE_ROOT,
+	supported: true,
+	discover() {
+		const out = [];
+		const seen = new Set();
+		const index = readContinueIndex(CONTINUE_ROOT);
+		if (index !== null) for (const item of index) {
+			if (item === null || typeof item !== "object") continue;
+			const sid = typeof item.sessionId === "string" && item.sessionId !== "" ? item.sessionId : typeof item.id === "string" && item.id !== "" ? item.id : "";
+			if (sid === "" || seen.has(sid)) continue;
+			const file = join(CONTINUE_ROOT, `${sid}.json`);
+			let mtime = 0, size = 0;
+			try {
+				const st = statSync(file);
+				if (!st.isFile()) continue;
+				mtime = st.mtimeMs;
+				size = st.size;
+			} catch {
+				continue;
+			}
+			seen.add(sid);
+			const dateMs = cellToMs(item.date ?? item.createdAt ?? item.created ?? "");
+			out.push({
+				agent: this.name,
+				id: file,
+				title: continueItemTitle(item) || sid.slice(0, 18),
+				cwd: continueWorkspaceCwd(item.workspace),
+				updatedAt: dateMs > 0 ? dateMs : mtime,
+				fingerprint: `${Math.round(mtime)}:${size}`,
+				kind: "file"
+			});
+		}
+		// 索引缺席 → 目录扫描兜底（sessions.json 自身排除；标题从文件头 title 字段尽力抠）
+		if (index === null) {
+			let names = [];
+			try {
+				names = readdirSync(CONTINUE_ROOT);
+			} catch {}
+			for (const name of names) {
+				if (!name.endsWith(".json") || name === "sessions.json") continue;
+				const file = join(CONTINUE_ROOT, name);
+				let mtime = 0, size = 0;
+				try {
+					const st = statSync(file);
+					if (!st.isFile()) continue;
+					mtime = st.mtimeMs;
+					size = st.size;
+				} catch {
+					continue;
+				}
+				const head = readHead$1(file);
+				const m = head.match(/"title"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+				let title = "";
+				if (m) try {
+					title = JSON.parse(`"${m[1]}"`).trim();
+				} catch {
+					title = m[1].trim();
+				}
+				out.push({
+					agent: this.name,
+					id: file,
+					title: title || basename(name, ".json").slice(0, 18),
+					cwd: "",
+					updatedAt: mtime,
+					fingerprint: `${Math.round(mtime)}:${size}`,
+					kind: "file"
+				});
+			}
+		}
+		this.note = out.length === 0 && existsSync(CONTINUE_ROOT) ? FAKE_ZERO_NOTE : void 0;
+		return out.sort((a, b) => b.updatedAt - a.updatedAt);
+	},
+	parse(id) {
+		try {
+			return parseContinueSessionText(readFileSync(id, "utf8"));
+		} catch {
+			return [];
+		}
+	}
+};
+//#endregion
 //#region src/index.ts
 /**
-* @agent-handoff/readers：十三家 agent 会话的只读读取层。
-* 移植自 dsh-hippo src/agents/，零三方运行时依赖（zcode / cursor store 用 Node 内建 node:sqlite）。
-* cursor / grok / gemini / kimi / codebuddy / qoder / kiro 七家为自研实现（格式为公开逆向调研）。
+* @agent-handoff/readers：十九家 agent 会话的只读读取层。
+* 移植自 dsh-hippo src/agents/，零三方运行时依赖（zcode / cursor store / copilot /
+* devin / mimo 用 Node 内建 node:sqlite）。
+* cursor / grok / gemini / kimi / codebuddy / qoder / kiro / copilot / devin / mimo /
+* aider / cline / continue 十三家为自研实现（格式为公开逆向调研）。
 *
 * 公共 API：
 *   listSessions(agent?) → SessionRef[]   发现 + 按更新时间倒序
@@ -2525,7 +3301,13 @@ const AGENTS = [
 	kimiAdapter,
 	codebuddyAdapter,
 	qoderAdapter,
-	kiroAdapter
+	kiroAdapter,
+	copilotAdapter,
+	devinAdapter,
+	mimoAdapter,
+	aiderAdapter,
+	clineAdapter,
+	continueAdapter
 ];
 const byName = new Map(AGENTS.map((a) => [a.name, a]));
 /** 取适配器；未知名抛中文错（CLI 层转成用户可读信息）。 */
@@ -2636,4 +3418,4 @@ function inventory() {
 	}));
 }
 //#endregion
-export { AGENTS, clearSessionCache, decodeCursorBlob, entryToTurns, inventory, listSessions, makeTurn, parseCodexText, parseCursorStore, parseCursorTranscriptText, parseGeminiJson, parseGeminiSession, parseGeminiText, parseGrokSession, parseGrokUpdatesText, parseJsonl, parseKimiWireText, parseKiroSessionText, parseOpenCodeSession, parsePiText, parseWorkbuddyKernelText, parseZcodeSession, readSession, renderCursorValue, resolveAgentReference, resolveReference, summarizeToolCall };
+export { AGENTS, clearSessionCache, decodeCursorBlob, entryToTurns, inventory, listSessions, makeTurn, parseAiderHistoryText, parseAiderInputText, parseClineConversationText, parseCodexText, parseContinueSessionText, parseCopilotSession, parseCursorStore, parseCursorTranscriptText, parseDevinSession, parseGeminiJson, parseGeminiSession, parseGeminiText, parseGrokSession, parseGrokUpdatesText, parseJsonl, parseKimiWireText, parseKiroSessionText, parseMimoSession, parseOpenCodeSession, parsePiText, parseWorkbuddyKernelText, parseZcodeSession, readSession, renderCursorValue, resolveAgentReference, resolveReference, resolveMimoDb, summarizeToolCall };

@@ -246,7 +246,7 @@ test('foreign：适配器不可用（如 Node<22 的 zcode）降级为规范错�
 
 // ---------- gemini（第 9 家）：接线 + 真实适配器双格式 fixture ----------
 
-test('foreign gemini：provider 门内（adapter=gemini），未知 provider 报错文案带全十三家', async () => {
+test('foreign gemini：provider 门内（adapter=gemini），未知 provider 报错文案带全十九家', async () => {
   // 门内：假货层记录 adapterNote 收到的 adapter 名
   const seen: string[] = []
   const r = await foreignSessionRead({ provider: 'gemini', action: 'list' }, fakeReaders({
@@ -256,10 +256,13 @@ test('foreign gemini：provider 门内（adapter=gemini），未知 provider 报
   if (!r.ok || r.action !== 'list') return
   assert.equal(r.provider, 'gemini')
   assert.deepEqual(seen, ['gemini'], 'provider 名必须原样映射到 readers 适配器名 gemini')
-  // 门外：未知 provider 的报错候选列表要带上 gemini 与 jsonl 族四家（十三家文案）
+  // 门外：未知 provider 的报错候选列表要带上 gemini、jsonl 族四家与 sqlite/文件族六家（十九家文案）
   const bad = await foreignSessionRead({ provider: 'emacs', action: 'list' }, fakeReaders())
   assert.equal(bad.ok, false)
-  if (!bad.ok) { assert.match(bad.error, /gemini/); for (const p of ['kimi', 'codebuddy', 'qoder', 'kiro']) assert.match(bad.error, new RegExp(p)) }
+  if (!bad.ok) {
+    assert.match(bad.error, /gemini/)
+    for (const p of ['kimi', 'codebuddy', 'qoder', 'kiro', 'copilot', 'devin', 'mimo', 'aider', 'cline', 'continue']) assert.match(bad.error, new RegExp(p))
+  }
 })
 
 test('foreign gemini list：真实适配器对双格式 + 子代理 fixture 全发现，按更新时间倒序', async () => {
@@ -338,15 +341,16 @@ test('summarizeTurns：cwd 为空时骨架 warnings 追加确认目录警告，�
 
 // ---------- skill 注册形态 ----------
 
-test('skill 注册面：/handoff /inbox + /resume-* 十三条，共 15 条', () => {
+test('skill 注册面：/handoff /inbox + /resume-* 十九条，共 21 条', () => {
   const regs = skillRegistrations()
-  assert.equal(regs.length, 15)
+  assert.equal(regs.length, 21)
   const names = regs.map((r) => r.name)
   assert.deepEqual(names, [
     'handoff', 'inbox',
     'resume-claude', 'resume-codex', 'resume-opencode', 'resume-zcode', 'resume-pi', 'resume-workbuddy',
     'resume-cursor', 'resume-grok', 'resume-gemini',
     'resume-kimi', 'resume-codebuddy', 'resume-qoder', 'resume-kiro',
+    'resume-copilot', 'resume-devin', 'resume-mimo', 'resume-aider', 'resume-cline', 'resume-continue',
   ])
   for (const reg of regs) {
     assert.equal(reg.source, 'bundled')
@@ -356,8 +360,8 @@ test('skill 注册面：/handoff /inbox + /resume-* 十三条，共 15 条', () 
   }
 })
 
-test('resume skill 内容：十三条共用模板，含 inert-history / 四态账本 / 六段 / verify / 寄存询问', () => {
-  assert.equal(RESUME_SKILL_SPECS.length, 13)
+test('resume skill 内容：十九条共用模板，含 inert-history / 四态账本 / 六段 / verify / 寄存询问', () => {
+  assert.equal(RESUME_SKILL_SPECS.length, 19)
   for (const spec of RESUME_SKILL_SPECS) {
     assert.ok(FOREIGN_PROVIDERS.includes(spec.provider))
     const content = resumeSkillContent(spec)
