@@ -3493,15 +3493,31 @@ export function apply(ctx: Context): void {
         },
       ), 'dsh-takeover: takeover composer chip')
       chipReady = true
+      ;(globalThis as { __tkRegLog?: string[] }).__tkRegLog?.push(String(new Date().toISOString().slice(11, 19)) + " chip-ok")
     } catch (e) {
       const msg = e instanceof Error ? (e.stack ?? e.message) : String(e)
+      ;(globalThis as { __tkRegLog?: string[] }).__tkRegLog?.push(String(new Date().toISOString().slice(11, 19)) + " chip-fail: " + msg.slice(0, 160))
       console.warn('[dsh-takeover] takeover chip registration failed; settings card keeps the work zones', e)
     }
   }
   const effectFn = (ctx as unknown as { effect?: (fn: () => void, label?: string) => void }).effect
+  // 座位声明时机跟随宿主 SPA 视图：welcome 态（session-maybe）不声明 session 座位，
+  // 进入会话视图才声明——固定 3s 单次重试会在 welcome 上失败后永不再试（0.25 真机
+  // 实测翻车点）。改为 5s 间隔重试直至成功（上限 24 次 ≈ 2 分钟，覆盖慢 SPA）。
   const registerChipWithRetry = (): void => {
     registerChip()
-    if (!chipReady) (globalThis as { setTimeout?: (fn: () => void, ms: number) => unknown }).setTimeout?.(() => registerChip(), 3000)
+    if (chipReady) return
+    let attempts = 1
+    const timer = (globalThis as { setInterval?: (fn: () => void, ms: number) => unknown }).setInterval?.(() => {
+      if (chipReady) {
+        ;(globalThis as { clearInterval?: (t: unknown) => unknown }).clearInterval?.(timer)
+        return
+      }
+      attempts += 1
+      registerChip()
+      if (chipReady || attempts >= 24) (globalThis as { clearInterval?: (t: unknown) => unknown }).clearInterval?.(timer)
+    }, 5000)
+    void attempts
   }
   if (typeof effectFn === 'function') {
     effectFn.call(ctx, registerChipWithRetry, 'dsh-takeover: takeover chip registration')
@@ -3509,7 +3525,14 @@ export function apply(ctx: Context): void {
     registerChipWithRetry()
   }
   ctx.slots.inject('settings.section', () => ctx.slots.register(
-    { name: 'settings.section', id: 'dsh-takeover', order: 42, label: 'dsh-takeover' },
+    {
+      name: 'settings.section',
+      id: 'dsh-takeover',
+      order: 42,
+      // rc.x 设置渲染器对 label 以函数形态调用取导航文案（对照 agent-preset）——
+      // 字符串形态会在渲染时抛错，整卡静默不渲染
+      label: () => makeT(ctx)('appTitle'),
+    },
     () => {
       const t = makeT(ctx)
       return createElement(PanelBoundary, {
