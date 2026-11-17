@@ -6,4 +6,4 @@
 # exports["./client"] 提供，不进本 patch。
 - insert:
     - id: dsh-takeover
-      name: dsh-takeover
+      name: '@cold777/dsh-takeover'

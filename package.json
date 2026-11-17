@@ -3,7 +3,7 @@
   "version": "0.25.0",
   "description": "会话接管插件：拉取二十三家外部 agent 会话（/resume-*）、把当前 DSH 会话按 handoff: 1 开放协议寄存进 ~/.handoff/pending/、开局取件接着干",
   "type": "module",
-  "main": "lib/index.js",
+  "main": "./lib/index.js",
   "types": "lib/index.d.ts",
   "exports": {
     ".": {
@@ -13,7 +13,9 @@
     "./cordis.yml": "./cordis.yml",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json",
-    "./client": "./lib/client.js"
+    "./client": {
+      "default": "./lib/client.js"
+    }
   },
   "files": [
     "lib/",

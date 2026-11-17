@@ -12,6 +12,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const OUT = join(ROOT, 'lib', 'client.js')
 // 版本徽标构建期注入——曾经硬编码在 client.ts 里，0.4.3→0.4.4 发版它还停在旧值
 const PKG_VERSION = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version
+const PKG_NAME = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).name
 
 const result = await build({
   entryPoints: [join(ROOT, 'src', 'client.ts')],
@@ -29,7 +30,7 @@ const result = await build({
 
 const code = result.outputFiles[0].text
 const wrapped = `window.__ModuleLoader__.load({
-\tid: "dsh-takeover",
+\tid: ${JSON.stringify(PKG_NAME)},
 \tfactory: (require) => {
 \t\tvar module = { exports: {} };
 \t\tvar exports = module.exports;
