@@ -6,6 +6,8 @@
  * - 恢复三段纪律：dry 预演（三态 diff）→ apply（checkpoint 先行）→ rollback 可逆
  * - 路径穿越硬闸（../ / 绝对路径 / 盘符）
  * - 范围容错（缺文件不算错）+ 黑名单目录（node_modules）不进包 + 修剪留 3
+ * - 升级保险快照（0.26.1）：首跑只记版本 / 版本变化才打且删旧自动份 / 相同 skip /
+ *   无口令 skip+原因且基线不推进 / 手动快照绝不被自动流程清 / 版本源不可读绝不误打
  */
 import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
@@ -14,16 +16,22 @@ import { dirname, join } from 'node:path'
 import test from 'node:test'
 import { parseCard, renderCard } from '@agent-handoff/core'
 import {
+  AUTO_UPGRADE_LABEL,
   applyRestore,
   collectScopeFiles,
   createBackup,
   dryRunRestore,
   envBackupDir,
+  envBackupStatePath,
   listBackups,
+  maybeAutoUpgradeSnapshot,
   pruneBackups,
   readBackupManifest,
+  readEnvBackupState,
+  resolveHostRuntimeVersion,
   rollbackRestore,
   validateRelPath,
+  writeEnvBackupState,
 } from '../src/envbackup.ts'
 import { inboxLoad, pushConfigCard } from '../src/tools.ts'
 
@@ -255,4 +263,224 @@ test('pushConfigCard round-trip：清单+指针成 axis=config/payload=manifest 
   } finally {
     rmRf(root); rmRf(home)
   }
+})
+
+// ---------- 升级保险快照（0.26.1）：宿主版本变化 → 自动 auto-upgrade 标签快照 ----------
+
+/** env-backup 目录全部文件名（原始名单，含标签件；目录缺失回 []） */
+function listAllBackupFiles(home: string): string[] {
+  const d = envBackupDir(home)
+  return existsSync(d) ? readdirSync(d) : []
+}
+
+/** env-backup 目录里的自动快照（auto-upgrade- 前缀）名单 */
+function autoFiles(home: string): string[] {
+  return listAllBackupFiles(home).filter((f) => f.startsWith(`${AUTO_UPGRADE_LABEL}-`))
+}
+
+test('升级快照·首跑：只记基线版本不打快照（无基线不折腾）', () => {
+  const root = fakeUserHome('up-a')
+  const home = mkdtempSync(join(tmpdir(), 'dsh-env-home-upa-'))
+  try {
+    const r = maybeAutoUpgradeSnapshot('0.2.2-rc.1', { dir: home, root, passphrase: PASS })
+    assert.deepEqual({ action: r.action, reason: r.reason }, { action: 'skipped', reason: 'first-run' })
+    // 基线落在 sync.json 的旁伴新键（envbackup-state.json，本机记录）
+    assert.equal(envBackupStatePath(home), join(home, 'envbackup-state.json'))
+    const state = readEnvBackupState(home)
+    assert.equal(state.lastHostVersion, '0.2.2-rc.1')
+    assert.ok(state.at !== undefined && state.at !== '', '基线记录时刻在场')
+    assert.equal(listAllBackupFiles(home).length, 0, '首跑不产生任何备份文件')
+  } finally {
+    rmRf(root); rmRf(home)
+  }
+})
+
+test('升级快照·版本变化：自动打 auto-upgrade 快照（可解密）+ 旧自动份被删；版本相同 skip', () => {
+  const root = fakeUserHome('up-b')
+  const home = mkdtempSync(join(tmpdir(), 'dsh-env-home-upb-'))
+  try {
+    // 首跑记 v1
+    maybeAutoUpgradeSnapshot('0.2.2-rc.1', { dir: home, root, passphrase: PASS })
+    // 预埋一份旧自动快照（老时间戳）——升级后必须被清（只留最近一份）
+    mkdirSync(envBackupDir(home), { recursive: true })
+    const oldAuto = 'auto-upgrade-20261118-0900-oldhost.dshenv'
+    writeFileSync(join(envBackupDir(home), oldAuto), 'stale-auto-not-a-real-pack', 'utf-8')
+    // v1 → v2：created
+    const r = maybeAutoUpgradeSnapshot('0.2.3-rc.1', { dir: home, root, passphrase: PASS })
+    assert.equal(r.action, 'created')
+    assert.match(r.file ?? '', /^auto-upgrade-\d{8}-\d{4}-/, '自动快照带 auto-upgrade- 标签前缀')
+    assert.equal(readEnvBackupState(home).lastHostVersion, '0.2.3-rc.1', '成功才推进基线')
+    const autos = autoFiles(home)
+    assert.equal(autos.length, 1, '只留最近一份自动快照')
+    assert.equal(autos[0], r.file)
+    assert.ok(!autos.includes(oldAuto), '旧自动份已被删')
+    // 自动快照是真备份：口令可解密，全家桶清单齐全
+    const m = readBackupManifest(r.file ?? '', PASS, home)
+    assert.ok(m.files.length >= 8, `自动快照清单齐全：${m.files.length}`)
+    assert.equal(m.secretCount, 3)
+    // v2 → v3 再升一次：仍是 created，仍只有一份自动快照。同分钟内连升两回会得到同名
+    // 文件（时间戳+主机名相同）——覆盖即「最近一份」，保留不变式照样成立；用范围内容
+    // 变化证明存留的是新一轮的包（旧内容让位）。
+    mkdirSync(join(root, '.dsh'), { recursive: true })
+    writeFileSync(join(root, '.dsh', 'mystery-root.json'), 'cycle2-marker', 'utf-8')
+    const r2 = maybeAutoUpgradeSnapshot('0.2.4-rc.1', { dir: home, root, passphrase: PASS })
+    assert.equal(r2.action, 'created')
+    assert.equal(autoFiles(home).length, 1, '第二轮升级后仍只留最近一份')
+    const m2 = readBackupManifest(autoFiles(home)[0] ?? '', PASS, home)
+    assert.ok(m2.files.some((f) => f.path === '.dsh/mystery-root.json'), '存留自动份是新一轮内容（旧份已让位）')
+    // 版本相同：same，不新增文件
+    const n = listAllBackupFiles(home).length
+    const r3 = maybeAutoUpgradeSnapshot('0.2.4-rc.1', { dir: home, root, passphrase: PASS })
+    assert.deepEqual({ action: r3.action, reason: r3.reason }, { action: 'same', reason: undefined })
+    assert.equal(listAllBackupFiles(home).length, n, 'same 不动任何文件')
+  } finally {
+    rmRf(root); rmRf(home)
+  }
+})
+
+test('升级快照·无口令：skip + 原因，基线不推进（口令就位后补打）——绝不新增交互', () => {
+  const root = fakeUserHome('up-c')
+  const home = mkdtempSync(join(tmpdir(), 'dsh-env-home-upc-'))
+  try {
+    maybeAutoUpgradeSnapshot('0.2.2-rc.1', { dir: home, root, passphrase: PASS })
+    // v1 → v2 但无已存口令：skip + 原因；基线仍是 v1（升级事件保持待办）
+    for (const pass of [undefined, '', 'short']) {
+      const r = maybeAutoUpgradeSnapshot('0.2.3-rc.1', { dir: home, root, passphrase: pass })
+      assert.deepEqual({ action: r.action, reason: r.reason }, { action: 'skipped', reason: 'no-passphrase' })
+      assert.equal(readEnvBackupState(home).lastHostVersion, '0.2.2-rc.1', '无口令 skip 不推进基线')
+    }
+    assert.equal(autoFiles(home).length, 0, '无口令绝不打快照')
+    // 口令就位：同一次升级（v1 基线仍在）补打成功
+    const r = maybeAutoUpgradeSnapshot('0.2.3-rc.1', { dir: home, root, passphrase: PASS })
+    assert.equal(r.action, 'created')
+    assert.equal(readEnvBackupState(home).lastHostVersion, '0.2.3-rc.1')
+  } finally {
+    rmRf(root); rmRf(home)
+  }
+})
+
+test('升级快照·手动快照不被清：3 份手动备份原样保留，自动份独立只留一份', () => {
+  const root = fakeUserHome('up-d')
+  const home = mkdtempSync(join(tmpdir(), 'dsh-env-home-upd-'))
+  try {
+    maybeAutoUpgradeSnapshot('0.2.2-rc.1', { dir: home, root, passphrase: PASS })
+    // 预埋 3 份手动备份（不同时间戳；内容原样不动即「不被清」的判据）
+    mkdirSync(envBackupDir(home), { recursive: true })
+    const manuals = ['20261101-0000-manual-a.dshenv', '20261102-0000-manual-b.dshenv', '20261103-0000-manual-c.dshenv']
+    for (const f of manuals) writeFileSync(join(envBackupDir(home), f), `manual-${f}`, 'utf-8')
+    // 升级打自动快照
+    const r = maybeAutoUpgradeSnapshot('0.2.3-rc.1', { dir: home, root, passphrase: PASS })
+    assert.equal(r.action, 'created')
+    const after = listAllBackupFiles(home)
+    for (const f of manuals) {
+      assert.ok(after.includes(f), `手动备份 ${f} 未被自动流程清掉`)
+      assert.equal(readFileSync(join(envBackupDir(home), f), 'utf-8'), `manual-${f}`, '手动备份内容原样')
+    }
+    assert.equal(autoFiles(home).length, 1, '自动快照独立保留策略：只留最近一份')
+  } finally {
+    rmRf(root); rmRf(home)
+  }
+})
+
+test('升级快照·版本源不可读：skipped + 原因，绝不误打、基线不记不动', () => {
+  const root = fakeUserHome('up-e')
+  const home = mkdtempSync(join(tmpdir(), 'dsh-env-home-upe-'))
+  try {
+    // 首跑遇不可读：连基线都不记（不折腾）
+    for (const bad of [null, undefined, '', '   '] as Array<string | null | undefined>) {
+      const r = maybeAutoUpgradeSnapshot(bad, { dir: home, root, passphrase: PASS })
+      assert.deepEqual({ action: r.action, reason: r.reason }, { action: 'skipped', reason: 'host-version-unreadable' })
+    }
+    assert.equal(existsSync(envBackupStatePath(home)), false, '不可读时不记基线')
+    assert.equal(listAllBackupFiles(home).length, 0, '不可读时绝不误打')
+    // 已有基线遇不可读：基线原样、快照不打
+    writeEnvBackupState({ lastHostVersion: '0.2.2-rc.1' }, home)
+    const r = maybeAutoUpgradeSnapshot(null, { dir: home, root, passphrase: PASS })
+    assert.deepEqual({ action: r.action, reason: r.reason }, { action: 'skipped', reason: 'host-version-unreadable' })
+    assert.equal(readEnvBackupState(home).lastHostVersion, '0.2.2-rc.1')
+    assert.equal(listAllBackupFiles(home).length, 0)
+  } finally {
+    rmRf(root); rmRf(home)
+  }
+})
+
+test('升级快照·备份失败：skipped + 原因，基线不推进（下次启动重试，不烧掉升级事件）', () => {
+  const root = fakeUserHome('up-f')
+  const home = mkdtempSync(join(tmpdir(), 'dsh-env-home-upf-'))
+  const empty = mkdtempSync(join(tmpdir(), 'dsh-env-emptyf-'))
+  try {
+    maybeAutoUpgradeSnapshot('0.2.2-rc.1', { dir: home, root, passphrase: PASS })
+    // v1 → v2 但备份范围空（全家桶未安装）：backup-failed，基线不推进、不留半成品
+    const r = maybeAutoUpgradeSnapshot('0.2.3-rc.1', { dir: home, root: empty, passphrase: PASS })
+    assert.deepEqual({ action: r.action, reason: r.reason }, { action: 'skipped', reason: 'backup-failed' })
+    assert.match(r.detail ?? '', /没有找到任何文件/)
+    assert.equal(readEnvBackupState(home).lastHostVersion, '0.2.2-rc.1')
+    assert.equal(autoFiles(home).length, 0)
+    // 恢复正常范围：同一升级事件重试成功
+    const r2 = maybeAutoUpgradeSnapshot('0.2.3-rc.1', { dir: home, root, passphrase: PASS })
+    assert.equal(r2.action, 'created')
+    assert.equal(readEnvBackupState(home).lastHostVersion, '0.2.3-rc.1')
+  } finally {
+    rmRf(root); rmRf(home); rmRf(empty)
+  }
+})
+
+test('升级快照·基线文件损坏：fail-open 按首跑重记（不打快照不误删），warn 不抛', () => {
+  const root = fakeUserHome('up-g')
+  const home = mkdtempSync(join(tmpdir(), 'dsh-env-home-upg-'))
+  try {
+    mkdirSync(home, { recursive: true })
+    writeFileSync(envBackupStatePath(home), '{broken json', 'utf-8')
+    assert.deepEqual(readEnvBackupState(home), {})
+    const r = maybeAutoUpgradeSnapshot('0.2.2-rc.1', { dir: home, root, passphrase: PASS })
+    assert.deepEqual({ action: r.action, reason: r.reason }, { action: 'skipped', reason: 'first-run' })
+    assert.equal(readEnvBackupState(home).lastHostVersion, '0.2.2-rc.1', '损坏后重记基线')
+    assert.equal(listAllBackupFiles(home).length, 0)
+  } finally {
+    rmRf(root); rmRf(home)
+  }
+})
+
+test('listBackups：标签件时间戳从首个时间戳段提取，排序按时间新→旧（标签不压过更新的手动份）', () => {
+  const home = mkdtempSync(join(tmpdir(), 'dsh-env-home-lb-'))
+  try {
+    mkdirSync(envBackupDir(home), { recursive: true })
+    for (const f of ['20261101-0000-a.dshenv', 'auto-upgrade-20261115-0900-x.dshenv', '20261110-0000-b.dshenv']) {
+      writeFileSync(join(envBackupDir(home), f), 'x', 'utf-8')
+    }
+    const rows = listBackups(home)
+    assert.deepEqual(rows.map((r) => r.file), [
+      'auto-upgrade-20261115-0900-x.dshenv',
+      '20261110-0000-b.dshenv',
+      '20261101-0000-a.dshenv',
+    ], '按内嵌时间戳新→旧')
+    assert.equal(rows[0]!.at, '20261115-0900', '标签件的 at 是时间戳，不是前缀')
+    assert.equal(rows[2]!.at, '20261101-0000')
+    // 无标签件时行为与旧口径一致（文件名字典序=时间序）
+    rmSync(join(envBackupDir(home), 'auto-upgrade-20261115-0900-x.dshenv'), { force: true })
+    assert.deepEqual(listBackups(home).map((r) => r.file), ['20261110-0000-b.dshenv', '20261101-0000-a.dshenv'])
+  } finally {
+    rmRf(home)
+  }
+})
+
+test('createBackup 标签闸：非法标签拒收（路径字符/大写/下划线），合法标签件带前缀且手动修剪口径不变', () => {
+  const root = fakeUserHome('up-h')
+  const home = mkdtempSync(join(tmpdir(), 'dsh-env-home-uph-'))
+  try {
+    assert.throws(() => createBackup(PASS, home, root, '../evil'), /标签不合法/)
+    assert.throws(() => createBackup(PASS, home, root, 'Auto_X'), /标签不合法/)
+    const r = createBackup(PASS, home, root, AUTO_UPGRADE_LABEL)
+    assert.match(r.file, /^auto-upgrade-\d{8}-\d{4}-/)
+    assert.match(r.detail, /手动备份未动/)
+  } finally {
+    rmRf(root); rmRf(home)
+  }
+})
+
+test('resolveHostRuntimeVersion：宿主外环境（缺 @deepseek-ai/dsh-app-boot）诚实降级为 null', async () => {
+  // 本仓 node_modules 无宿主 app-boot 包（真机由宿主 node_modules 提供）——缺席即 null，
+  // 调用方拿到 null 传 maybeAutoUpgradeSnapshot 即 skipped（绝不误打）。正路径由真机验证。
+  const v = await resolveHostRuntimeVersion()
+  assert.equal(v, null)
 })

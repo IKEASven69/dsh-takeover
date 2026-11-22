@@ -14,6 +14,9 @@
  * 容器格式（纯 node，无子进程——没有 tar 就没有 tar-slip 面）：
  *   MAGIC 'DSHENV1' | salt(16) | iv(12) | tag(16) |
  *   密文 = manifestLen(u32 LE) + manifest JSON（{files:[{path,bytes,sha256,category}],...}）+ blobs
+ *
+ * 升级保险快照（0.26.1）：宿主版本变化 → 自动打 auto-upgrade- 标签快照（只留最近一份，
+ * 手动备份不动；口令由调用方既有机制注入，无口令即 skip + 原因，绝不新增交互、绝不误打）。
  */
 import { createCipheriv, createDecipheriv, createHash, randomBytes, scryptSync } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
@@ -264,7 +267,14 @@ export type BackupRow = {
   at: string
 }
 
-/** 列备份文件（只读目录，不解密） */
+/** 文件名内嵌时间戳（yyyyMMdd-HHMM）：标签前缀件（auto-upgrade-20261119-1234-host）也从首个时间戳段提取 */
+function stampOfFileName(f: string): string {
+  const m = /\d{8}-\d{4}/.exec(f)
+  return m?.[0] ?? f.slice(0, 13)
+}
+
+/** 列备份文件（只读目录，不解密）。按内嵌时间戳新→旧排：标签件（auto-upgrade-*）不因
+ * 前缀字典序压过更新的手动备份——缺省取「最近一次」的路径（configinject / 配置轴出卡）口径不失真 */
 export function listBackups(dir?: string): BackupRow[] {
   const d = envBackupDir(dir)
   if (!existsSync(d)) return []
@@ -272,10 +282,10 @@ export function listBackups(dir?: string): BackupRow[] {
   for (const f of readdirSync(d)) {
     if (!f.endsWith('.dshenv')) continue
     try {
-      rows.push({ file: f, bytes: statSync(join(d, f)).size, at: f.slice(0, 13) })
+      rows.push({ file: f, bytes: statSync(join(d, f)).size, at: stampOfFileName(f) })
     } catch { /* 尽力 */ }
   }
-  return rows.sort((a, b) => b.file.localeCompare(a.file))
+  return rows.sort((a, b) => b.at.localeCompare(a.at) || b.file.localeCompare(a.file))
 }
 
 /** 只保留最新 N 个备份（换机仓库不被备份史撑爆） */
@@ -377,11 +387,44 @@ export interface BackupResult {
   detail: string
 }
 
-/** 立即备份：收集 → 加密 → 落 env-backup/ → 修剪留 3 */
-export function createBackup(passphrase: string, dir?: string, root?: string): BackupResult {
+/** 备份标签 → 文件名前缀：只允许小写字母/数字/连字符（≤32 字符），保证文件名安全；空/缺省回 '' */
+function normalizeBackupLabel(label?: string): string {
+  if (label === undefined || label.trim() === '') return ''
+  const clean = label.trim().toLowerCase()
+  if (!/^[a-z0-9][a-z0-9-]{0,31}$/.test(clean)) {
+    throw new Error(`备份标签不合法（只允许小写字母/数字/连字符，≤32 字符）：${label}`)
+  }
+  return `${clean}-`
+}
+
+/** 只保留某标签最近 N 个备份（文件名字典序=时间序）；只动同标签件——手动备份与其它标签件不受影响 */
+function pruneLabeled(labelPrefix: string, keep: number, dir?: string): number {
+  const d = envBackupDir(dir)
+  if (!existsSync(d)) return 0
+  const rows = readdirSync(d).filter((f) => f.endsWith('.dshenv') && f.startsWith(labelPrefix)).sort()
+  let pruned = 0
+  while (rows.length > keep) {
+    const victim = rows.shift()
+    if (victim === undefined) break
+    try {
+      rmSync(join(d, victim), { force: true })
+      pruned += 1
+    } catch { break }
+  }
+  return pruned
+}
+
+/**
+ * 立即备份：收集 → 加密 → 落 env-backup/ → 修剪。
+ * 无标签 = 手动备份语义（全局留 3，同现有口径不变）；
+ * 带标签（如 auto-upgrade）= 标记快照语义：文件名带前缀、只留该标签最近 1 份、
+ * 全局 keep-3 不跑——自动快照绝不挤掉手动备份。
+ */
+export function createBackup(passphrase: string, dir?: string, root?: string, label?: string): BackupResult {
   if (typeof passphrase !== 'string' || passphrase.length < 8) {
     throw new Error('口令至少 8 位（它保护凭据类文件，且永不落盘——忘了就救不回备份）')
   }
+  const prefix = normalizeBackupLabel(label)
   const userHome = root ?? homedir()
   const files = collectScopeFiles(root)
   if (files.length === 0) throw new Error('备份范围内没有找到任何文件（全家桶未安装？）')
@@ -389,9 +432,9 @@ export function createBackup(passphrase: string, dir?: string, root?: string): B
   const d = envBackupDir(dir)
   mkdirSync(d, { recursive: true })
   const stamp = new Date().toISOString().slice(0, 16).replace(/[-:]/g, '').replace('T', '-')
-  const file = `${stamp}-${manifest.host}.dshenv`
+  const file = `${prefix}${stamp}-${manifest.host}.dshenv`
   writeFileSync(join(d, file), buf)
-  const pruned = pruneBackups(3, dir)
+  const pruned = prefix === '' ? pruneBackups(3, dir) : pruneLabeled(prefix, 1, dir)
   return {
     ok: true,
     file,
@@ -399,7 +442,9 @@ export function createBackup(passphrase: string, dir?: string, root?: string): B
     files: manifest.files.length,
     secretCount: manifest.secretCount,
     secretHits: manifest.secretHits,
-    detail: `已备份 ${manifest.files.length} 个文件（${(buf.length / 1024 / 1024).toFixed(1)} MB，含凭据类 ${manifest.secretCount} 个${manifest.secretHits > 0 ? `；配置扫描疑似密钥 ${manifest.secretHits} 处` : ''}）——包已 AES-256-GCM 加密，口令未落盘${pruned > 0 ? `；已修剪 ${pruned} 个旧备份（保留 3 个）` : ''}`,
+    detail: prefix === ''
+      ? `已备份 ${manifest.files.length} 个文件（${(buf.length / 1024 / 1024).toFixed(1)} MB，含凭据类 ${manifest.secretCount} 个${manifest.secretHits > 0 ? `；配置扫描疑似密钥 ${manifest.secretHits} 处` : ''}）——包已 AES-256-GCM 加密，口令未落盘${pruned > 0 ? `；已修剪 ${pruned} 个旧备份（保留 3 个）` : ''}`
+      : `已打标记快照 ${file}（${manifest.files.length} 个文件，${(buf.length / 1024 / 1024).toFixed(1)} MB，含凭据类 ${manifest.secretCount} 个）——标签 ${prefix.replace(/-$/, '')} 只留最近 1 份${pruned > 0 ? `（本次修剪 ${pruned} 个旧份）` : ''}，手动备份未动；口令未落盘`,
   }
 }
 
@@ -549,4 +594,143 @@ export function rollbackRestore(checkpointDir: string, dir?: string, root?: stri
     restored += 1
   }
   return { ok: true, restored, detail: `已回滚 ${restored} 个文件到还原前状态（${base}）` }
+}
+
+// ---------- 升级保险快照（0.26.1：宿主版本变化 → 自动打环境保险快照） ----------
+//
+// 触发器语义（需求调研 undo-savepoint 借鉴）：宿主升级是环境漂移的最大单点，升级前
+// 留一份可回退的加密快照，升级搞坏了才有得救。纪律（fail-open + 诚实三态）：
+// - 首跑只记基线版本不打快照（无基线不折腾）；
+// - 口令复用调用方既有已存口令机制注入（opts.passphrase）——本模块绝不新增交互、
+//   绝不把口令落盘（THREAT-MODEL T7：口令永不落盘）；无已存口令 = 诚实 skip 且不推进
+//   基线（升级事件保持待办，口令就位后下次启动补打真正的保险）；
+// - 自动快照带 auto-upgrade- 文件名标签，独立保留策略 = 只留最近一份；手动备份绝不动；
+// - 宿主版本源不可读 = skipped + 原因，绝不误打。
+// 调用方（服务器启动接线）自行与 env-backup 写队列串行，避免与手动备份并发写目录。
+
+/** 升级保险快照的文件名标签（前缀 auto-upgrade-；独立保留策略只认这个前缀） */
+export const AUTO_UPGRADE_LABEL = 'auto-upgrade'
+
+/** 宿主版本基线文件：sync.json 的旁伴新键。本机记录、不随换机同步分发（各机升级节奏
+ * 不同；不入 sync.ts SYNC_PATHS 白名单——勿加，加了会让 B 机继承 A 机的版本基线）。 */
+export function envBackupStatePath(dir?: string): string {
+  return join(resolveHome(dir), 'envbackup-state.json')
+}
+
+export interface EnvBackupStateFile {
+  /** 上次见到的宿主运行时版本；缺失 = 首跑（无基线） */
+  lastHostVersion?: string
+  /** 基线记录时刻（ISO） */
+  at?: string
+}
+
+/** 读版本基线：文件缺失/损坏 fail-open 回空（= 首跑重记基线，不打快照不误删），损坏必 console.warn */
+export function readEnvBackupState(dir?: string): EnvBackupStateFile {
+  const p = envBackupStatePath(dir)
+  if (!existsSync(p)) return {}
+  try {
+    const raw = JSON.parse(readFileSync(p, 'utf-8')) as unknown
+    if (raw === null || typeof raw !== 'object') return {}
+    const rec = raw as Record<string, unknown>
+    return {
+      lastHostVersion: typeof rec['lastHostVersion'] === 'string' ? rec['lastHostVersion'] : undefined,
+      at: typeof rec['at'] === 'string' ? rec['at'] : undefined,
+    }
+  } catch (e) {
+    console.warn(`[dsh-takeover] envbackup-state.json 损坏，按首跑处理：${e instanceof Error ? e.message : String(e)}`)
+    return {}
+  }
+}
+
+/** 写版本基线：tmp + rename 原子替换（saveSyncState 同模板）；尽力而为——失败不抛出
+ * 不清盘，最坏后果是下次启动重记/重打一份（保留策略只留最近一份，自愈）。 */
+export function writeEnvBackupState(state: EnvBackupStateFile, dir?: string): void {
+  const next = { ...state, at: new Date().toISOString() }
+  const target = envBackupStatePath(dir)
+  const tmp = `${target}.${process.pid}.tmp`
+  try {
+    writeFileSync(tmp, JSON.stringify(next, null, 2) + '\n', 'utf-8')
+    renameSync(tmp, target)
+  } catch {
+    try { rmSync(tmp, { force: true }) } catch { /* 尽力清临时件 */ }
+  }
+}
+
+/**
+ * 宿主运行时版本源（勘察结论）：`@deepseek-ai/dsh-app-boot` 的 getDshRuntimeVersion()——
+ * 读当前加载的 app-boot 包自身 package.json 的 version，与宿主插件兼容闸（engines.dsh）
+ * 对比的是同一个值，随宿主升级自动前进。懒加载 + 运行时拼接 specifier（防打包器把
+ * 可选宿主包当静态依赖解析成硬依赖）；任何一步不可达回 null——调用方把 null 传给
+ * maybeAutoUpgradeSnapshot 即 skipped，绝不误打。
+ */
+export async function resolveHostRuntimeVersion(): Promise<string | null> {
+  try {
+    const specifier = ['@deepseek-ai', 'dsh-app-boot'].join('/')
+    const mod = (await import(specifier)) as { getDshRuntimeVersion?: () => unknown }
+    const v = typeof mod.getDshRuntimeVersion === 'function' ? mod.getDshRuntimeVersion() : null
+    return typeof v === 'string' && v.trim() !== '' ? v.trim() : null
+  } catch {
+    return null // 宿主外环境（测试 / 缺包 profile）：诚实降级为不可读
+  }
+}
+
+export interface AutoUpgradeSnapshotOpts {
+  /** HANDOFF_HOME（版本基线文件与 env-backup/ 所在；缺省 ~/.handoff） */
+  dir?: string
+  /** 备份范围根（user home），透传 createBackup */
+  root?: string
+  /** 调用方既有已存口令机制注入的口令（≥8 位）；缺失/过短 = skip（绝不新增交互、绝不落盘） */
+  passphrase?: string
+}
+
+/** 三态返回：created=打了快照 / same=版本没变 / skipped=没打（reason 给机器可读原因，detail 给人看） */
+export type AutoUpgradeSnapshotValue = {
+  action: 'created' | 'same' | 'skipped'
+  reason?: string
+  file?: string
+  bytes?: number
+  detail?: string
+}
+
+/**
+ * 宿主版本变化 → 自动打升级保险快照（启动时接线调用，不新增任何交互）：
+ * 1. 版本源不可读（null/空）→ skipped('host-version-unreadable')，基线不动、快照不打；
+ * 2. 首跑（无基线）→ 只记版本，skipped('first-run')——无基线不折腾；
+ * 3. 版本相同 → same，什么都不做；
+ * 4. 版本变化 + 无已存口令 → skipped('no-passphrase') 且基线不推进（事件保持待办）；
+ * 5. 版本变化 + 有口令 → createBackup(auto-upgrade 标签)，成功才推进基线并返回 created；
+ *    失败 → skipped('backup-failed') 基线不推进（下次启动重试）。
+ * 保留策略：自动快照只留最近一份（标签内修剪），手动备份绝不被自动流程动。
+ */
+export function maybeAutoUpgradeSnapshot(hostVersion: string | null | undefined, opts?: AutoUpgradeSnapshotOpts): AutoUpgradeSnapshotValue {
+  const version = typeof hostVersion === 'string' ? hostVersion.trim() : ''
+  if (version === '') {
+    return { action: 'skipped', reason: 'host-version-unreadable', detail: '宿主版本源不可读——基线不记、快照不打（绝不误打）' }
+  }
+  const dir = opts?.dir
+  const prev = readEnvBackupState(dir).lastHostVersion ?? ''
+  if (prev === '') {
+    writeEnvBackupState({ lastHostVersion: version }, dir)
+    return { action: 'skipped', reason: 'first-run', detail: `首跑只记基线版本 ${version}，不打快照（无基线不折腾）` }
+  }
+  if (prev === version) {
+    return { action: 'same', detail: `宿主版本未变（${version}），无需快照` }
+  }
+  const passphrase = opts?.passphrase
+  if (typeof passphrase !== 'string' || passphrase.length < 8) {
+    return { action: 'skipped', reason: 'no-passphrase', detail: `宿主版本 ${prev} → ${version}，但无已存口令（≥8 位）——不打快照，基线不推进（口令就位后下次启动补打）` }
+  }
+  let r: BackupResult
+  try {
+    r = createBackup(passphrase, dir, opts?.root, AUTO_UPGRADE_LABEL)
+  } catch (e) {
+    return { action: 'skipped', reason: 'backup-failed', detail: `宿主版本 ${prev} → ${version}，自动快照失败（基线不推进，下次启动重试）：${e instanceof Error ? e.message : String(e)}` }
+  }
+  writeEnvBackupState({ lastHostVersion: version }, dir)
+  return {
+    action: 'created',
+    file: r.file,
+    bytes: r.bytes,
+    detail: `宿主版本 ${prev} → ${version}，已自动打升级保险快照：${r.file}（${r.files} 个文件）——自动快照只留最近一份，手动备份未动`,
+  }
 }
