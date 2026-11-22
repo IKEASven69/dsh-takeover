@@ -303,3 +303,20 @@ test('孤儿伴生文件 · gzip 单块/分块补丁同享活性判据清扫；d
     rmSync(home, { recursive: true, force: true })
   }
 })
+
+test('dismissPending：0.26 蒸馏侧车 <id>.hippo.jsonl 随卡同搬 archived（§5.1③ 固定扩展名枚举扩展钉）', async () => {
+  const { dismissPending } = await import('../src/settings.ts')
+  const home = freshHome()
+  try {
+    const liveId = 'ho-hippo-sidecar-live'
+    placeCard(home, liveId)
+    writeFileSync(join(home, 'pending', `${liveId}.hippo.jsonl`), `{"id":1}${'\n'}`, 'utf-8')
+    const d = dismissPending(liveId, home)
+    assert.equal(d.ok, true)
+    assert.equal(d.moved, 2, '.md + .hippo.jsonl 应全搬')
+    assert.ok(existsSync(join(home, 'archived', `${liveId}.hippo.jsonl`)), '侧车随卡进 archived（dismiss 后补吸收拿得到侧车）')
+    assert.deepEqual(readdirSync(join(home, 'pending')).filter((f) => f.startsWith(liveId)), [])
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})

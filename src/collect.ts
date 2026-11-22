@@ -73,6 +73,11 @@ const COMMAND_TOOLS = new Set(['bash', 'shell', 'run_command'])
 /**
  * 探测会话事件流：优先 session.snapshotEvents()（dsh-session 正式 API），
  * 退回 session.events 数组（dsh-handoff 探测过的形态），再退回降级。
+ * 0.26 probe 接线补口（与 contexthealth.ts 同源 bug 同款改法）：snapshotEvents 的
+ * 默认参数读 `this.seq`（dsh-session lib/index.js:1454）——解绑裸调用丢 this 在真机
+ * Session（0.2.2-rc.1 装机实测）必抛，解绑失败后以 session 为接收者做一次绑定重试
+ * （官方 API 的正确调用形态）。合成桩箭头函数形态在解绑跳已成功，不进重试；
+ * 全链 typeof 防御 + fail-open 分级不变。
  */
 export function probeSessionEvents(session: unknown): ProbeResult {
   if (session === null || session === undefined || typeof session !== 'object') {
@@ -84,7 +89,13 @@ export function probeSessionEvents(session: unknown): ProbeResult {
       const out = (s['snapshotEvents'] as () => unknown)()
       if (Array.isArray(out)) return { events: out, skipped: false, note: '' }
     } catch {
-      // 快照失败继续试 events 字段
+      // 解绑快照失败（真机常态：默认参数 this.seq 必抛）→ 绑定重试
+    }
+    try {
+      const out = (s['snapshotEvents'] as (this: unknown) => unknown).call(s)
+      if (Array.isArray(out)) return { events: out, skipped: false, note: '' }
+    } catch {
+      // 绑定也失败 → 落 events 字段兜底
     }
   }
   const events = s['events']

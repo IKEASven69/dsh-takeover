@@ -47,6 +47,15 @@ import {
   type TaskSnapshot,
 } from '@agent-handoff/core'
 import { collectFacts, probeSessionEvents, todoToTasks, type SessionFacts } from './collect.ts'
+// 0.26 集成接线（计划 §5.1）：接力体检 / 上下文预警 / 记忆蒸馏 / 延续回执。
+// receipt.ts 反向 import 本模块的 pushHandoff（ESM 晚绑定：其模块体不调用，取件热路径才用），
+// 本模块顶层 import receipt.ts 构成环——ESM 循环下函数级引用安全（tsdown 打包同先例 relay-records）。
+import { runFlightcheckSafe, type FlightcheckResult } from './flightcheck.ts'
+import { probeContexthealth, type ContexthealthReport } from './contexthealth.ts'
+import { consumeDistillSidecar, produceSnapshot } from './distill.ts'
+import { generateReceiptCard } from './receipt.ts'
+// 0.26 扩展波接线（triage）：置顶 / 弃置恢复 / 正文过滤——handoff_inbox 的既有工具位扩展
+import { restoreFromArchived, searchInbox, setPin, unsetPin, type InboxSearchResult } from './inboxtriage.ts'
 
 // ---------------------------------------------------------------------------
 // 共享收件箱的输入净化与上限：卡片正文/段落是外来输入，落盘后被 list/state
@@ -474,11 +483,17 @@ function consumePatch(id: string, dir?: string): RestoredPatch | undefined {
 
 /** 渲染：execute 返回规范值对象，render 包成中文 text block（导出仅为单测） */
 export function renderPush(_args: unknown, value: unknown): Array<{ type: 'text'; text: string }> {
-  const v = value as { ok?: boolean; id?: string; path?: string; skipped?: boolean; note?: string; coverage?: unknown; error?: unknown }
+  const v = value as { ok?: boolean; id?: string; path?: string; skipped?: boolean; note?: string; coverage?: unknown; contextHealth?: ContexthealthReport; error?: unknown }
   if (v?.ok === true) {
     const lines = [`✅ 交接卡片已寄存：${v.id ?? ''}`, `路径：${v.path ?? ''}`]
     const coverageLine = renderCoverageLine(v.coverage)
     if (coverageLine !== null) lines.push(coverageLine)
+    // 上下文预警旁证（0.26）：仅在探出 warn/critical 时随结果带出——写侧如实提醒
+    const ch = v.contextHealth
+    if (ch !== null && typeof ch === 'object') {
+      if (ch.level === 'critical') lines.push(`🚨 上下文预警（critical）：${ch.basis}`)
+      else if (ch.level === 'warn') lines.push(`⚠️ 上下文预警（warn）：${ch.basis}`)
+    }
     if (typeof v.note === 'string' && v.note !== '') lines.push(`⚠️ ${v.note}`)
     lines.push('任何 agent 可用 handoff_inbox（或 /inbox）取件。')
     return [{ type: 'text', text: lines.join('\n') }]
@@ -490,7 +505,7 @@ export function renderInbox(_args: unknown, value: unknown): Array<{ type: 'text
   const v = value as {
     ok?: boolean
     action?: string
-    cards?: Array<{ id: string; from?: string; title?: string; project?: string; pushed_at: string; stopped?: string; supersedes?: string }>
+    cards?: Array<{ id: string; from?: string; title?: string; project?: string; pushed_at: string; stopped?: string; supersedes?: string; receiptFor?: string }>
     total?: number
     skipped?: number
     text?: string
@@ -509,10 +524,42 @@ export function renderInbox(_args: unknown, value: unknown): Array<{ type: 'text
     supersedes?: string
     crossOS?: { source: string; local: string }
     baseline?: RepoBaseline
+    hippoPath?: string
+    hippoWarn?: string
+    receiptNote?: string
+    id?: string
+    moved?: number
+    query?: string
+    includeBody?: boolean
+    scanned?: number
+    skippedOversize?: string[]
+    hits?: Array<{ id: string; agent: string; title: string; project: string; where: 'meta' | 'body' | 'meta+body'; lines: string[] }>
     error?: unknown
   }
   if (v?.ok !== true) {
     return [{ type: 'text', text: `❌ 收件箱操作失败：${typeof v?.error === 'string' ? v.error : JSON.stringify(v?.error)}` }]
+  }
+  // 0.26 triage 接线：置顶/取消置顶/弃置恢复的渲染面（幂等本机视图动作，一句话回执）
+  if (v.action === 'pin') {
+    return [{ type: 'text', text: `📌 已置顶：${v.id ?? ''}（收件箱列表置顶展示；卡被取件或弃置后置顶自动失效，不报错）` }]
+  }
+  if (v.action === 'unpin') {
+    return [{ type: 'text', text: `已取消置顶：${v.id ?? ''}` }]
+  }
+  if (v.action === 'restore') {
+    return [{ type: 'text', text: `♻️ 已从 archived 搬回 pending：${v.id ?? ''}（${v.moved ?? 0} 份随卡文件）——重新可取件` }]
+  }
+  if (v.action === 'search') {
+    const hits = v.hits ?? []
+    const head = `🔍 收件箱检索「${v.query ?? ''}」${v.includeBody === true ? '（含正文）' : ''}：命中 ${hits.length} 张 / 扫描 ${v.scanned ?? 0} 张`
+    const lines = hits.map((h, i) => {
+      const where = h.where === 'meta' ? '元字段' : h.where === 'body' ? '正文' : '元字段+正文'
+      const line = `${i + 1}. ${h.id}｜${h.title || '（无标题）'}｜${h.project || '（无项目）'}｜命中面 ${where}`
+      return h.lines.length > 0 ? `${line}\n   ${h.lines.slice(0, 3).join('\n   ')}` : line
+    })
+    const notes: string[] = []
+    if ((v.skippedOversize?.length ?? 0) > 0) notes.push(`⚠️ 超尺寸卡未进正文扫描面：${v.skippedOversize?.join('、')}（元字段照扫）`)
+    return [{ type: 'text', text: [head, ...lines, ...notes].join('\n') }]
   }
   if (v.action === 'list') {
     const cards = v.cards ?? []
@@ -528,7 +575,7 @@ export function renderInbox(_args: unknown, value: unknown): Array<{ type: 'text
     const cards = v.cards ?? []
     if (cards.length === 0) return [{ type: 'text', text: '🗂️ 卡链历史为空（archived/ 无匹配卡——用 project / cwd 缩小或放宽过滤）' }]
     const lines = cards.map((c, i) =>
-      `${i + 1}. ${c.id}｜${c.title || '（无标题）'}｜${c.pushed_at || '（无时间）'}${typeof c.supersedes === 'string' && c.supersedes !== '' ? `｜接替 ${c.supersedes}` : ''}\n   停在：${c.stopped || '（无停点记录）'}`,
+      `${i + 1}. ${c.id}｜${c.title || '（无标题）'}｜${c.pushed_at || '（无时间）'}${typeof c.supersedes === 'string' && c.supersedes !== '' ? `｜接替 ${c.supersedes}` : ''}${typeof c.receiptFor === 'string' && c.receiptFor !== '' ? `｜延续回执（为 ${c.receiptFor}）` : ''}\n   停在：${c.stopped || '（无停点记录）'}`,
     )
     const total = typeof v.total === 'number' ? v.total : cards.length
     return [{ type: 'text', text: `🕘 卡链历史（archived/ 匹配 ${total} 张，时间正序取尾 ${cards.length} 张）：\n${lines.join('\n')}` }]
@@ -558,6 +605,17 @@ export function renderInbox(_args: unknown, value: unknown): Array<{ type: 'text
   }
   if (typeof v.supersedes === 'string' && v.supersedes !== '') {
     lines.push(`🔗 本卡接替前置卡 ${v.supersedes}（接力链）`)
+  }
+  // 蒸馏侧车随卡归档（0.26 集成接线）：hippo 快照照搬 archived/，补吸收可手动 import
+  if (typeof v.hippoPath === 'string' && v.hippoPath !== '') {
+    lines.push(`🧠 hippo 记忆快照侧车随卡归档：${v.hippoPath}（吸收进本机记忆库：handoff_absorb({ id, target: 'hippo-db', confirm: true })，或手动 hippo import，幂等）`)
+  }
+  if (typeof v.hippoWarn === 'string' && v.hippoWarn !== '') {
+    lines.push(`⚠️ ${v.hippoWarn}`)
+  }
+  // 延续回执落账附注（0.26 集成接线）：生成成功/失败都如实说，不粉饰账本状态
+  if (typeof v.receiptNote === 'string' && v.receiptNote !== '') {
+    lines.push(`🧾 ${v.receiptNote}`)
   }
   if (v.crossOS !== undefined) {
     lines.push(`🖥️ 跨 OS 接手：源卡来自 ${v.crossOS.source}，本机是 ${v.crossOS.local}——卡内路径需人工映射后才能执行`)
@@ -635,6 +693,10 @@ export type PushResult =
       skeleton?: boolean
       /** 密钥闸旁路留痕：命中规则名列表 */
       secretsBypass?: string[]
+      /** 上下文预警旁证（0.26 集成接线）：pushHandoff 内跟 probeSessionEvents 后的
+       * 一次探测，仅在探出 warn/critical 时随结果带出（写侧旁证与缓存，不承担轮询
+       * 呈现——面板真相在 GET state 的 state.contextHealth）。ok/unknown 不占字段。 */
+      contextHealth?: ContexthealthReport
     }
   | { ok: false; error: string }
 
@@ -760,13 +822,20 @@ export function inheritParentRemaining(parentId: string, dir?: string): { prefix
  * 就是把宿主内存/CPU 交给任意一次 push。
  * opts.extras 是插件侧内部出卡通道（pushMemoryCard 等程序化调用方覆盖 axis/payload
  * 立约缺省）：不进 handoff_push 工具入参面，模型输入到不了 extras，密钥闸不旁路。
+ * opts.tokenMeter（0.26 probe 接线）：集成面传宿主 tokenMeter 服务（server/tools 注册处
+ * 防御式取 ctx.root?.tokenMeter）——官方代价投影直读；缺席即投影「不可达」诚实两态。
  */
-export function pushHandoff(session: unknown, args: PushArgs, opts?: { dir?: string; extras?: Record<string, unknown> }): PushResult {
+export function pushHandoff(session: unknown, args: PushArgs, opts?: { dir?: string; extras?: Record<string, unknown>; tokenMeter?: unknown }): PushResult {
   try {
     const probe = probeSessionEvents(session)
     const facts = probe.skipped
       ? { userMessages: [], writeEdits: [], commands: [], gitCommits: [], keyFiles: new Set<string>(), lastTodo: null, lastGoal: '', eventCount: 0 }
       : collectFacts(probe.events)
+    // 上下文预警旁证（0.26 集成接线，与 probeSessionEvents 同位各一次）：写侧探测
+    // 只作旁证与缓存（warn/critical 随 PushResult 带出），不承担轮询呈现、不改卡面。
+    // 0.26 probe 接线：第二参传 opts.tokenMeter（注册处从 ctx.root 防御式取）——
+    // 官方代价投影在位即直读透传，缺席/抛错/形态垃圾全部「不可达」诚实降级
+    const contextHealth = probeContexthealth(session, opts?.tokenMeter)
 
     const s = session as { id?: unknown; header?: { cwd?: unknown } } | null | undefined
     const sessionId = s && s.id != null ? String(s.id) : ''
@@ -834,44 +903,81 @@ ${honest}`
     // 并进入下游会话上下文，比 git 更宽的泄漏面；命中即拒，理由回喂调用方
     // title/to/project 标量也进扫描——密钥从 title 侧门出盘等于没闸
     // 补丁 diff 同扫（T2-P，红队驱动）：diff 全是源码行，密钥走补丁走私等于没闸；
-    // 扫描口径是增补后的补丁全文——untracked 小文件的手拼 diff 一样过闸，不成走私侧门
-    const secretHits = [
-      ...scanSecrets({
-        ...sections,
-        suggested: sections.suggested,
-        title: args.title,
-        to: args.to,
-        project: args.project,
-      }),
-      ...(finalPatch !== '' ? scanSecrets({ patch: finalPatch }) : []),
-    ]
+    // 扫描口径是增补后的补丁全文——untracked 小文件的手拼 diff 一样过闸，不成走私侧门。
+    // 三面分开扫（0.26 集成接线）：命中集合与单次合扫完全等价（scanSecrets 逐键去重，
+    // 跨键本就不去重）；面外命中数（标量+补丁）喂给接力体检的 extraSecretHits 补正
+    const faceHits = scanSecrets({ ...sections, suggested: sections.suggested })
+    const scalarHits = scanSecrets({ title: args.title, to: args.to, project: args.project })
+    const patchHits = finalPatch !== '' ? scanSecrets({ patch: finalPatch }) : []
+    const secretHits = [...faceHits, ...scalarHits, ...patchHits]
+    // 「均未手写」判据提前到密钥闸前（0.26 集成接线：两道闸拒收路径与体检共用同一判据；
+    // 只依赖 args，位置前移零行为变化）
+    const userWrote = [args.goal, args.files, args.done, args.remaining, args.stopped, args.warnings, args.suggested]
+      .some((v) => typeof v === 'string' && v.trim() !== '')
     if (secretHits.length > 0 && args.allowSecrets !== true) {
       const detail = secretHits.map((h) => `${h.rule}@${h.section}（${h.masked}）`).join('；')
-      // 死亡地图：写侧拒收进生命周期事件层（target 用标题，detail 不落密钥值只落规则名）
-      recordLifecycleEvent({ stage: 'write', reason: 'secret_gate', target: scalar(args.title, '') || 'untitled', detail: `${secretHits.length} hits：${secretHits.map((h) => `${h.rule}@${h.section}`).join('；')}` }, opts?.dir)
+      // 接力体检（0.26 §5.1②）：闸拒收路径同样体检，取 blocked 档诊断进拒收反馈与
+      // lifecycle detail——无卡可落，诊断不落卡面（密钥闸拒收 → allowSecrets 镜像 false，
+      // 判据上 verdict 恒 blocked；体检自身故障 undefined = 诊断缺省，不编）
+      const fc = runFlightcheckSafe(sections, {
+        allowSecrets: false,
+        confirmSkeleton: args.confirmSkeleton === true,
+        userWrote,
+        extraSecretHits: scalarHits.length + patchHits.length,
+        cwd,
+      })
+      const fcNote = fc !== undefined && fc.stamp.verdict === 'blocked' && fc.note !== '' ? fc.note : ''
+      const fcDetail = fcNote !== '' ? `；${fcNote}` : ''
+      // 死亡地图：写侧拒收进生命周期事件层（target 用标题，detail 不落密钥值只落规则名；
+      // fcDetail 的掩码预览与拒收反馈同款口径，无密钥值本体）
+      recordLifecycleEvent({ stage: 'write', reason: 'secret_gate', target: scalar(args.title, '') || 'untitled', detail: `${secretHits.length} hits：${secretHits.map((h) => `${h.rule}@${h.section}`).join('；')}${fcDetail}` }, opts?.dir)
       return {
         ok: false,
-        error: `密钥闸：发现 ${secretHits.length} 处疑似密钥——${detail}。请 redact 后重试；确要带密寄存，传 allowSecrets: true（旁路会留痕）。`,
+        error: `密钥闸：发现 ${secretHits.length} 处疑似密钥——${detail}。请 redact 后重试；确要带密寄存，传 allowSecrets: true（旁路会留痕）。${fcNote !== '' ? `\n拒收诊断：${fcNote}` : ''}`,
       }
     }
     // 空壳卡守门（42% 噪音的根因在生产者侧）：六段全是兜底占位 = 无会话环境且无手写段。
     // 拦截理由回喂——模型可亲手蒸馏重试，或确认空壳旁路；不破坏「诚实的空卡」场景
     // 判据与文案对齐：「均未手写」按字面执行——任一段有手写内容就不算空壳
     //（部分手写+部分兜底的卡由取件侧 lowInfo 徽标兜底，不在生产者侧拦截）
-    const userWrote = [args.goal, args.files, args.done, args.remaining, args.stopped, args.warnings, args.suggested]
-      .some((v) => typeof v === 'string' && v.trim() !== '')
     const skeleton = !userWrote && isLowInfoCardMarkdown(
       ['goal', 'files', 'done', 'remaining', 'stopped', 'warnings', 'suggested']
         .map((k) => (sections as unknown as Record<string, string | undefined>)[k] ?? '')
         .join('\n'),
     )
     if (skeleton && args.confirmSkeleton !== true) {
+      // 接力体检（0.26 §5.1②）：空壳拒收路径取 blocked 档诊断进反馈与 lifecycle detail，
+      // 不落卡面（userWrote/confirmSkeleton 镜像拒收判据——这正是被拒的原因）
+      const fc = runFlightcheckSafe(sections, {
+        allowSecrets: args.allowSecrets === true,
+        confirmSkeleton: false,
+        userWrote: false,
+        extraSecretHits: scalarHits.length + patchHits.length,
+        cwd,
+      })
+      const fcNote = fc !== undefined && fc.stamp.verdict === 'blocked' && fc.note !== '' ? fc.note : ''
+      const fcDetail = fcNote !== '' ? `；${fcNote}` : ''
       // 死亡地图：空壳拒收也是写侧事件（噪音治理的归因数据源）
-      recordLifecycleEvent({ stage: 'write', reason: 'skeleton_gate', target: scalar(args.title, '') || 'untitled', detail: '六段全兜底占位且未手写' }, opts?.dir)
+      recordLifecycleEvent({ stage: 'write', reason: 'skeleton_gate', target: scalar(args.title, '') || 'untitled', detail: `六段全兜底占位且未手写${fcDetail}` }, opts?.dir)
       return {
         ok: false,
-        error: '空壳卡守门：六段全是兜底占位文本（无会话环境且六段均未手写）。请按 /handoff 纪律亲手蒸馏六段后重试；确要寄存空壳卡（如「无在途工作」声明），传 confirmSkeleton: true。',
+        error: `空壳卡守门：六段全是兜底占位文本（无会话环境且六段均未手写）。请按 /handoff 纪律亲手蒸馏六段后重试；确要寄存空壳卡（如「无在途工作」声明），传 confirmSkeleton: true。${fcNote !== '' ? `\n拒收诊断：${fcNote}` : ''}`,
       }
+    }
+    // 接力体检（0.26 集成接线 §5.1②）：挂两道闸后、extras 组装前——既有闸零改动不放宽。
+    // blocked 在此路径按判据不可能（两闸已放行 = secret 残留必旁路、空壳必确认或有手写），
+    // 防御性只盖 cleared/cautioned 两档入 extras.flight；cautioned 摘要并入读者警告段随卡
+    // 持久化（先于 coverage/git 快照——done 段不受影响，统计口径不变）；体检自身故障
+    //（undefined）=「未盖章」如实缺省，绝不把体检故障伪装成诊断（模块头硬纪律）
+    const flight = runFlightcheckSafe(sections, {
+      allowSecrets: args.allowSecrets === true,
+      confirmSkeleton: args.confirmSkeleton === true,
+      userWrote,
+      extraSecretHits: scalarHits.length + patchHits.length,
+      cwd,
+    })
+    if (flight !== undefined && flight.stamp.verdict === 'cautioned' && flight.note !== '') {
+      sections.warnings = sections.warnings === '' ? flight.note : `${sections.warnings}\n${flight.note}`
     }
     // 四态覆盖率：只统计不强制（纪律见 coverageOfDone 注释），随卡进 extras 持久化，
     // 取件侧 parseCard 后可从 extras.coverage 读回
@@ -902,6 +1008,10 @@ ${honest}`
         coverage,
         ...(secretHits.length > 0 && args.allowSecrets === true ? { secretsBypass: secretHits.map((h) => `${h.rule}@${h.section}`) } : {}),
         ...(baseline !== undefined ? { baseline } : {}),
+        // 接力体检三档章（0.26 集成接线）：只有 cleared/cautioned 上卡面（blocked 只活在
+        // 拒收路径）；体检自身故障（flight === undefined）如实「未盖章」缺省。
+        // 先于 opts.extras 合并——内部出卡通道可覆盖/自带（程序化卡自带体检时以调用方为准）
+        ...(flight !== undefined && flight.stamp.verdict !== 'blocked' ? { flight: flight.stamp } : {}),
         // 接力链进 extras：信封随取件消费即弃，archived 卡只剩卡面——卡链检索
         // （handoff_inbox action=history）要报 supersedes 就得靠这个持久通道
         ...(typeof args.supersedes === 'string' && args.supersedes.trim() !== '' ? { supersedes: args.supersedes.trim() } : {}),
@@ -969,10 +1079,22 @@ ${honest}`
     } catch (e) {
       envelopeNote = `机器信封落盘失败（卡片本体已寄存）：${readableError(e)}`
     }
+    // 记忆蒸馏生产端（0.26 集成接线 §5.1③①）：出卡成功即跑 hippo export 落约定路径，
+    // 13 字段侧车 <id>.hippo.jsonl 随卡落 pending/（两轴同享——本函数是全部出卡通道的
+    // 唯一漏斗）。全 fail-open：CLI 缺席/导出失败/超尺寸只退说明绝不拦出卡
+    //（produceSnapshot 承诺不抛，此处兜绝对意外）
+    let distillNote = ''
+    try {
+      // 0.26 schemav2 接线：传卡 cwd（v2 侧车 workspace 归属来源，distill.ts ProduceSnapshotOptions.cwd
+      // 已就位的挂点）——cwd 缺省/空 = 侧车不带 workspace（v2 meta 照出，诚实缺省态）
+      distillNote = produceSnapshot({ cardId: card.id, dir: opts?.dir, cwd }).note
+    } catch (e) {
+      distillNote = `记忆蒸馏生产端异常（fail-open，出卡不受影响）：${readableError(e)}`
+    }
     const bypassNote = secretHits.length > 0 && args.allowSecrets === true
       ? `密钥闸旁路留痕：${secretHits.map((h) => `${h.rule}@${h.section}`).join('；')}`
       : ''
-    const note = [probe.note, ...truncated, ...patchNotes, ...relayNotes, envelopeNote, bypassNote, skeleton ? '空壳卡（已确认寄存）' : ''].filter(Boolean).join('；')
+    const note = [probe.note, ...truncated, ...patchNotes, ...relayNotes, envelopeNote, distillNote, bypassNote, skeleton ? '空壳卡（已确认寄存）' : ''].filter(Boolean).join('；')
     return {
       ok: true,
       id: card.id,
@@ -984,6 +1106,8 @@ ${honest}`
       ...(typeof args.supersedes === 'string' && args.supersedes.trim() !== '' ? { supersedes: args.supersedes.trim() } : {}),
       ...(skeleton ? { skeleton: true } : {}),
       ...(secretHits.length > 0 && args.allowSecrets === true ? { secretsBypass: secretHits.map((h) => h.rule) } : {}),
+      // 上下文预警旁证：仅 warn/critical 随结果带出（写侧旁证与缓存，呈现走 GET state）
+      ...(contextHealth.level === 'warn' || contextHealth.level === 'critical' ? { contextHealth } : {}),
     }
   } catch (e) {
     return { ok: false, error: readableError(e) }
@@ -1043,6 +1167,8 @@ export type HistoryItem = {
   stopped: string
   /** 本卡接替的前置卡 id（extras.supersedes；旧卡/无接力缺省） */
   supersedes?: string
+  /** 本卡是延续回执卡：指向的源卡 id（extras.receipt.for，0.26 取件即回执；普通卡缺省） */
+  receiptFor?: string
 }
 
 export type InboxHistoryResult =
@@ -1063,13 +1189,18 @@ export function inboxHistory(opts?: { dir?: string; project?: string; cwd?: stri
     const rows: HistoryItem[] = report.cards
       .filter((c) => (project === '' || c.project === project) && (cwd === '' || c.cwd === cwd))
       .map((c) => {
-        const sup = (c.extras as Record<string, unknown> | undefined)?.['supersedes']
+        const extras = c.extras as Record<string, unknown> | undefined
+        const sup = extras?.['supersedes']
+        // 延续回执标记（0.26 集成接线 §5.3）：extras.receipt.for 在场 = 本卡是回执卡，
+        // 客户端「历史」块据此显「已延续/回执」标记；坏数据/非串防御式忽略
+        const receiptFor = (extras?.['receipt'] as { for?: unknown } | undefined)?.['for']
         return {
           id: c.id,
           title: c.from.title,
           pushed_at: c.pushed_at,
           stopped: stripControlChars(c.sections.stopped ?? '').slice(0, HISTORY_STOPPED_MAX),
           ...(typeof sup === 'string' && sup !== '' ? { supersedes: sup } : {}),
+          ...(typeof receiptFor === 'string' && receiptFor !== '' ? { receiptFor } : {}),
         }
       })
       .sort((a, b) => a.pushed_at.localeCompare(b.pushed_at))
@@ -1119,6 +1250,12 @@ export type InboxLoadResult =
       baseline?: RepoBaseline
       /** 信封验签结论：unsigned=无签名（旧卡/外写卡），no-key=有签名但本机无对应密钥 */
       sig?: SigVerdict
+      /** 随卡归档的 hippo 快照侧车路径（0.26 蒸馏侧车；卡无侧车缺省） */
+      hippoPath?: string
+      /** 侧车搬移失败说明（侧车留 pending/，取件不受影响）；正常搬移缺省 */
+      hippoWarn?: string
+      /** 延续回执落账说明（0.26 取件即回执）：生成成功/失败的诚实附注；回执卡自身被取件不再产出二次回执，缺省 */
+      receiptNote?: string
     }
   | { ok: false; error: string }
 
@@ -1141,9 +1278,43 @@ export function inboxLoad(id: string, opts?: { dir?: string }): InboxLoadResult 
     const env = envelope?.data ?? {}
     // 物质层随卡：补丁 sidecar 与 .md 同步搬去 archived/
     const patchArchived = consumePatch(trimmed, opts?.dir)
+    // 蒸馏侧车随卡（0.26 集成接线 §5.1③②）：<id>.hippo.jsonl pending→archived，
+    // 与 consumePatch 同位同款 fail-open——搬移失败不拦取件（侧车留 pending 并如实附注）
+    const distill = consumeDistillSidecar(trimmed, opts?.dir)
     const coverage = coverageFromExtras(card.extras)
     const baseline = baselineFromExtras(card.extras)
     const axis = axisFromExtras(card.extras)
+    // 延续回执（0.26 集成接线 §5.1③/§5.2）：取件即回执——程序化产出回执卡挂接力链
+    // （supersedes=源卡 id）并记 lifecycle continued。fail-open 硬纪律：任何失败只进
+    // 附注，绝不拦取件、绝不回滚已完成的搬移；回执卡自身（extras.receipt 在场）被取件
+    // 即账本闭环，不产出二次回执（receipt.ts 模块头立约）
+    const isReceiptCard = (card.extras as Record<string, unknown> | undefined)?.['receipt'] !== undefined
+    let receiptNote: string | undefined
+    if (!isReceiptCard) {
+      try {
+        const receipt = generateReceiptCard({
+          sourceId: card.id,
+          verify: {
+            mismatches: check.mismatches,
+            unavailable: check.unavailable,
+            branch: card.git.branch,
+            changedCount: card.git.changed.length,
+          },
+          source: {
+            stopped: card.sections.stopped,
+            flight: (card.extras as Record<string, unknown> | undefined)?.['flight'],
+            branch: card.git.branch,
+            changedCount: card.git.changed.length,
+          },
+          cwd: card.cwd,
+        }, { dir: opts?.dir })
+        receiptNote = receipt.ok
+          ? `延续回执已落卡：${receipt.id}（evidence ${receipt.evidenceCount} 条，账本记 continued）`
+          : receipt.error
+      } catch (e) {
+        receiptNote = `延续回执生成异常（fail-open，取件不受影响）：${readableError(e)}`
+      }
+    }
     // 吸收回执：memory 轴卡取件即「记忆已随卡注入」——正向生命周期事件（闭集
     // 'memory-absorbed'），取件方按建议加载段吸收的账本留痕；detail 不落卡正文
     if (axis === 'memory') {
@@ -1200,6 +1371,11 @@ export function inboxLoad(id: string, opts?: { dir?: string }): InboxLoadResult 
         out.crossOS = { source: srcPlatform, local: process.platform }
       }
     }
+    // 蒸馏侧车随卡归档（0.26 集成接线）：moved → 归档路径如实带出；move-failed →
+    // 侧车留 pending/ 的诚实说明（不拦取件，补吸收时可手动 hippo import）
+    if (distill.state === 'moved') out.hippoPath = distill.path
+    else if (distill.state === 'move-failed') out.hippoWarn = distill.error
+    if (receiptNote !== undefined) out.receiptNote = receiptNote
     return out
   } catch (e) {
     // core 层中文错误（收件箱无此待取件等）原样透传；系统错误包中文口径
@@ -1280,6 +1456,27 @@ function safeUserQuestions(ctx: Context): unknown {
   }
 }
 
+/**
+ * 防御式取宿主 tokenMeter 服务（0.26 probe 接线）：dsh-base bundle 挂载在根层
+ * （ctx.root.tokenMeter）——root 层优先、本层兜底；未挂载/纪律代理抛错/形态垃圾一律
+ * undefined（probeContexthealth 侧投影走「不可达，未接入」诚实两态，绝不自算投影）。
+ */
+function safeTokenMeter(ctx: Context): unknown {
+  const layers: Array<() => unknown> = [
+    () => (ctx as unknown as { root?: unknown }).root,
+    () => ctx,
+  ]
+  for (const read of layers) {
+    try {
+      const layer = read()
+      if (layer === null || typeof layer !== 'object') continue
+      const tm: unknown = (layer as { tokenMeter?: unknown }).tokenMeter
+      if (tm !== null && tm !== undefined) return tm
+    } catch { /* 该层未挂载：试下一层 */ }
+  }
+  return undefined
+}
+
 /** 注册 handoff_push 工具 */
 export function registerPushTool(ctx: Context): void {
   ctx.tools.register(defineTool({
@@ -1318,7 +1515,8 @@ export function registerPushTool(ctx: Context): void {
       render: renderPush,
     },
     async execute(args: PushArgs, exec: { agent?: Agent; signal?: AbortSignal }) {
-      const result = pushHandoff(sessionOf(exec), args)
+      // 0.26 probe 接线：宿主 tokenMeter 在手即传——官方代价投影随预警旁证带出（缺席诚实降级）
+      const result = pushHandoff(sessionOf(exec), args, { tokenMeter: safeTokenMeter(ctx) })
       // 寄存成功后的宿主通知（阻塞式问答面板；服务缺席/客户端离线静默降级）
       if (result.ok) {
         // 通知 fire-and-forget：面板弹在客户端，agent 不等应答（阻塞式通知会让
@@ -1331,16 +1529,46 @@ export function registerPushTool(ctx: Context): void {
   }))
 }
 
+// ---------------------------------------------------------------------------
+// 0.26 triage 接线：handoff_inbox 新动作（pin/unpin/restore/search）的返回面。
+// type 别名而非匿名联合——匿名成员并集会合成 error?: undefined 形态，挂 defineTool
+// 的 JsonValue 契约；命名别名才有隐式索引签名（SyncToolValue / InboxLoadResult 同款仓内惯例）
+// ---------------------------------------------------------------------------
+
+/** search 命中行（InboxSearchHit 的 JsonValue 兼容投影——type 别名才有隐式索引签名） */
+export type InboxSearchHitRow = {
+  id: string
+  agent: string
+  title: string
+  project: string
+  where: 'meta' | 'body' | 'meta+body'
+  lines: string[]
+}
+
+export type InboxPinResult =
+  | { ok: true; action: 'pin' | 'unpin'; id: string }
+  | { ok: false; action: 'pin' | 'unpin'; error: string }
+
+export type InboxRestoreResult =
+  | { ok: true; action: 'restore'; id: string; moved: number }
+  | { ok: false; action: 'restore'; error: string }
+
+export type InboxSearchValue =
+  | { ok: true; action: 'search'; query: string; includeBody: boolean; scanned: number; skippedOversize: string[]; hits: InboxSearchHitRow[]; error?: string }
+  | { ok: false; action: 'search'; error: string }
+
 /** 注册 handoff_inbox 工具 */
 export function registerInboxTool(ctx: Context): void {
   ctx.tools.register(defineTool({
     name: 'handoff_inbox',
-    description: '交接卡片收件箱：action=list 列 ~/.handoff/pending/ 待取件（id/来源/项目/时间）；action=load + id 取件（消费即弃，卡片移到 archived/，随卡消费机器信封，附 git 核验 MISMATCH/UNAVAILABLE 警告与四态覆盖率；卡带仓库基线 baseline 时输出 clone → checkout → apply → 跑测试四步恢复指引；memory 轴卡输出「记忆已随卡注入」吸收提示）；action=history 按 project 或 cwd 回查 archived/ 已归档卡（卡链检索：id/标题/寄存时刻/停点摘要/接替 supersedes，时间正序尾 50 条）。返回 { ok, ... } 规范值。',
+    description: '交接卡片收件箱：action=list 列 ~/.handoff/pending/ 待取件（id/来源/项目/时间）；action=load + id 取件（消费即弃，卡片移到 archived/，随卡消费机器信封，附 git 核验 MISMATCH/UNAVAILABLE 警告与四态覆盖率；卡带仓库基线 baseline 时输出 clone → checkout → apply → 跑测试四步恢复指引；memory 轴卡输出「记忆已随卡注入」吸收提示）；action=history 按 project 或 cwd 回查 archived/ 已归档卡（卡链检索：id/标题/寄存时刻/停点摘要/接替 supersedes，时间正序尾 50 条）；action=pin / unpin + id 置顶/取消置顶（本机视图 sidecar，收件箱列表置顶展示；卡被取件或弃置后置顶自动失效，不报错）；action=restore + id 弃置恢复（archived/ 整卡按 dismiss 同一清单反向搬回 pending/ 重新可取件；pending 已有同名文件时拒绝覆盖）；action=search + q 检索待取件（编号/标题/来源/项目子串匹配；includeBody:true 时逐卡读 .md 全文匹配并给命中行摘要，量级为几十毫秒级线性扫）。返回 { ok, ... } 规范值。',
     parameters: {
-      action: { type: 'string', required: true, enum: ['list', 'load', 'history'], description: 'list 列待取件；load 取件（消费即弃）；history 卡链检索（查 archived/）' },
-      id: { type: 'string', description: 'load 必填：卡片 id' },
+      action: { type: 'string', required: true, enum: ['list', 'load', 'history', 'pin', 'unpin', 'restore', 'search'], description: 'list 列待取件；load 取件（消费即弃）；history 卡链检索（查 archived/）；pin/unpin 置顶开关；restore 弃置恢复（archived→pending）；search 检索待取件' },
+      id: { type: 'string', description: 'load/restore 必填：卡片 id；pin/unpin：卡片 id' },
       project: { type: 'string', description: 'history：按项目名过滤 archived/ 卡（与 cwd 同时给则为 AND）' },
       cwd: { type: 'string', description: 'history：按工作目录过滤 archived/ 卡（与 project 同时给则为 AND）' },
+      q: { type: 'string', description: 'search 必填：查询词（空串回空命中，不做全量枚举）' },
+      includeBody: { type: 'boolean', description: 'search：true 时逐卡读 .md 全文匹配并给命中行摘要（缺省只匹配编号/标题/来源/项目元字段）' },
     },
     output: {
       schema: {
@@ -1358,14 +1586,58 @@ export function registerInboxTool(ctx: Context): void {
           coverage: { type: 'json', description: 'load：卡片 extras.coverage 的四态覆盖率统计（无则缺省）' },
           baseline: { type: 'json', description: 'load：卡片 extras.baseline 的仓库基线 { remote, head, branch }（无则缺省）' },
           envelopeChars: { type: 'number', description: 'load：随卡消费的机器信封 JSON 字符数（卡无信封时缺省）' },
+          hippoPath: { type: 'string', description: 'load：随卡归档的 hippo 记忆快照侧车路径（卡无侧车缺省）' },
+          hippoWarn: { type: 'string', description: 'load：侧车搬移失败说明（侧车留 pending，取件不受影响；正常缺省）' },
+          receiptNote: { type: 'string', description: 'load：延续回执落账附注（生成成功/失败如实附注；回执卡自身被取件缺省）' },
+          moved: { type: 'number', description: 'restore：搬回 pending/ 的文件份数' },
+          scanned: { type: 'number', description: 'search：实际扫描的卡数' },
+          hits: { type: 'json', description: 'search：命中清单 [{ id, agent, title, project, where, lines }]（where=meta/body/meta+body；lines=正文命中行摘要）' },
+          skippedOversize: { type: 'json', description: 'search：因尺寸闸跳过正文扫描的卡 id（诚实暴露，不静默漏）' },
           error: { type: 'json', description: '失败原因' },
         },
       },
       render: renderInbox,
     },
-    async execute(args: { action?: string; id?: string; project?: string; cwd?: string }, exec: { agent?: Agent; signal?: AbortSignal }) {
+    async execute(args: { action?: string; id?: string; project?: string; cwd?: string; q?: string; includeBody?: boolean }, exec: { agent?: Agent; signal?: AbortSignal }) {
       if (args.action === 'list') return inboxList()
       if (args.action === 'history') return inboxHistory({ project: args.project, cwd: args.cwd })
+      // 0.26 triage 接线：置顶/取消置顶/弃置恢复/正文检索——模块层自带 id 消毒与规范错误值
+      if (args.action === 'pin') {
+        const r = setPin(args.id ?? '')
+        const out: InboxPinResult = r.ok
+          ? { ok: true, action: 'pin', id: (args.id ?? '').trim().replace(/[\\/]/g, '') }
+          : { ok: false, action: 'pin', error: r.error ?? '置顶失败' }
+        return out
+      }
+      if (args.action === 'unpin') {
+        const r = unsetPin(args.id ?? '')
+        const out: InboxPinResult = r.ok
+          ? { ok: true, action: 'unpin', id: (args.id ?? '').trim().replace(/[\\/]/g, '') }
+          : { ok: false, action: 'unpin', error: r.error ?? '取消置顶失败' }
+        return out
+      }
+      if (args.action === 'restore') {
+        const r = restoreFromArchived(args.id ?? '')
+        const out: InboxRestoreResult = r.ok
+          ? { ok: true, action: 'restore', id: (args.id ?? '').trim().replace(/[\\/]/g, ''), moved: r.moved ?? 0 }
+          : { ok: false, action: 'restore', error: r.error ?? '恢复失败' }
+        return out
+      }
+      if (args.action === 'search') {
+        const r = searchInbox(args.q ?? '', { includeBody: args.includeBody === true })
+        const out: InboxSearchValue = r.error !== undefined
+          ? { ok: true, action: 'search', query: r.query, includeBody: r.includeBody, scanned: r.scanned, skippedOversize: r.skippedOversize, hits: [], error: r.error }
+          : {
+              ok: true,
+              action: 'search',
+              query: r.query,
+              includeBody: r.includeBody,
+              scanned: r.scanned,
+              skippedOversize: r.skippedOversize,
+              hits: r.hits.map((h) => ({ id: h.id, agent: h.agent, title: h.title, project: h.project, where: h.where, lines: h.lines })),
+            }
+        return out
+      }
       if (args.action === 'load') {
         const result = inboxLoad(args.id ?? '')
         // 取件成功后的宿主通知（同 push：阻塞式问答面板，失败静默降级）
@@ -1376,7 +1648,7 @@ export function registerInboxTool(ctx: Context): void {
         }
         return result
       }
-      return { ok: false, error: `未知 action：${String(args.action)}（支持 list / load / history）` }
+      return { ok: false, error: `未知 action：${String(args.action)}（支持 list / load / history / pin / unpin / restore / search）` }
     },
   }))
 }

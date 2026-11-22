@@ -39,8 +39,8 @@ test('registerInboxTool：注册 handoff_inbox 且 action 枚举齐全', async (
   registerInboxTool(ctx)
   assert.equal(registered[0]?.name, 'handoff_inbox')
   const def = registered[0]?.def as { parameters: { properties: Record<string, { enum?: string[] }> } }
-  // 卡链检索（action=history）为 2026-11 功能扩展：枚举追加，断言形式不变
-  assert.deepEqual(def.parameters.properties.action?.enum, ['list', 'load', 'history'])
+  // 卡链检索（history，2026-11）与 triage 四动作（pin/unpin/restore/search，0.26 扩展波）：枚举追加，断言形式不变
+  assert.deepEqual(def.parameters.properties.action?.enum, ['list', 'load', 'history', 'pin', 'unpin', 'restore', 'search'])
 })
 
 test('registerEnvBackupTool：注册 handoff_env 且 action 枚举含 card 与 inject（配置轴转正 + 写回闭环）', async () => {

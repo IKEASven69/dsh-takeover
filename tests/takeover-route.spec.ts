@@ -386,3 +386,261 @@ test('路由：GET history 回环同源 200（ok:true + action:history）；跨�
   const post = await callRoute(handler, { method: 'POST', url: '/dsh-takeover/history', headers: { ...ORIGIN }, body: '{}' })
   assert.equal(post.status, 405)
 })
+
+// ---------- 0.26 集成接线：state 可选 sessionId → contextHealth；takeover 响应附 state；dismiss 落 abandoned ----------
+
+/** 有比率口径的假会话：900/1000 = 0.9 ≥ CRITICAL_RATIO(0.85) → critical（contexthealth 探针立约） */
+function contextSession(home: string): unknown {
+  return {
+    id: 'sess-ctx-1',
+    header: { cwd: home },
+    snapshotEvents: () => [{ type: 'assistant/message', seq: 1, data: { usage: { totalTokens: 900 } } }],
+    requestContext: () => ({ contextWindow: 1000 }),
+  }
+}
+
+test('路由：GET state 无参零变化（contextHealth 缺省）；带 sessionId 且会话在场 → 附预警', async () => {
+  const { mkdtempSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const home = mkdtempSync(join(tmpdir(), 'dsh-route-state-'))
+  process.env.HANDOFF_HOME = home
+  try {
+    const handler = routeHandler({ root: { sessions: { get: (id: string) => (id === 'sess-ctx-1' ? contextSession(home) : undefined) } } })
+    const guard = { host: 'localhost:3080', 'sec-fetch-site': 'same-origin' }
+    const bare = await callRoute(handler, { method: 'GET', url: '/dsh-takeover/state', headers: guard })
+    assert.equal(bare.status, 200)
+    assert.equal('contextHealth' in (JSON.parse(bare.body) as Record<string, unknown>), false, '无参请求响应零变化（向后兼容扩展）')
+
+    const withSession = await callRoute(handler, { method: 'GET', url: '/dsh-takeover/state?sessionId=sess-ctx-1', headers: guard })
+    assert.equal(withSession.status, 200)
+    const body = JSON.parse(withSession.body) as { contextHealth?: { level?: string; ratio?: number; action?: string | null } }
+    assert.equal(body.contextHealth?.level, 'critical', '900/1000=0.9 ≥ CRITICAL_RATIO → critical')
+    assert.equal(body.contextHealth?.action, 'lifeboat', 'critical 的建议动作是救生艇')
+    assert.ok(typeof body.contextHealth?.ratio === 'number', '比率口径双在场时 ratio 在场')
+
+    const missing = await callRoute(handler, { method: 'GET', url: '/dsh-takeover/state?sessionId=sess-absent', headers: guard })
+    assert.equal('contextHealth' in (JSON.parse(missing.body) as Record<string, unknown>), false, '会话缺席 → 字段缺省')
+  } finally {
+    delete process.env.HANDOFF_HOME
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('路由：takeover 成功响应附全量 state——带座位 sessionId 时预警态随动作响应即时回显', async () => {
+  const { mkdtempSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const home = mkdtempSync(join(tmpdir(), 'dsh-route-takeover-state-'))
+  process.env.HANDOFF_HOME = home
+  try {
+    const { controller } = fakeController()
+    const handler = routeHandler({ root: { sessionController: controller, sessions: { get: (id: string) => (id === 'sess-ctx-1' ? contextSession(home) : undefined) } } })
+    const r = await callRoute(handler, { headers: { ...ORIGIN }, body: '{"mode":"inbox","sessionId":"sess-ctx-1"}' })
+    assert.equal(r.status, 200)
+    const b = JSON.parse(r.body) as { ok: boolean; sessionId?: string; state?: { contextHealth?: { level?: string } } }
+    assert.equal(b.ok, true)
+    assert.equal(b.sessionId, 'sess-new-1')
+    assert.ok(b.state !== undefined && typeof b.state === 'object', '成功响应附全量 state（lifeboat/provider/sync 端点同款免等 30s 轮询）')
+    assert.equal(b.state?.contextHealth?.level, 'critical', '座位会话在场 → contextHealth 随响应回显')
+  } finally {
+    delete process.env.HANDOFF_HOME
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('路由：dismiss-pending 成功落 abandoned 生命周期事件（target=卡 id，延续账本闭集）', async () => {
+  const { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const home = mkdtempSync(join(tmpdir(), 'dsh-route-dismiss-'))
+  mkdirSync(join(home, 'pending'), { recursive: true })
+  process.env.HANDOFF_HOME = home
+  try {
+    writeFileSync(join(home, 'pending', 'ho-dismiss-0001.md'), ['---', 'handoff: 1', 'id: ho-dismiss-0001', '---', '## 目标', '', '弃置账本钉', ''].join('\n'), 'utf-8')
+    const handler = routeHandler()
+    const r = await callRoute(handler, { url: '/dsh-takeover/dismiss-pending', headers: { ...ORIGIN }, body: '{"id":"ho-dismiss-0001"}' })
+    assert.equal(r.status, 200)
+    const b = JSON.parse(r.body) as { ok: boolean; moved?: number }
+    assert.equal(b.ok, true)
+    assert.ok((b.moved ?? 0) >= 1)
+    const lifecycle = readFileSync(join(home, 'lifecycle.jsonl'), 'utf-8')
+    assert.match(lifecycle, /"reason":"abandoned"/, '弃置也是账本事件（未取件即清）')
+    assert.match(lifecycle, /"target":"ho-dismiss-0001"/)
+  } finally {
+    delete process.env.HANDOFF_HOME
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+// ---------- 0.26 扩展波接线：triage 三动作端点（pin/unpin/restore-archived）+ state 检索/体检 ----------
+
+const GUARD = { host: 'localhost:3080', 'sec-fetch-site': 'same-origin' }
+
+test('路由：pin/unpin——sameOrigin 门 + id 消毒（路径分隔符剥掉）+ 幂等落 pins.json；无 Origin 403', async () => {
+  const { mkdtempSync, readFileSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const home = mkdtempSync(join(tmpdir(), 'dsh-route-pin-'))
+  process.env.HANDOFF_HOME = home
+  try {
+    const handler = routeHandler()
+    // sameOrigin 门：无 Origin 的 POST 一律 403（与 dismiss-pending 同款纪律）
+    const noOrigin = await callRoute(handler, { url: '/dsh-takeover/pin', headers: { host: 'localhost:3080' }, body: '{"id":"ho-a"}' })
+    assert.equal(noOrigin.status, 403)
+    // GET 不进写路由
+    const wrongMethod = await callRoute(handler, { method: 'GET', url: '/dsh-takeover/pin', headers: { ...ORIGIN } })
+    assert.equal(wrongMethod.status, 405)
+
+    // 置顶：id 带路径分隔符被消毒（'../ho-x' → '..ho-x'，穿越面进不了文件名寻址）
+    const r = await callRoute(handler, { url: '/dsh-takeover/pin', headers: { ...ORIGIN }, body: '{"id":" ../ho-x "}' })
+    assert.equal(r.status, 200)
+    const b = JSON.parse(r.body) as { ok: boolean; action?: string }
+    assert.equal(b.ok, true)
+    assert.equal(b.action, 'pin')
+    const pins = JSON.parse(readFileSync(join(home, 'pins.json'), 'utf-8')) as Record<string, string>
+    assert.ok('..ho-x' in pins, 'id 消毒：trim + 去路径分隔符（dismissPending 同款），消毒后的 id 落 pins.json')
+
+    // 幂等：重复置顶只刷新时间戳，不报错
+    const again = await callRoute(handler, { url: '/dsh-takeover/pin', headers: { ...ORIGIN }, body: '{"id":"..ho-x"}' })
+    assert.equal((JSON.parse(again.body) as { ok: boolean }).ok, true)
+
+    // 取消置顶：在册才成功；空 id 回规范错误值
+    const un = await callRoute(handler, { url: '/dsh-takeover/unpin', headers: { ...ORIGIN }, body: '{"id":"..ho-x"}' })
+    assert.equal((JSON.parse(un.body) as { ok: boolean }).ok, true)
+    const unAgain = await callRoute(handler, { url: '/dsh-takeover/unpin', headers: { ...ORIGIN }, body: '{"id":"..ho-x"}' })
+    assert.equal(unAgain.status, 400, '未置顶再取消 = 规范错误值（诚实两态）')
+    const emptyId = await callRoute(handler, { url: '/dsh-takeover/pin', headers: { ...ORIGIN }, body: '{"id":"  "}' })
+    assert.equal(emptyId.status, 400)
+    assert.match((JSON.parse(emptyId.body) as { error: string }).error, /id 不能为空/)
+  } finally {
+    delete process.env.HANDOFF_HOME
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('路由：restore-archived——dismiss 后恢复回 pending（整卡搬回 + 落账 restored）；不存在回规范错误', async () => {
+  const { mkdirSync, mkdtempSync, existsSync, rmSync, writeFileSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const home = mkdtempSync(join(tmpdir(), 'dsh-route-restore-'))
+  mkdirSync(join(home, 'pending'), { recursive: true })
+  process.env.HANDOFF_HOME = home
+  try {
+    writeFileSync(join(home, 'pending', 'ho-restore-0001.md'), ['---', 'handoff: 1', 'id: ho-restore-0001', '---', '## 目标', '', '恢复往返钉', ''].join('\n'), 'utf-8')
+    const handler = routeHandler()
+    // 先弃置（既有端点）
+    const dismiss = await callRoute(handler, { url: '/dsh-takeover/dismiss-pending', headers: { ...ORIGIN }, body: '{"id":"ho-restore-0001"}' })
+    assert.equal((JSON.parse(dismiss.body) as { ok: boolean }).ok, true)
+    assert.equal(existsSync(join(home, 'pending', 'ho-restore-0001.md')), false)
+
+    // 恢复：archived → pending，lifecycle 落 restored
+    const r = await callRoute(handler, { url: '/dsh-takeover/restore-archived', headers: { ...ORIGIN }, body: '{"id":"ho-restore-0001"}' })
+    assert.equal(r.status, 200)
+    const b = JSON.parse(r.body) as { ok: boolean; action?: string; moved?: number }
+    assert.equal(b.ok, true)
+    assert.equal(b.action, 'restore-archived')
+    assert.ok((b.moved ?? 0) >= 1, '整卡搬回（.md 至少一份）')
+    assert.equal(existsSync(join(home, 'pending', 'ho-restore-0001.md')), true, '恢复后重新在收件箱可见')
+
+    // sameOrigin 门：无 Origin 403
+    const noOrigin = await callRoute(handler, { url: '/dsh-takeover/restore-archived', headers: { host: 'localhost:3080' }, body: '{"id":"x"}' })
+    assert.equal(noOrigin.status, 403)
+
+    // 不存在的 id / 二次恢复：规范错误值 400
+    const gone = await callRoute(handler, { url: '/dsh-takeover/restore-archived', headers: { ...ORIGIN }, body: '{"id":"ho-restore-0001"}' })
+    assert.equal(gone.status, 400, '已在 pending（archived 无形态）→ 拒绝，不静默成功')
+    const never = await callRoute(handler, { url: '/dsh-takeover/restore-archived', headers: { ...ORIGIN }, body: '{"id":"ho-never-9999"}' })
+    assert.equal(never.status, 400)
+    assert.match((JSON.parse(never.body) as { error: string }).error, /没有这张卡/)
+  } finally {
+    delete process.env.HANDOFF_HOME
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('路由：GET state 增量面——pins/doctor 常驻（pins.json 与体检报告）；?q= 检索附 inboxQuery（includeBody=1 走正文）；无 q 无 inboxQuery（无参零变化钉延伸）', async () => {
+  const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const home = mkdtempSync(join(tmpdir(), 'dsh-route-state-triage-'))
+  mkdirSync(join(home, 'pending'), { recursive: true })
+  process.env.HANDOFF_HOME = home
+  try {
+    // 完整六段 + 规范 frontmatter：总线干净（doctor 零发现），体检断言才能钉在 ok:true 上
+    writeFileSync(
+      join(home, 'pending', 'ho-query-0001.md'),
+      [
+        '---',
+        'handoff: 1',
+        'id: ho-query-0001',
+        'from:',
+        '  agent: dsh',
+        '  session: sess-query-fix',
+        '---',
+        '## 目标',
+        '',
+        '把正文检索接进面板',
+        '',
+        '## 涉及文件',
+        '',
+        '- src/client.ts',
+        '',
+        '## 做到哪',
+        '',
+        '检索端点已接线',
+        '',
+        '## 还差什么',
+        '',
+        '面板复测',
+        '',
+        '## 停在哪',
+        '',
+        '独有正文词 QUARKFALL',
+        '',
+        '## 读者警告',
+        '',
+        '无',
+        '',
+      ].join('\n'),
+      'utf-8',
+    )
+    const { setPin } = await import('../src/index.ts')
+    setPin('ho-query-0001')
+    const handler = routeHandler()
+
+    // 无 q：inboxQuery 字段缺省（无参零变化钉延伸——contextHealth 同款向后兼容纪律）
+    const bare = await callRoute(handler, { method: 'GET', url: '/dsh-takeover/state', headers: GUARD })
+    assert.equal(bare.status, 200)
+    const bareBody = JSON.parse(bare.body) as Record<string, unknown>
+    assert.equal('inboxQuery' in bareBody, false, '无 q 参数 → inboxQuery 缺省')
+    // pins 常驻（triage 接线：state.pins = 当前有效置顶，新置顶在前）
+    assert.deepEqual(bareBody['pins'], ['ho-query-0001'], 'state.pins 随 pins.json 进 state')
+    // doctor 常驻（doctor 接线：干净总线 ok:true 零发现）
+    const doc = bareBody['doctor'] as { ok?: boolean; issues?: unknown[]; scanned?: Record<string, number> } | undefined
+    assert.ok(doc !== undefined && typeof doc === 'object', 'state.doctor 体检报告并入 state')
+    assert.equal(doc.ok, true, '干净总线零发现 ok:true')
+    assert.deepEqual(doc.issues, [])
+    assert.ok((doc.scanned?.pendingCards ?? 0) >= 1, '扫描覆盖面计数如实')
+
+    // ?q= 元字段命中；includeBody=1 命中纯正文词（元字段查不到的）
+    const metaHit = await callRoute(handler, { method: 'GET', url: `/dsh-takeover/state?q=${encodeURIComponent('ho-query')}&includeBody=1`, headers: GUARD })
+    const metaBody = JSON.parse(metaHit.body) as { inboxQuery?: { hits: Array<{ id: string; where: string }>; scanned: number } }
+    assert.equal(metaBody.inboxQuery?.hits.length, 1)
+    assert.equal(metaBody.inboxQuery?.hits[0]?.where, 'meta+body', '编号与正文双命中 → meta+body')
+
+    const bodyOnly = await callRoute(handler, { method: 'GET', url: `/dsh-takeover/state?q=${encodeURIComponent('QUARKFALL')}&includeBody=1`, headers: GUARD })
+    const bodyOnlyBody = JSON.parse(bodyOnly.body) as { inboxQuery?: { hits: Array<{ id: string; where: string; lines: string[] }> } }
+    assert.equal(bodyOnlyBody.inboxQuery?.hits.length, 1, 'includeBody=1：纯正文词命中')
+    assert.equal(bodyOnlyBody.inboxQuery?.hits[0]?.where, 'body')
+    assert.ok((bodyOnlyBody.inboxQuery?.hits[0]?.lines.length ?? 0) >= 1, '命中行摘要随命中带出')
+
+    // 同词不勾含正文：纯正文词零命中（元字段口径，诚实两态）
+    const metaOnly = await callRoute(handler, { method: 'GET', url: `/dsh-takeover/state?q=${encodeURIComponent('QUARKFALL')}`, headers: GUARD })
+    const metaOnlyBody = JSON.parse(metaOnly.body) as { inboxQuery?: { hits: unknown[] } }
+    assert.deepEqual(metaOnlyBody.inboxQuery?.hits, [], '不带 includeBody=1 → 只扫元字段，纯正文词不命中')
+  } finally {
+    delete process.env.HANDOFF_HOME
+    rmSync(home, { recursive: true, force: true })
+  }
+})

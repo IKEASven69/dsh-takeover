@@ -41,6 +41,8 @@ import {
   saveSeenSet,
   sourceFacets,
   seenStorageKey,
+  addressBucketOf,
+  pointedMachineOf,
 } from './inbox-view.ts'
 import type { PendingGroup, SeenStore } from './inbox-view.ts'
 import type { TakeoverState, PendingRow, ProviderRow } from './settings.ts'
@@ -403,6 +405,9 @@ const CSS = `
   padding: 1px 5px; border-radius: 999px; box-sizing: border-box; background: var(--tk-a-soft); color: var(--tk-a-text);
   font-variant-numeric: tabular-nums; }
 .tk-badge-hot { background: var(--tk-grad); color: var(--tk-on-accent); }
+/* 上下文预警角标（0.26 集成接线）：语义色实底（DESIGN.md §2 三色纪律——黄=预警 红=危急） */
+.tk-badge-warn { background: var(--tk-warn); color: #1f1f1f; }
+.tk-badge-err { background: var(--tk-err); color: #fff; }
 .tk-rail-foot { margin-top: auto; display: flex; flex-direction: column; gap: 2px; }
 .tk-ver { margin: 8px 8px 0; font-size: 10px; color: var(--tk-dim); font-family: ui-monospace, monospace;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -754,8 +759,11 @@ const CSS = `
 // 数据获取
 // ---------------------------------------------------------------------------
 
-async function getState(): Promise<TakeoverState> {
-  const res = await fetch('/dsh-takeover/state', { cache: 'no-store' })
+async function getState(sessionId?: string): Promise<TakeoverState> {
+  // 可选 sessionId（0.26 上下文预警主挂点）：有座位时带上，host 半在会话在场时
+  // 附 state.contextHealth；无座位（设置卡挂载）不带参，响应零变化
+  const qs = typeof sessionId === 'string' && sessionId !== '' ? `?sessionId=${encodeURIComponent(sessionId)}` : ''
+  const res = await fetch(`/dsh-takeover/state${qs}`, { cache: 'no-store' })
   const body = await res.json() as TakeoverState | { error: string }
   if (!res.ok || 'error' in body) throw new Error('error' in body ? body.error : `HTTP ${res.status}`)
   return body
@@ -943,6 +951,34 @@ export function coverageTextOf(state: TakeoverState): string | null {
     }
   }
   return null
+}
+
+/** 上下文预警报告的客户端视图（host 半 ContexthealthReport 的防御式窄化形态） */
+export type ContextHealthView = {
+  level: 'ok' | 'warn' | 'critical' | 'unknown'
+  ratio?: number
+  basis: string
+  triggers: string[]
+  action: 'lifeboat' | 'deposit' | null
+}
+
+/**
+ * 上下文预警（0.26 集成接线 §5.3）的防御式读取：state.contextHealth 是 host 半在
+ * 带 sessionId 时展开的字段——字段缺席（无座位挂载/老 host）/坏数据（闭集外 level、
+ * basis 非串）一律 null，角标/瓦片/预警条整块不渲染，绝不硬造。
+ */
+export function contextHealthOf(state: TakeoverState | null): ContextHealthView | null {
+  if (state === null) return null
+  const raw = (state as unknown as Record<string, unknown>).contextHealth
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const o = raw as Record<string, unknown>
+  const level = o['level']
+  if (level !== 'ok' && level !== 'warn' && level !== 'critical' && level !== 'unknown') return null
+  const basis = typeof o['basis'] === 'string' ? o['basis'] : ''
+  const triggers = Array.isArray(o['triggers']) ? o['triggers'].filter((x): x is string => typeof x === 'string' && x !== '') : []
+  const ratio = typeof o['ratio'] === 'number' && Number.isFinite(o['ratio']) && o['ratio'] >= 0 ? o['ratio'] : undefined
+  const action = o['action'] === 'lifeboat' || o['action'] === 'deposit' ? o['action'] : null
+  return { level, ratio, basis, triggers, action }
 }
 
 // ---------------------------------------------------------------------------
@@ -1194,7 +1230,7 @@ ${matrixRows}
 // 展示件
 // ---------------------------------------------------------------------------
 
-export function PendingList({ rows, query, home, t, lang, onExport, onChainFilter, onTakeInbox, takeBusyId, onDismiss, dismissBusyId }: {
+export function PendingList({ rows, query, home, t, lang, onExport, onChainFilter, onTakeInbox, takeBusyId, onDismiss, dismissBusyId, pins, onPin, onUnpin, pinBusyId, includeBody, onToggleIncludeBody, bodyHits, bodyBusy, bodyErr, machineName }: {
   rows: PendingRow[]
   query: string
   /** 解析后的 HANDOFF_HOME（state.home）：已见集合 localStorage 键的散列源 */
@@ -1213,6 +1249,23 @@ export function PendingList({ rows, query, home, t, lang, onExport, onChainFilte
   onDismiss: (p: PendingRow) => void
   /** 正在忽略的卡 id（按行显示忽略中） */
   dismissBusyId: string | null
+  /** 0.26 triage 接线：当前有效置顶卡 id（state.pins，新置顶在前；老 host 缺省=空） */
+  pins: string[]
+  /** 置顶 / 取消置顶（POST pin/unpin 端点），成功后 reload 在 Panel */
+  onPin: (p: PendingRow) => void
+  onUnpin: (p: PendingRow) => void
+  /** 正在置顶/取消置顶的卡 id（按钮按行显示处理中） */
+  pinBusyId: string | null
+  /** 「含正文」勾选态：勾选且查询词非空时走服务端全文检索（state?q=&includeBody=1） */
+  includeBody: boolean
+  onToggleIncludeBody: () => void
+  /** 服务端检索结果：命中卡 id → 正文命中行摘要（null=检索未激活） */
+  bodyHits: Map<string, string[]> | null
+  bodyBusy: boolean
+  bodyErr: string | null
+  /** 本机机器名（state.machineName，0.26 第三波接线；老 host 缺省）——
+   * 点名三桶分组（mine=to=machine:本机名）的判定源；缺席则不分组不打标 */
+  machineName?: string
 }): ReturnType<typeof createElement> {
   // 已见集合：localStorage 按 HANDOFF_HOME 散列分键；打开过（展开过）即记为已见。
   // 存储不可写时退化为仅本会话记住（loadSeenSet/saveSeenSet 全程不抛）。
@@ -1257,6 +1310,13 @@ export function PendingList({ rows, query, home, t, lang, onExport, onChainFilte
   // 来源筛选 + 只看新卡：收件箱自持的筛选状态（重开设置卡即重置，轻量符合直觉）
   const [sourceSel, setSourceSel] = useState<string | null>(null)
   const [newOnly, setNewOnly] = useState(false)
+  // 点名三桶（0.26 第三波接线 /sendto）：selfName 在手才算桶——老 host / machineName 缺席
+  // 时全部按 any 处理，点名徽标与筛选整体不出现（防御式消费，老宿主零变化）
+  const selfName = typeof machineName === 'string' ? machineName : ''
+  const bucketOfRow = (p: PendingRow): 'mine' | 'others' | 'any' => (selfName !== '' ? addressBucketOf(p, selfName) : 'any')
+  const mineCount = selfName !== '' ? rows.filter((p) => bucketOfRow(p) === 'mine').length : 0
+  const othersCount = selfName !== '' ? rows.filter((p) => bucketOfRow(p) === 'others').length : 0
+  const [mineOnly, setMineOnly] = useState(false)
 
   // 先滤（来源 → 只看新卡 → 文本）后组：过滤改变可见序列，「相邻」在滤后的列表上判定。
   // 空壳卡分离成「低信息」次级组（默认折叠）——主列表只留实质工作卡（Linear/Gmail 范式）
@@ -1264,13 +1324,40 @@ export function PendingList({ rows, query, home, t, lang, onExport, onChainFilte
   // 「只看新卡」下展开的行不因记已见而消失：展开 = 正在分诊，收起才算分诊完成
   // （否则行在点击瞬间蒸发，详情永远看不到——0.4.3 复验实测的交互回归）
   const newOrOpen = new Set([...newIds, ...openIds])
-  const visible = filterPending(
-    rows,
-    query,
-    (a) => PROVIDER_LABEL[a] ?? (a === '' ? t('unknownSource') : a),
-    sourceSel,
-    newOnly ? newOrOpen : null,
-  )
+  // 「点名给我」筛选（0.26 第三波接线）：视图层筛选，与来源 chips/只看新卡叠加；
+  // 行集先按桶收窄再进文本过滤（bucketOf 纯视图语义，不进服务端检索口径）
+  const bucketRows = mineOnly ? rows.filter((p) => bucketOfRow(p) === 'mine') : rows
+  // 「含正文」检索激活（勾选 + 查询词非空 + 服务端结果已回）：查询词过滤委托给服务端
+  // searchInbox（元字段+正文同口径）——客户端 meta 过滤会把纯正文命中卡滤掉，二者不能叠加；
+  // 来源 chips 与只看新卡是视图层筛选，照常叠加
+  const bodySearchActive = includeBody && query.trim() !== '' && bodyHits !== null
+  const filtered = bodySearchActive
+    ? filterPending(bucketRows, '', (a) => PROVIDER_LABEL[a] ?? (a === '' ? t('unknownSource') : a), sourceSel, newOnly ? newOrOpen : null)
+      .filter((p) => bodyHits!.has(p.id))
+    : filterPending(
+        bucketRows,
+        query,
+        (a) => PROVIDER_LABEL[a] ?? (a === '' ? t('unknownSource') : a),
+        sourceSel,
+        newOnly ? newOrOpen : null,
+      )
+  // 置顶排序（0.26 triage 接线）：pin 序在前（state.pins 新置顶在前的顺序），其余保持原序；
+  // 点名排序（0.26 第三波接线）：mine 桶浮到最前（第一眼看到点名本机的卡）——先桶后 pin
+  // 两次稳定排序：pin 序压过桶序（置顶优先），非置顶段内 mine 在前
+  const mineRank = (p: PendingRow): number => (bucketOfRow(p) === 'mine' ? 0 : 1)
+  const pinRank = new Map<string, number>(pins.map((id, i) => [id, i] as const))
+  const pinSet = new Set(pins)
+  const mineSorted = [...filtered].sort((a, b) => mineRank(a) - mineRank(b))
+  const visible = pins.length > 0
+    ? [...mineSorted].sort((a, b) => {
+        const ra = pinRank.get(a.id)
+        const rb = pinRank.get(b.id)
+        if (ra !== undefined && rb !== undefined) return ra - rb
+        if (ra !== undefined) return -1
+        if (rb !== undefined) return 1
+        return 0
+      })
+    : mineSorted
   const lowRows = visible.filter((r) => r.lowInfo === true)
   const mainRows = visible.filter((r) => r.lowInfo !== true)
   const groups = groupAdjacent(mainRows)
@@ -1335,6 +1422,8 @@ export function PendingList({ rows, query, home, t, lang, onExport, onChainFilte
   const rowNode = (p: PendingRow, inGroup: boolean): ReturnType<typeof createElement> => {
     const open = openIds.has(p.id)
     const isNew = !seen.has(p.id)
+    const bucket = bucketOfRow(p)
+    const pointed = pointedMachineOf(p.to)
     // 外层是中性容器：预览与「导出 .md」按钮必须是 role=button 行的**兄弟**节点——
     // 嵌套可交互元素违反 ARIA 禁则（stopPropagation 只解决事件，不解决语义）
     return createElement('div', { key: p.id, className: inGroup ? 'bt-pending-member' : undefined },
@@ -1355,6 +1444,15 @@ export function PendingList({ rows, query, home, t, lang, onExport, onChainFilte
           createElement('span', { className: 'bt-pending-title', title: p.id }, displayTitleOf(p)),
           // 未读态已由行首强调条表达；「新」徽标只留给 1 小时内的新卡（防满屏 amber 噪音）
           (isNew && Date.now() - Date.parse(p.pushedAt) < 3_600_000) ? createElement('span', { className: 'bt-tag bt-tag-new' }, t('newBadge')) : null,
+          // 置顶徽标（0.26 triage 接线）：pins 集合在场的行出标（排序已置顶优先）
+          pinSet.has(p.id) ? createElement('span', { className: 'bt-tag bt-tag-group', title: t('pinBadgeTitle') }, t('pinBadge')) : null,
+          // 点名徽标（0.26 第三波接线 /sendto 三桶）：mine=点名本机（排序已浮最前）、
+          // others=别机点名（不冒领，卡面 to 可查）；any 桶不打标
+          bucket === 'mine'
+            ? createElement('span', { className: 'bt-tag bt-tag-group', title: t('mineBadgeTitle', { name: pointed !== '' ? pointed : selfName }) }, t('mineBadge'))
+            : bucket === 'others'
+              ? createElement('span', { className: 'bt-tag bt-tag-lowinfo', title: t('othersBadgeTitle', { name: pointed }) }, t('othersBadge'))
+              : null,
           p.lowInfo === true ? createElement('span', { className: 'bt-tag bt-tag-lowinfo' }, t('lowInfoBadge')) : null,
           // 接力链徽标（展示位；过滤入口在展开态「只看此链」——行内不嵌交互，ARIA 禁则同前）
           p.supersedes !== undefined
@@ -1380,6 +1478,11 @@ export function PendingList({ rows, query, home, t, lang, onExport, onChainFilte
       ),
       open ? createElement('div', { className: 'bt-preview', onClick: (e: Event) => e.stopPropagation() },
         createElement('span', null, p.preview !== '' ? p.preview : t('previewEmpty')),
+        // 正文命中行摘要（0.26 triage 接线）：服务端全文检索命中该卡时给命中行，扫一眼定位
+        bodyHits !== null && (bodyHits.get(p.id)?.length ?? 0) > 0
+          ? createElement('span', { className: 'bt-sub' },
+              `${t('bodyHitLabel')}：${(bodyHits.get(p.id) ?? []).slice(0, 3).join(' / ')}`)
+          : null,
         createElement('span', { className: 'bt-preview-actions' },
           createElement('span', { className: 'bt-preview-hint' }, t('previewHint')),
           p.supersedes !== undefined
@@ -1400,6 +1503,13 @@ export function PendingList({ rows, query, home, t, lang, onExport, onChainFilte
             onClick: () => { onTakeInbox(p) },
             title: t('inboxTakeTitle'),
           }, takeBusyId === p.id ? t('deliveringBtn') : t('inboxTakeBtn')),
+          // 置顶 / 取消置顶（0.26 triage 接线）：幂等本机视图动作，POST pin/unpin 端点
+          createElement('button', {
+            className: 'bt-btn',
+            disabled: pinBusyId !== null,
+            onClick: () => { if (pinSet.has(p.id)) onUnpin(p); else onPin(p) },
+            title: pinSet.has(p.id) ? t('unpinBtnTitle') : t('pinBtnTitle'),
+          }, pinBusyId === p.id ? t('pinBusyBtn') : pinSet.has(p.id) ? t('unpinBtn') : t('pinBtn')),
           createElement('button', {
             className: 'bt-btn',
             onClick: () => { onExport(p) },
@@ -1457,7 +1567,8 @@ export function PendingList({ rows, query, home, t, lang, onExport, onChainFilte
   }
 
   return createElement('div', { className: 'bt-rows' },
-    // 筛选行：未读开关（复选框，独立语义）与来源 chips 同行排布——省一行竖向空间
+    // 筛选行：未读开关（复选框，独立语义）、含正文开关（0.26 triage：服务端全文检索）
+    // 与来源 chips 同行排布——省一行竖向空间
     createElement('div', { className: 'bt-filterrow' },
       createElement('label', { className: 'bt-newonly' },
         createElement('input', {
@@ -1469,8 +1580,37 @@ export function PendingList({ rows, query, home, t, lang, onExport, onChainFilte
         createElement('span', null, t('newOnlyChip')),
         createElement('span', { className: 'bt-chip-count' }, String(newIds.size)),
       ),
+      createElement('label', { className: 'bt-newonly' },
+        createElement('input', {
+          type: 'checkbox',
+          checked: includeBody,
+          'aria-label': t('includeBodyAria'),
+          title: t('includeBodyTitle'),
+          onChange: onToggleIncludeBody,
+        }),
+        createElement('span', null, t('includeBodyChip')),
+        bodyBusy ? createElement('span', { className: 'bt-chip-count' }, '…') : null,
+      ),
+      // 点名给我开关（0.26 第三波接线 /sendto）：存在 machine: 点名卡才出现（无点名不占行）；
+      // others 桶计数缀在侧（不冒领但可见——别机投来的卡要知道它在等谁）
+      selfName !== '' && (mineCount > 0 || othersCount > 0)
+        ? createElement('label', { className: 'bt-newonly' },
+            createElement('input', {
+              type: 'checkbox',
+              checked: mineOnly,
+              'aria-label': t('mineChipAria'),
+              title: t('mineChipTitle', { name: selfName }),
+              onChange: () => setMineOnly((v) => !v),
+            }),
+            createElement('span', null, t('mineChip')),
+            createElement('span', { className: 'bt-chip-count' }, String(mineCount)),
+          )
+        : null,
       chipBar,
     ),
+    bodyErr !== null
+      ? createElement('div', { className: 'bt-banner bt-banner-info' }, t('bodySearchFail', { error: bodyErr }))
+      : null,
     rows.length === 0
       ? createElement('div', { className: 'bt-banner bt-banner-info' }, t('emptyInbox'))
       : visible.length === 0
@@ -1496,6 +1636,8 @@ interface HistoryRow {
   /** 「停在哪」段摘要（服务端已截 120 字并剥控制字符） */
   stopped: string
   supersedes?: string
+  /** 本卡是延续回执卡：指向的源卡 id（extras.receipt.for，0.26；普通卡/老 host 缺省） */
+  receiptFor?: string
 }
 
 /** 历史行展示标题：无人类标题时回退编号（PendingList displayTitleOf 同款纪律——
@@ -1511,11 +1653,15 @@ function historyTitleOf(r: HistoryRow): string {
  * 预览纪律（.bt-preview + 边界说明，说明里如实交代摘要出处）。空态诚实：
  * 「暂无归档卡」描述的是 archived/ 现状，加载失败单独明说不粉饰。
  */
-export function InboxHistory({ t, lang, archivedCount }: {
+export function InboxHistory({ t, lang, archivedCount, onRestore, restoreBusyId }: {
   t: Translate
   lang: Lang
   /** state.archivedCount：未拉取前的块头徽标口径（拉取后以服务端 total 为准） */
   archivedCount: number
+  /** 0.26 triage 接线：弃置恢复（POST restore-archived，成功后 reload 在调用方） */
+  onRestore: (id: string) => void
+  /** 正在恢复的卡 id（按钮按行显示恢复中） */
+  restoreBusyId: string | null
 }): ReturnType<typeof createElement> {
   const [open, setOpen] = useState(false)
   const [rows, setRows] = useState<HistoryRow[] | null>(null)
@@ -1554,6 +1700,11 @@ export function InboxHistory({ t, lang, archivedCount }: {
     })
   }
   const count = total ?? archivedCount
+  // 延续账本标记（0.26 集成接线 §5.3，不新增页签）：receiptFor 在场的行是回执卡；
+  // 反向集合（被指向的源卡 id）就是「已被延续」的卡——两类行各给一枚徽标
+  const continuedIds = new Set<string>(
+    (rows ?? []).map((r) => (typeof r.receiptFor === 'string' && r.receiptFor !== '' ? r.receiptFor : '')).filter((id) => id !== ''),
+  )
   const head = createElement('div', {
     className: `bt-history-head bt-pending${open ? ' bt-pending-open' : ''}`,
     role: 'button',
@@ -1596,6 +1747,13 @@ export function InboxHistory({ t, lang, archivedCount }: {
                   createElement('span', { className: 'bt-pend-main' },
                     createElement('span', { className: 'bt-pend-line1' },
                       createElement('span', { className: 'bt-pending-title', title: r.id }, historyTitleOf(r)),
+                      // 延续回执标记（0.26）：本卡是回执卡 → 「延续回执」；本卡已被延续（存在指向它的回执）→ 「已延续」
+                      typeof r.receiptFor === 'string' && r.receiptFor !== ''
+                        ? createElement('span', { className: 'bt-tag bt-tag-group', title: t('receiptForTitle', { id: r.receiptFor }) }, t('receiptForBadge'))
+                        : null,
+                      continuedIds.has(r.id)
+                        ? createElement('span', { className: 'bt-tag bt-tag-group', title: t('receiptContinuedTitle') }, t('receiptContinued'))
+                        : null,
                       createElement('span', { className: 'bt-pend-time' }, r.pushed_at === '' ? t('noTime') : fmtTime(r.pushed_at, lang)),
                     ),
                     createElement('span', { className: 'bt-pend-meta' },
@@ -1612,12 +1770,256 @@ export function InboxHistory({ t, lang, archivedCount }: {
                       ? createElement('span', null, `　${t('historyChainLabel')}：${r.supersedes}`)
                       : null,
                   ),
+                  // 弃置恢复（0.26 triage 接线）：归档卡的逆操作出口——搬回 pending/ 重新可见可取件
                   createElement('span', { className: 'bt-preview-actions' },
                     createElement('span', { className: 'bt-preview-hint' }, t('historyHint')),
+                    createElement('button', {
+                      className: 'bt-btn',
+                      disabled: restoreBusyId !== null,
+                      onClick: () => onRestore(r.id),
+                      title: t('restoreBtnTitle'),
+                    }, restoreBusyId === r.id ? t('restoringBtn') : t('restoreBtn')),
                   ),
                 ) : null,
               )
             })
+          : null,
+      )
+  return createElement('div', { className: 'bt-history' }, head, body)
+}
+
+// ---------------------------------------------------------------------------
+// 接力总账（0.26 第三波接线）：relay 取件记录 × lifecycle 账本 × pending/archived
+// 卡面三源翻账的可见面。懒加载（GET state?ledger=1 首次展开才拉，30s 轮询不背这笔
+// 账——inboxQuery 同款「无参请求响应零变化」扩展）。计数行是闭集原样（continued /
+// abandoned / zombie 字面量是账本协议词，不进 i18n），绝不计算延续率/百分比；
+// 僵尸条目区分救生艇抢出（成因不同不混口径）；对不齐单列不硬归账；空账本诚实一句。
+// ---------------------------------------------------------------------------
+
+/** 总账数字字段的防御式收窄（state 经 fetch 而来，外来坏数据按 0/缺省处理不抛） */
+const ledNum = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0)
+const ledStr = (v: unknown): string => (typeof v === 'string' ? v : '')
+
+/** 三源全空判据：lifecycle 无事件 × relay 无记录 × 盘上无棒（窗口字段与计数闭集双确认） */
+function ledgerIsEmpty(l: NonNullable<TakeoverState['ledger']>): boolean {
+  const w = l.window
+  const c = l.counts
+  return ledNum(w?.lifecycleEvents) === 0 && ledNum(w?.relayRecords) === 0 && ledNum(c?.batons) === 0
+}
+
+export function RelayLedgerBlock({ t, lang }: {
+  t: Translate
+  lang: Lang
+}): ReturnType<typeof createElement> {
+  const [open, setOpen] = useState(false)
+  const [data, setData] = useState<TakeoverState['ledger'] | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const load = (): void => {
+    if (busy) return
+    setBusy(true)
+    void getJson<TakeoverState>('/dsh-takeover/state?ledger=1')
+      .then((s) => {
+        // ledger 字段是路由按需展开的（无参请求不带）——带参仍缺席 = 老 host 或聚合降级：
+        // 两者都按「未取到账」诚实呈现，不编空报表
+        setData(s.ledger ?? null)
+        setErr(null)
+        return undefined
+      })
+      .catch((e: unknown) => { setErr(e instanceof Error ? e.message : String(e)) })
+      .finally(() => setBusy(false))
+  }
+  const toggle = (): void => {
+    const next = !open
+    setOpen(next)
+    if (next && data === null) load()
+  }
+  const l = data !== null && typeof data === 'object' ? data : null
+  const counts = l?.counts ?? null
+  const window_ = l?.window ?? null
+  // 数组字段经 fetch 而来，保留 Array.isArray 防御（坏形态按空数组诚实呈现不抛）；
+  // 元素形态走立约类型（host 半 aggregateLedger 产出，字段闭合）
+  const zombies = Array.isArray(l?.zombies) ? l!.zombies : []
+  const chains = Array.isArray(l?.chains) ? l!.chains : []
+  const unjoined = Array.isArray(l?.unjoined) ? l!.unjoined : []
+  const head = createElement('div', {
+    className: `bt-history-head bt-pending${open ? ' bt-pending-open' : ''}`,
+    role: 'button',
+    tabIndex: 0,
+    'aria-expanded': open,
+    'aria-label': t('ledgerToggleAria'),
+    onClick: toggle,
+    onKeyDown: (e: { key: string; preventDefault(): void }) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle() }
+    },
+  },
+    createElement('span', { className: 'bt-pend-icon', 'aria-hidden': true }, '📒'),
+    createElement('span', { className: 'bt-pending-title' }, t('ledgerTitle')),
+    counts !== null
+      ? createElement('span', { className: 'bt-tag bt-tag-group', title: t('ledgerBadgeTitle') }, String(ledNum(counts.batons)))
+      : null,
+    createElement('span', { className: 'bt-pending-chev', 'aria-hidden': true }, '▸'),
+  )
+  let body: ReturnType<typeof createElement> | null = null
+  if (open) {
+    if (busy && data === null) {
+      body = createElement('div', { className: 'bt-history-body' },
+        createElement('div', { className: 'bt-history-state' }, t('ledgerLoading')))
+    } else if (err !== null) {
+      body = createElement('div', { className: 'bt-history-body' },
+        createElement('div', { className: 'bt-history-state bt-history-err' }, t('ledgerLoadFail', { error: err })))
+    } else if (l === null || counts === null || window_ === null) {
+      body = createElement('div', { className: 'bt-history-body' },
+        createElement('div', { className: 'bt-history-state bt-history-err' }, t('ledgerLoadFail', { error: 'state.ledger 缺席（老 host 或聚合降级）' })))
+    } else if (ledgerIsEmpty(l)) {
+      body = createElement('div', { className: 'bt-history-body' },
+        createElement('div', { className: 'bt-banner bt-banner-info' }, t('ledgerEmpty')))
+    } else {
+      // 计数行：闭集原样（continued/abandoned/zombie 是账本协议词；救生艇抢出紧跟括注）
+      const lifeboatN = ledNum(counts.zombieLifeboat)
+      const countLine = createElement('div', { className: 'bt-history-state' },
+        `${t('ledgerCountsTitle')}：`,
+        createElement('b', null, t('ledgerCountLine', {
+          x: ledNum(counts.continued),
+          y: ledNum(counts.abandoned),
+          z: ledNum(counts.zombie),
+          n: ledNum(counts.batons),
+        })),
+        lifeboatN > 0 ? t('ledgerCountsLifeboat', { m: lifeboatN }) : null,
+      )
+      // 链行：棒 id 时间正序箭头串 + 成环/分叉/断链/回执标注（账不断只标注）
+      const chainRows = chains.map((c, i) => {
+        const steps = Array.isArray(c.steps) ? c.steps : []
+        const ids = steps.map((s) => ledStr(s.id)).filter((s) => s !== '')
+        const cycleIds = Array.isArray(c.cycleIds) ? c.cycleIds.map(ledStr).filter((s) => s !== '') : []
+        const forks = Array.isArray(c.forks) ? c.forks.map(ledStr).filter((s) => s !== '') : []
+        const broken = steps.filter((s) => ledStr(s.brokenTo) !== '').map((s) => ledStr(s.brokenTo))
+        const receiptFor = steps.map((s) => ledStr(s.receiptFor)).find((s) => s !== '') ?? ''
+        return createElement('div', { className: 'bt-history-row bt-pending', key: `chain-${i}`, title: ids.join(' ← ') },
+          createElement('span', { className: 'bt-pend-main' },
+            createElement('span', { className: 'bt-pend-line1' },
+              createElement('span', { className: 'bt-pending-title' }, ids.join(' ← ')),
+              c.cycle === true ? createElement('span', { className: 'bt-tag bt-tag-new', title: t('ledgerCycleTitle', { ids: cycleIds.join('、') }) }, t('ledgerCycleBadge')) : null,
+              forks.length > 0 ? createElement('span', { className: 'bt-tag bt-tag-new', title: t('ledgerForkTitle', { n: forks.length, ids: forks.join('、') }) }, t('ledgerForkBadge')) : null,
+              broken.map((b) => createElement('span', { className: 'bt-tag bt-tag-new', key: `br-${b}`, title: t('ledgerBrokenTitle', { id: b }) }, t('ledgerBrokenBadge', { id: b.length > 16 ? `${b.slice(0, 16)}…` : b }))),
+            ),
+            createElement('span', { className: 'bt-pend-meta' },
+              receiptFor !== ''
+                ? createElement('span', { className: 'bt-tag bt-tag-group', title: t('ledgerReceiptTitle', { id: receiptFor }) }, t('ledgerReceiptBadge'))
+                : null,
+            ),
+          ),
+        )
+      })
+      // 僵尸行：id + 标题（诚实空串回退 id）；救生艇抢出单独标注不混口径
+      const zombieRows = zombies.map((z) => {
+        const id = ledStr(z.id)
+        const title = ledStr(z.title)
+        return createElement('div', { className: 'bt-history-row bt-pending', key: `z-${id}`, title: t('ledgerZombieTitle') },
+          createElement('span', { className: 'bt-pend-main' },
+            createElement('span', { className: 'bt-pend-line1' },
+              createElement('span', { className: 'bt-pending-title' }, title !== '' ? title : id),
+              z.lifeboat === true
+                ? createElement('span', { className: 'bt-tag bt-tag-group', title: t('ledgerLifeboatTitle') }, t('ledgerLifeboatBadge'))
+                : null,
+              createElement('span', { className: 'bt-pend-id' }, id),
+            ),
+          ),
+        )
+      })
+      // 对不齐单列行：kind（闭集标识符原样）+ id，detail 原文进悬浮
+      const unjoinedRows = unjoined.map((u, i) => {
+        const id = ledStr(u.id)
+        return createElement('div', { className: 'bt-history-row bt-pending', key: `u-${i}`, title: ledStr(u.detail) },
+          createElement('span', { className: 'bt-pend-main' },
+            createElement('span', { className: 'bt-pend-line1' },
+              createElement('span', { className: 'bt-tag bt-tag-lowinfo' }, ledStr(u.kind)),
+              createElement('span', { className: 'bt-pending-title' }, id),
+              createElement('span', { className: 'bt-pend-time' }, ledStr(u.at) === '' ? t('noTime') : fmtTime(ledStr(u.at), lang)),
+            ),
+          ),
+        )
+      })
+      body = createElement('div', { className: 'bt-history-body' },
+        countLine,
+        chains.length > 0 ? createElement('div', { className: 'bt-history-state' }, t('ledgerChainsTitle', { n: chains.length })) : null,
+        ...chainRows,
+        ledNum(counts.chainless) > 0
+          ? createElement('div', { className: 'bt-history-state' }, t('ledgerChainlessNote', { n: ledNum(counts.chainless) }))
+          : null,
+        zombies.length > 0 ? createElement('div', { className: 'bt-history-state' }, t('ledgerZombiesTitle', { n: zombies.length })) : null,
+        ...zombieRows,
+        unjoined.length > 0 ? createElement('div', { className: 'bt-history-state' }, t('ledgerUnjoinedTitle', { n: unjoined.length })) : null,
+        ...unjoinedRows,
+        ledStr(window_.note) !== '' ? createElement('div', { className: 'bt-history-state' }, ledStr(window_.note)) : null,
+      )
+    }
+  }
+  return createElement('div', { className: 'bt-history' }, head, body)
+}
+
+// ---------------------------------------------------------------------------
+// 总线体检（0.26 doctor 接线）：state.doctor 在场且有发现时渲染——issues 按严重度
+// 分级展示（error/warn/info），扫描覆盖面与降级附注如实附尾。零发现整块不渲染
+//（健康即安静；state 里仍带 ok:true 的完整报告供消费方核）。
+// ---------------------------------------------------------------------------
+
+const DOCTOR_SEV_ORDER: Record<string, number> = { error: 0, warn: 1, info: 2 }
+
+export function DoctorBlock({ doctor, t }: {
+  doctor: NonNullable<TakeoverState['doctor']>
+  t: Translate
+}): ReturnType<typeof createElement> {
+  const [open, setOpen] = useState(false)
+  const issues = Array.isArray(doctor.issues) ? doctor.issues : []
+  const nErr = issues.filter((i) => i.severity === 'error').length
+  const nWarn = issues.filter((i) => i.severity === 'warn').length
+  const nInfo = issues.length - nErr - nWarn
+  const sevLabel = (s: string): string => s === 'error' ? t('doctorSevError') : s === 'warn' ? t('doctorSevWarn') : t('doctorSevInfo')
+  const sevClass = (s: string): string => s === 'error' ? 'bt-tag bt-tag-lowinfo' : s === 'warn' ? 'bt-tag bt-tag-group' : 'bt-tag bt-tag-group'
+  const scanned = doctor.scanned
+  const head = createElement('div', {
+    className: `bt-history-head bt-pending${open ? ' bt-pending-open' : ''}`,
+    role: 'button',
+    tabIndex: 0,
+    'aria-expanded': open,
+    'aria-label': t('doctorIssueAria'),
+    onClick: () => setOpen(!open),
+    onKeyDown: (e: { key: string; preventDefault(): void }) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(!open) }
+    },
+  },
+    createElement('span', { className: 'bt-pend-icon', 'aria-hidden': true }, '🩺'),
+    createElement('span', { className: 'bt-pending-title' }, t('doctorTitle')),
+    createElement('span', { className: 'bt-tag bt-tag-group', title: t('doctorBadgeTitle') }, String(issues.length)),
+    createElement('span', { className: 'bt-pending-chev', 'aria-hidden': true }, '▸'),
+  )
+  const body = !open
+    ? null
+    : createElement('div', { className: 'bt-history-body' },
+        createElement('div', { className: 'bt-sub' }, t('doctorScanned', {
+          p: scanned?.pendingCards ?? 0,
+          a: scanned?.archivedCards ?? 0,
+          ps: scanned?.pendingSidecars ?? 0,
+          as: scanned?.archivedSidecars ?? 0,
+        })),
+        ...[...issues]
+          .sort((a, b) => ((DOCTOR_SEV_ORDER[a.severity] ?? 9) - (DOCTOR_SEV_ORDER[b.severity] ?? 9)))
+          .map((i, idx) => createElement('div', { key: `${i.kind}-${i.id}-${idx}`, className: 'bt-history-row-wrap' },
+            createElement('div', { className: 'bt-history-row bt-pending' },
+              createElement('span', { className: sevClass(i.severity), title: t('doctorBadgeTitle') }, sevLabel(i.severity)),
+              createElement('span', { className: 'bt-pend-main' },
+                createElement('span', { className: 'bt-pend-line1' },
+                  createElement('span', { className: 'bt-pending-title', title: i.id }, `${i.kind} · ${i.id}`),
+                ),
+                createElement('span', { className: 'bt-pend-meta' },
+                  createElement('span', { className: 'bt-history-stop' }, i.detail),
+                ),
+              ),
+            ),
+          )),
+        Array.isArray(doctor.notes) && doctor.notes.length > 0
+          ? createElement('div', { className: 'bt-sub' }, `${t('doctorNotes')}：${doctor.notes.join('；')}`)
           : null,
       )
   return createElement('div', { className: 'bt-history' }, head, body)
@@ -2033,6 +2435,18 @@ interface PreviewEntry {
   error: string | null
 }
 
+/** 预检判定卡的客户端窄化视图（GET /dsh-takeover/preflight 的 card 字段；state 经 fetch
+ * 而来，外来坏数据防御式收窄——verdict 不在闭集内按「无卡」fail-open 处理） */
+interface PreflightCardView {
+  verdict: 'ready' | 'wounded' | 'decline'
+  wounds?: unknown
+  checks?: unknown
+  basis?: unknown
+}
+
+/** 列表响应的运行证据字段（0.26 第三波接线 server 附带 runningIds；老 host 缺省 undefined） */
+type BrowserListBody = SessionListBody & { runningIds?: unknown }
+
 export function ForeignBrowser({ state, t, lang, onError, onNotice, navigate, bare, active }: {
   state: TakeoverState | null
   t: Translate
@@ -2061,6 +2475,14 @@ export function ForeignBrowser({ state, t, lang, onError, onNotice, navigate, ba
   // 一键接管投递态（busyKey 防双击；delivered 成功回执）
   const [busyKey, setBusyKey] = useState<string | null>(null)
   const [deliveredKey, setDeliveredKey] = useState<string | null>(null)
+  // 「运行中」筛选（0.26 第三波接线，需求缺口 hkkz9522#61「2 千会话里找运行中的」+
+  // context#266 Running-only filter）：只看有运行证据的会话。数据源 = /dsh-takeover/sessions
+  // 响应附带的 runningIds（宿主 sessions 存活面 × relay 溯源的正向证据）；字段缺席（旧宿主）
+  // → chip 停用态如实「状态不可知」，绝不编
+  const [runOnly, setRunOnly] = useState(false)
+  // 接管预检（0.26 第三波接线）：wounded 判定的待确认门（decline 直接拦停不成门）
+  const [pendingGate, setPendingGate] = useState<{ key: string; mode: 'take' | 'take_deposit'; id: string; card: PreflightCardView } | null>(null)
+  const [gateBusy, setGateBusy] = useState(false)
   // 预览：单行展开（openId），按会话 id 缓存
   const [openId, setOpenId] = useState<string | null>(null)
   const [previews, setPreviews] = useState<Record<string, PreviewEntry>>({})
@@ -2125,13 +2547,70 @@ export function ForeignBrowser({ state, t, lang, onError, onNotice, navigate, ba
   const provider = sel ?? ''
   const clip = (s: string, n = 260): string => (s.length > n ? `${s.slice(0, n)}…` : s)
 
-  /** 一键接管：POST 宿主投递（建新会话+queue 指令）；失败（含宿主缺控制器）
+  // ---- 接管预检（0.26 第三波接线）：前置闸三态。预检模块契约 fail-open（预检绝不拦
+  // 真实接管）：端点缺席/异常按无卡处理照常放行，但经通知横幅如实说明（不静默假装查过）；
+  // decline 拦停（basis 呈给用户）；wounded 浮伤待确认；ready 放行且 checks 含 unknown
+  // 时 basis 附注经通知浮出（死活未知不吞）。
+  const gateWounds = (card: PreflightCardView): Array<{ kind: string; item: string; detail: string }> => {
+    const ws = Array.isArray(card.wounds) ? card.wounds : []
+    return ws.map((w) => {
+      const o = w !== null && typeof w === 'object' ? (w as Record<string, unknown>) : {}
+      return {
+        kind: typeof o['kind'] === 'string' ? o['kind'] : '',
+        item: typeof o['item'] === 'string' ? o['item'] : '',
+        detail: typeof o['detail'] === 'string' ? o['detail'] : '',
+      }
+    }).filter((w) => w.item !== '' || w.detail !== '')
+  }
+  const gateBasis = (card: PreflightCardView): string => (typeof card.basis === 'string' ? card.basis : '')
+  const preflightOf = async (providerName: string, id: string): Promise<PreflightCardView | null> => {
+    try {
+      const b = await getJson<{ ok: true; card?: unknown } | { ok: false; error: string }>(
+        `/dsh-takeover/preflight?provider=${encodeURIComponent(providerName)}&reference=${encodeURIComponent(id)}`,
+      )
+      if (b.ok !== true) return null
+      const card = b.card !== null && typeof b.card === 'object' ? (b.card as PreflightCardView) : null
+      if (card === null) return null
+      return card.verdict === 'ready' || card.verdict === 'wounded' || card.verdict === 'decline' ? card : null
+    } catch {
+      return null // 老宿主无端点 / 网络异常：fail-open，调用方如实说明
+    }
+  }
+
+  /** 一键接管：先 GET preflight 出判定卡（decline 拦停 / wounded 待确认 / ready 放行），
+   * 再 POST 宿主投递（建新会话+queue 指令）；失败（含宿主缺控制器）
    * 自动退回复制路径——按钮与手动粘贴的载荷同源（takeoverCommand/depositCommand），
    * 降级永不改变语义，只多一步粘贴；失败原因随信息横幅浮出（不吞错）。 */
-  const runTakeover = (key: string, mode: 'take' | 'take_deposit', id: string): void => {
+  const runTakeover = async (key: string, mode: 'take' | 'take_deposit', id: string, confirmed = false): Promise<void> => {
     if (busyKey !== null) return
     const fallback = mode === 'take_deposit' ? depositCommand(provider, id, lang) : takeoverCommand(provider, id)
     setBusyKey(key)
+    if (confirmed !== true) {
+      setGateBusy(true)
+      const card = await preflightOf(provider, id)
+      setGateBusy(false)
+      if (card !== null) {
+        if (card.verdict === 'decline') {
+          setBusyKey(null)
+          onError(t('preflightDeclineBanner', { basis: gateBasis(card) }))
+          return
+        }
+        if (card.verdict === 'wounded') {
+          setBusyKey(null)
+          setPendingGate({ key, mode, id, card })
+          return
+        }
+        // ready：checks 含 unknown（死活未知/未核验）时 basis 附注浮出，不吞
+        const checks = Array.isArray(card.checks) ? card.checks : []
+        if (checks.some((c) => c !== null && typeof c === 'object' && (c as Record<string, unknown>)['state'] === 'unknown')) {
+          onNotice(t('preflightReadyNote', { basis: gateBasis(card) }))
+        }
+      } else {
+        onNotice(t('preflightFailNote', { error: '预检端点不可达' }))
+      }
+    } else {
+      setPendingGate(null)
+    }
     void post<{ ok: true; sessionId: string; title: string } | { ok: false; error: string }>(
       '/dsh-takeover/takeover',
       { mode, provider, reference: id, lang },
@@ -2226,6 +2705,11 @@ export function ForeignBrowser({ state, t, lang, onError, onNotice, navigate, ba
             if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleRow(r, open) }
           },
         }, fsessDisplayTitle(r.title, idShown)),
+        // 运行证据徽标（0.26 第三波接线）：正向证据才出标——口径（接管会话存活）进悬浮，
+        // 原生侧不可知不断言
+        runningSet.has(r.id)
+          ? createElement('span', { className: 'bt-tag bt-tag-group', title: t('runBadgeTitle') }, t('runChip'))
+          : null,
         createElement('span', { className: 'bt-fsess-time' }, relTime(r.updatedAt, now, lang)),
       ),
       createElement('div', { className: 'bt-fsess-line2' },
@@ -2254,10 +2738,10 @@ export function ForeignBrowser({ state, t, lang, onError, onNotice, navigate, ba
             type: 'button',
             disabled: busyKey !== null,
             title: t('takeoverTitle'),
-            onClick: () => runTakeover(`take:${r.id}`, 'take', r.id),
+            onClick: () => { void runTakeover(`take:${r.id}`, 'take', r.id) },
           },
             deliveredKey === `take:${r.id}` ? t('deliveredBtn')
-            : busyKey === `take:${r.id}` ? t('deliveringBtn')
+            : busyKey === `take:${r.id}` ? (gateBusy ? t('preflightBusy') : t('deliveringBtn'))
             : copied === `take:${r.id}` ? t('fallbackCopyBtn')
             : t('takeoverBtn')),
           createElement('button', {
@@ -2265,10 +2749,10 @@ export function ForeignBrowser({ state, t, lang, onError, onNotice, navigate, ba
             type: 'button',
             disabled: busyKey !== null,
             title: t('depositTitle'),
-            onClick: () => runTakeover(`dep:${r.id}`, 'take_deposit', r.id),
+            onClick: () => { void runTakeover(`dep:${r.id}`, 'take_deposit', r.id) },
           },
             deliveredKey === `dep:${r.id}` ? t('deliveredBtn')
-            : busyKey === `dep:${r.id}` ? t('deliveringBtn')
+            : busyKey === `dep:${r.id}` ? (gateBusy ? t('preflightBusy') : t('deliveringBtn'))
             : copied === `dep:${r.id}` ? t('fallbackCopyBtn')
             : t('depositBtn')),
         ),
@@ -2278,13 +2762,21 @@ export function ForeignBrowser({ state, t, lang, onError, onNotice, navigate, ba
   }
 
   const matched = list !== undefined ? filterSessions(list.sessions, query) : []
+  // 运行证据集（0.26 第三波接线）：runningIds 在场 = 服务端可判定（含诚实空集）；
+  // 缺席 = 旧宿主/服务缺席 → 状态不可知，chip 停用、筛选失效（绝不编）
+  const runningRaw = list !== undefined ? (list as BrowserListBody).runningIds : undefined
+  const runningIds: string[] | null = Array.isArray(runningRaw)
+    ? runningRaw.filter((x): x is string => typeof x === 'string')
+    : null
+  const runningSet = new Set(runningIds ?? [])
   // facet 计数随查询走（不含自身 cwd 选择，保持各 facet 计数可点）
   const facets = list !== undefined ? cwdFacets(matched) : []
   // 选中的 facet 因查询变化/换家消失时自动失效——不留下隐形过滤器
   const cwdEffective = facets.some((f) => f.cwd === cwdSel) ? cwdSel : null
-  const visible = filterByCwd(matched, cwdEffective).filter((r) => !isSubagentSession(r))
+  const runKeep = (r: SessionRow): boolean => runOnly !== true || runningSet.has(r.id)
+  const visible = filterByCwd(matched, cwdEffective).filter((r) => !isSubagentSession(r)).filter(runKeep)
   // 子代理/工作流会话收进次级折叠组（agent-sessions #49、cc-sessions #3 两家用户各自请求）
-  const subRows = filterByCwd(matched, cwdEffective).filter(isSubagentSession)
+  const subRows = filterByCwd(matched, cwdEffective).filter(isSubagentSession).filter(runKeep)
 
   // 次级折叠组（与收件箱低信息组同款交互：组头开合，默认收起）
   const subGroupNode = subRows.length > 0
@@ -2330,6 +2822,7 @@ export function ForeignBrowser({ state, t, lang, onError, onNotice, navigate, ba
             setSel(p.name)
             setOpenId(null)
             setCwdSel(null) // 换家必清项目 facet——旧家的 cwd 对新家是隐形过滤器
+            setPendingGate(null) // 换家必清预检待确认门——旧家的伤列表对新家无意义
             if (lists[p.name] === undefined && loading[p.name] !== true) load(p.name)
           },
         },
@@ -2358,7 +2851,49 @@ export function ForeignBrowser({ state, t, lang, onError, onNotice, navigate, ba
               disabled: loading[provider] === true,
               onClick: () => { setOpenId(null); load(provider) },
             }, loading[provider] === true ? t('loading') : t('refresh')),
+            // 「运行中」筛选 chip（0.26 第三波接线）：runningIds 缺席（旧宿主）= 状态不可知
+            // → 停用态如实标注；在场（含空集）→ 可筛，计数 = 当前列表内的有证据行数
+            createElement('button', {
+              className: `bt-chip${runOnly ? ' bt-chip-on' : ''}`,
+              type: 'button',
+              disabled: runningIds === null,
+              'aria-pressed': runOnly,
+              title: runningIds === null ? t('runChipUnknownTitle') : t('runChipTitle'),
+              onClick: () => setRunOnly((v) => !v),
+            },
+              createElement('span', { className: 'bt-chip-label' }, t('runChip')),
+              createElement('span', { className: 'bt-chip-count' },
+                String(runningIds !== null ? list.sessions.filter((r) => runningSet.has(r.id)).length : 0)),
+            ),
           ),
+          // 接管预检「带伤接管」待确认门（0.26 第三波接线）：wounds 逐条可读 +
+          // 「仍要接管」（confirmed=true 跳过预检直投）与「取消」两个出路；decline 不成门直接拦停
+          pendingGate !== null
+            ? createElement('div', { className: 'bt-banner bt-banner-info', key: 'pf-gate', style: { display: 'grid', gap: 6 } },
+                createElement('span', { style: { fontWeight: 600 } }, t('preflightWoundedBanner', { n: gateWounds(pendingGate.card).length })),
+                gateBasis(pendingGate.card) !== '' ? createElement('span', { className: 'bt-fsprev-warn' }, gateBasis(pendingGate.card)) : null,
+                createElement('div', { role: 'list', 'aria-label': t('preflightWoundAria'), style: { display: 'grid', gap: 2 } },
+                  gateWounds(pendingGate.card).map((w, i) => createElement('span', { key: `w-${i}`, className: 'bt-fsprev-line', role: 'listitem' },
+                    createElement('b', null, `[${w.kind}] `),
+                    w.item !== '' ? w.item : null,
+                    w.detail !== '' ? ` — ${w.detail}` : null,
+                  )),
+                ),
+                createElement('div', { style: { display: 'flex', gap: 8 } },
+                  createElement('button', {
+                    className: 'bt-btn bt-btn-xs bt-btn-primary',
+                    type: 'button',
+                    disabled: busyKey !== null,
+                    onClick: () => { const g = pendingGate; setPendingGate(null); void runTakeover(g.key, g.mode, g.id, true) },
+                  }, t('preflightProceedBtn')),
+                  createElement('button', {
+                    className: 'bt-btn bt-btn-xs',
+                    type: 'button',
+                    onClick: () => setPendingGate(null),
+                  }, t('envCancel')),
+                ),
+              )
+            : null,
           createElement('div', { className: 'bt-sub bt-fs-count', key: 'fs-count' },
             list.total === 0
               ? t('browserEmpty')
@@ -2388,7 +2923,9 @@ export function ForeignBrowser({ state, t, lang, onError, onNotice, navigate, ba
             : null,
           list.total > 0 && matched.length === 0
             ? createElement('div', { className: 'bt-banner bt-banner-info', key: 'fs-nomatch' }, t('browserFilterEmpty'))
-            : createElement('div', { key: 'fs-rows' }, visible.map(rowNode), subGroupNode),
+            : runOnly && visible.length === 0 && subRows.length === 0
+              ? createElement('div', { className: 'bt-banner bt-banner-info', key: 'fs-runempty' }, t('runEmpty'))
+              : createElement('div', { key: 'fs-rows' }, visible.map(rowNode), subGroupNode),
         ],
   )
 }
@@ -2473,9 +3010,11 @@ function useLocaleSync(locale: LocaleRuntime | undefined): void {
 }
 
 /** /dsh-takeover/state 轮询：请求代数防慢响应回弹；30s 仅前台可见时刷。两个挂载面共用。
+ * sessionId（可选，0.26）：有座位的工作台带上当前会话 id，host 半据此附 contextHealth；
+ * 经 ref 取最新值——reload 闭包保持挂载期稳定（座位晚注入/换会话都随下轮轮询生效）。
  * setState/generationRef 一并暴露：开关切换的成功响应带全量 state 就地采纳，
  * 且与 reload 共用同一请求代数（慢 toggle 响应不回弹）。 */
-function useTakeoverPolling(): {
+function useTakeoverPolling(sessionId?: string): {
   state: TakeoverState | null
   setState: (s: TakeoverState | null) => void
   error: string | null
@@ -2486,9 +3025,11 @@ function useTakeoverPolling(): {
   const [state, setState] = useState<TakeoverState | null>(null)
   const [error, setError] = useState<string | null>(null)
   const generationRef = useRef(0)
+  const sessionRef = useRef<string | undefined>(sessionId)
+  sessionRef.current = sessionId
   const reload = (): void => {
     const gen = ++generationRef.current
-    void getState().then(
+    void getState(sessionRef.current).then(
       (s) => {
         if (gen !== generationRef.current) return
         setState(s); setError(null)
@@ -2509,7 +3050,7 @@ function useTakeoverPolling(): {
       }
     }, 30_000)
     return () => { window.clearInterval(timer) }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- reload 只闭包 setState，挂载期稳定
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reload 只闭包 setState 与 sessionRef（ref 容器，挂载期稳定）
   }, [])
   return { state, setState, error, setError, reload, generationRef }
 }
@@ -2540,7 +3081,8 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
   bounded?: boolean
 }): ReturnType<typeof createElement> {
   useLocaleSync(locale)
-  const { state, setState, error, setError, reload, generationRef } = useTakeoverPolling()
+  // 有座位的工作台把当前会话 id 带进轮询：host 半据此附 state.contextHealth（0.26 预警主挂点）
+  const { state, setState, error, setError, reload, generationRef } = useTakeoverPolling(sessionId)
   const lang: Lang = langOf(locale)
   // 新手引导条：知道了之后 localStorage 记住不再出现
   const [onboardGone, setOnboardGone] = useState(() => { try { return localStorage.getItem('dsh-takeover-onboard') === '1' } catch { return true } })
@@ -2598,10 +3140,13 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
     if (takeBusyId !== null) return
     setTakeBusyId(p.id)
     // 行级按钮带卡 id 定向取件——服务端指令升级为「取编号 xxx 这张」，
-    // 多卡待取时模型取的就是用户点的那张，不再是「自行挑一张」
-    void post<{ ok: true; sessionId: string; title: string } | { ok: false; error: string }>('/dsh-takeover/takeover', { mode: 'inbox', reference: p.id })
+    // 多卡待取时模型取的就是用户点的那张，不再是「自行挑一张」；
+    // 带座位 sessionId：成功响应附全量 state（含 contextHealth）就地采纳，免等 30s 轮询
+    const withSeat = sessionId !== undefined && sessionId !== '' ? { sessionId } : {}
+    void post<{ ok: true; sessionId: string; title: string; state?: TakeoverState } | { ok: false; error: string }>('/dsh-takeover/takeover', { mode: 'inbox', reference: p.id, ...withSeat })
       .then((r) => {
         if (!r.ok) throw new Error(r.error)
+        if (r.state !== undefined) { setState(r.state); setError(null) }
         const switched = navigate(r.sessionId)
         showNotice(t(switched ? 'deliveredNoticeNav' : 'deliveredNotice', { title: r.title }))
         return undefined
@@ -2639,6 +3184,22 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
       })
       .finally(() => setLifeboatBusy(false))
   }
+  // 上下文预警条的动作钮（0.26 集成接线 §5.3，warn→deposit 建议）：把寄存指令 queue 进
+  // 当前会话（POST /dsh-takeover/send 既有端点，与「交接出去」卡同一条通路）——
+  // critical 走上面的救生艇钮，不另设端点
+  const [depositBusy, setDepositBusy] = useState(false)
+  const depositNow = (): void => {
+    if (depositBusy || sessionId === undefined || sessionId === '') return
+    setDepositBusy(true)
+    void post<{ ok: true } | { ok: false; error: string }>('/dsh-takeover/send', { sessionId, target: 'any', lang })
+      .then((r) => {
+        if (!r.ok) throw new Error(r.error)
+        showNotice(t('sentNotice'))
+        return undefined
+      })
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setDepositBusy(false))
+  }
   const clear = (): void => {
     if (!confirmClear) {
       setConfirmClear(true)
@@ -2667,10 +3228,90 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setDismissBusyId(null))
   }
+  // 置顶 / 取消置顶（0.26 triage 接线）：pins.json 本机视图 sidecar，POST pin/unpin 端点，
+  // 成功后 reload（30s 轮询亦自愈——pin 失效由服务端懒清理）
+  const [pinBusyId, setPinBusyId] = useState<string | null>(null)
+  const pinToggle = (p: PendingRow, wantPin: boolean): void => {
+    if (pinBusyId !== null) return
+    setPinBusyId(p.id)
+    void post<{ ok: true } | { ok: false; error: string }>(wantPin ? '/dsh-takeover/pin' : '/dsh-takeover/unpin', { id: p.id })
+      .then((r) => {
+        if (!r.ok) throw new Error(r.error)
+        showNotice(t(wantPin ? 'pinnedNotice' : 'unpinnedNotice', { id: p.id }))
+        reload()
+        return undefined
+      })
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setPinBusyId(null))
+  }
+  const pin = (p: PendingRow): void => pinToggle(p, true)
+  const unpin = (p: PendingRow): void => pinToggle(p, false)
+  // 弃置恢复（0.26 triage 接线）：历史块的「恢复」动作——archived 整卡搬回 pending/
+  const [restoreBusyId, setRestoreBusyId] = useState<string | null>(null)
+  const restoreArchived = (id: string): void => {
+    if (restoreBusyId !== null) return
+    setRestoreBusyId(id)
+    void post<{ ok: true; moved: number } | { ok: false; error: string }>('/dsh-takeover/restore-archived', { id })
+      .then((r) => {
+        if (!r.ok) throw new Error(r.error)
+        showNotice(t('restoredNotice', { id, n: r.moved }))
+        reload()
+        return undefined
+      })
+      .catch((e: unknown) => setError(t('restoreFailed', { error: e instanceof Error ? e.message : String(e) })))
+      .finally(() => setRestoreBusyId(null))
+  }
+  // 「含正文」检索（0.26 triage 接线）：勾选且查询词非空时打服务端全文检索
+  //（state?q=&includeBody=1，300ms 防抖）——命中卡 id → 命中行摘要；纯前端 meta 过滤照常
+  // 用于未勾选态。查询词清空/取消勾选立即失效（不做全量枚举的服务端口径同源）
+  const [includeBody, setIncludeBody] = useState(false)
+  const [bodyHits, setBodyHits] = useState<Map<string, string[]> | null>(null)
+  const [bodyBusy, setBodyBusy] = useState(false)
+  const [bodyErr, setBodyErr] = useState<string | null>(null)
+  useEffect(() => {
+    const q = query.trim()
+    if (!includeBody || q === '') {
+      setBodyHits(null)
+      setBodyErr(null)
+      setBodyBusy(false)
+      return undefined
+    }
+    let alive = true
+    setBodyBusy(true)
+    const timer = window.setTimeout(() => {
+      void getJson<{ inboxQuery?: { hits?: Array<{ id?: unknown; lines?: unknown[] }>; error?: string } }>(
+        `/dsh-takeover/state?q=${encodeURIComponent(q)}&includeBody=1`,
+      )
+        .then((s) => {
+          if (!alive) return
+          const iq = s.inboxQuery
+          const m = new Map<string, string[]>()
+          if (iq !== null && typeof iq === 'object') {
+            for (const h of Array.isArray(iq.hits) ? iq.hits : []) {
+              if (h !== null && typeof h === 'object' && typeof h.id === 'string') {
+                m.set(h.id, Array.isArray(h.lines) ? h.lines.filter((l): l is string => typeof l === 'string') : [])
+              }
+            }
+          }
+          setBodyHits(m)
+          setBodyErr(null)
+          return undefined
+        })
+        .catch((e: unknown) => {
+          if (!alive) return
+          setBodyHits(new Map())
+          setBodyErr(e instanceof Error ? e.message : String(e))
+        })
+        .finally(() => { if (alive) setBodyBusy(false) })
+    }, 300)
+    return () => { alive = false; window.clearTimeout(timer) }
+  }, [query, includeBody])
   const archivedCount = state?.archivedCount ?? 0
   // host 侧并行字段（0.3.2 预留位）：state 缺席或字段未落地 → null，行/徽标整体不渲染
   const envelopeChars = state !== null ? envelopeCharsOf(state) : null
   const coverage = state !== null ? coverageTextOf(state) : null
+  // 上下文预警（0.26 集成接线 §5.3）：防御式读取，字段缺席/坏数据整块不渲染
+  const ctxHealth = contextHealthOf(state)
   // 导出说明文案随当前语言现取；生成/下载全程 try 包住，异常进错误横幅不塌卡
   const exportNotes = (): { top: string; missing: string } => ({
     top: t('exportNoteTop'),
@@ -2715,9 +3356,18 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
   const frontHome = state === null
     ? undefined
     : [...state.providers].filter((p) => p.supported && p.enabled && p.sessions > 0).sort((a, b) => b.sessions - a.sessions)[0]
-  interface NavItem { k: WorkView; label: string; icon: string; badge?: number; hot?: boolean; badgeTitle?: string }
+  interface NavItem { k: WorkView; label: string; icon: string; badge?: number; hot?: boolean; badgeTitle?: string; alert?: { level: 'warn' | 'critical'; text: string; title: string } }
+  // 上下文预警角标（0.26 集成接线 §5.3）：warn/critical 才出——挂在「收件箱」项上
+  //（critical 的处置动作「救生艇」就在收件箱视图头；warn 的「寄存本会话」钮同在预警条上）
+  const ctxAlert: NavItem['alert'] = ctxHealth !== null && (ctxHealth.level === 'warn' || ctxHealth.level === 'critical')
+    ? {
+        level: ctxHealth.level,
+        text: ctxHealth.level === 'critical' ? '!!' : '!',
+        title: t('contextBadgeTitle', { level: t(ctxHealth.level === 'critical' ? 'contextLevelCritical' : 'contextLevelWarn') }),
+      }
+    : undefined
   const navItems: NavItem[] = [
-    { k: 'inbox', label: t('navInbox'), icon: NAV_ICONS.inbox, badge: state !== null ? pendingCount : undefined, hot: pendingCount > 0, badgeTitle: t('pendingDirHint') },
+    { k: 'inbox', label: t('navInbox'), icon: NAV_ICONS.inbox, badge: state !== null ? pendingCount : undefined, hot: pendingCount > 0, badgeTitle: t('pendingDirHint'), alert: ctxAlert },
     {
       k: 'browse', label: t('navBrowser'), icon: NAV_ICONS.browser, badge: frontHome?.sessions,
       badgeTitle: frontHome !== undefined ? t('navBrowserBadgeTitle', { label: PROVIDER_LABEL[frontHome.name] ?? frontHome.name }) : undefined,
@@ -2756,6 +3406,10 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
       item.badge !== undefined
         ? createElement('span', { className: `tk-badge${item.hot === true ? ' tk-badge-hot' : ''}`, title: item.badgeTitle }, String(item.badge))
         : null,
+      // 上下文预警角标（0.26 集成接线）：与计数徽标并列的语义色徽标（warn 黄 / critical 红）
+      item.alert !== undefined
+        ? createElement('span', { className: `tk-badge ${item.alert.level === 'critical' ? 'tk-badge-err' : 'tk-badge-warn'}`, title: item.alert.title }, item.alert.text)
+        : null,
     )
 
   // ---- 视图头（15px 标题 + 一句副标 + 视图级动作）与视图壳（hidden 视图 display:none + hidden 属性）----
@@ -2772,6 +3426,39 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
   const stripNodes: Node[] = [
     error !== null ? createElement('div', { key: 'err', className: 'bt-banner bt-banner-err' }, error) : null,
     notice !== null ? createElement('div', { key: 'notice', className: 'bt-banner bt-banner-info' }, notice) : null,
+    // 上下文预警条（0.26 集成接线 §5.3）：warn/critical 才出——依据如实引用探针 basis
+    // 与触发器，动作按钮 POST 既有端点（critical→救生艇 /dsh-takeover/lifeboat，
+    // warn→寄存 /dsh-takeover/send）；无座位挂载只有文字没有按钮
+    ctxHealth !== null && (ctxHealth.level === 'warn' || ctxHealth.level === 'critical')
+      ? createElement('div', {
+          key: 'ctx',
+          className: `bt-banner${ctxHealth.level === 'critical' ? ' bt-banner-err' : ' bt-banner-info'}`,
+          style: { display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' },
+        },
+          createElement('span', { style: { flex: '1 1 220px', minWidth: 0 } },
+            `${t('contextStripLead')} ${ctxHealth.basis}`,
+            ctxHealth.triggers.length > 0 ? `；${ctxHealth.triggers.join('；')}` : '',
+          ),
+          sessionId !== undefined && sessionId !== '' && ctxHealth.level === 'critical'
+            ? createElement('button', {
+                className: 'bt-btn bt-btn-xs',
+                type: 'button',
+                disabled: lifeboatBusy,
+                onClick: lifeboat,
+                title: t('lifeboatTitle'),
+              }, lifeboatBusy ? t('lifeboatBusy') : t('contextStripLifeboatBtn'))
+            : null,
+          sessionId !== undefined && sessionId !== '' && ctxHealth.level === 'warn'
+            ? createElement('button', {
+                className: 'bt-btn bt-btn-xs',
+                type: 'button',
+                disabled: depositBusy,
+                onClick: depositNow,
+                title: t('contextStripDepositTitle'),
+              }, depositBusy ? t('sendBusy') : t('contextStripDepositBtn'))
+            : null,
+        )
+      : null,
     // 新手三步引导条（仅浮层挂载；「知道了」后 localStorage 记住不再出现）
     bounded === true && onboardGone === false
       ? createElement('div', { key: 'onboard', className: 'bt-card', style: { borderColor: 'var(--bt-a)' } },
@@ -2814,6 +3501,12 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
       createElement('b', { className: 'tk-tile-num' }, value),
     )
   const rejected = rejectionCount(state)
+  // 总线体检（0.26 doctor 接线）：有发现才出瓦片与明细块（健康即安静）
+  const doctor = state?.doctor
+  const doctorIssues = Array.isArray(doctor?.issues) ? doctor!.issues : []
+  const doctorErr = doctorIssues.filter((i) => i.severity === 'error').length
+  const doctorWarn = doctorIssues.filter((i) => i.severity === 'warn').length
+  const doctorInfo = doctorIssues.length - doctorErr - doctorWarn
   const tiles = state === null
     ? null
     : createElement('div', { className: 'tk-tiles' },
@@ -2834,6 +3527,27 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
               return tile('sync', sy.behind > 0 ? String(sy.behind) : '✓', t('tileSync'),
                 tone === 'err' ? 'var(--tk-err)' : tone === 'warn' ? 'var(--tk-warn)' : 'var(--tk-ok)', tone,
                 sy.lastError !== undefined ? `${t('syncLastError')}：${sy.lastError}` : t('tileSyncTitle'))
+            })()
+          : null,
+        // 上下文体检瓦片（0.26 集成接线 §5.3）：state.contextHealth 在场才出（有座位的
+        // 轮询才带）——比率取整百分比，unknown 如实「—」；语义色 warn 黄 / critical 红；
+        // 悬浮给探针依据（basis）+ 触发器 + 建议动作，与工具侧文案同一出处不另编
+        doctorIssues.length > 0
+          ? (() => {
+              const tone = doctorErr > 0 ? 'err' : doctorWarn > 0 ? 'warn' : 'ok'
+              return tile('doctor', String(doctorIssues.length), t('doctorTile'),
+                tone === 'err' ? 'var(--tk-err)' : tone === 'warn' ? 'var(--tk-warn)' : 'var(--tk-ok)', tone,
+                t('doctorTileTitle', { n: doctorIssues.length, e: doctorErr, w: doctorWarn, i: doctorInfo }))
+            })()
+          : null,
+        ctxHealth !== null
+          ? (() => {
+              const pct = ctxHealth.ratio !== undefined ? `${Math.round(ctxHealth.ratio * 100)}%` : undefined
+              const value = ctxHealth.level === 'unknown' ? '—' : pct !== undefined ? pct : ctxHealth.level === 'ok' ? '✓' : '—'
+              const tone = ctxHealth.level === 'critical' ? 'err' : ctxHealth.level === 'warn' ? 'warn' : ctxHealth.level === 'ok' ? 'ok' : ''
+              const color = tone === 'err' ? 'var(--tk-err)' : tone === 'warn' ? 'var(--tk-warn)' : tone === 'ok' ? 'var(--tk-ok)' : 'var(--tk-a2)'
+              const title = `${ctxHealth.basis}${ctxHealth.triggers.length > 0 ? `；${ctxHealth.triggers.join('；')}` : ''}${ctxHealth.action !== null ? `；${t(ctxHealth.action === 'lifeboat' ? 'contextActionLifeboat' : 'contextActionDeposit')}` : ''}`
+              return tile('context', value, t('tileContext'), color, tone, title)
             })()
           : null,
       )
@@ -2925,6 +3639,17 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
           takeBusyId,
           onDismiss: dismiss,
           dismissBusyId,
+          pins: state.pins ?? [],
+          onPin: pin,
+          onUnpin: unpin,
+          pinBusyId,
+          includeBody,
+          onToggleIncludeBody: () => setIncludeBody((v) => !v),
+          bodyHits,
+          bodyBusy,
+          bodyErr,
+          // 本机机器名（0.26 第三波接线）：收件箱点名三桶分组的判定源（老 host 缺省 → 不分组）
+          machineName: state.machineName,
         })
       // state 未到位：3 条骨架条占位（E 批）——比「加载」纯文字更接近成卡后的版面
       : createElement('div', { style: { display: 'grid', gap: 8, padding: '4px 0' } },
@@ -2932,8 +3657,13 @@ export function WorkspaceBody({ t, locale, navigate, chrome, sessionId, showHelp
           createElement('div', { className: 'bt-skeleton', style: { width: '70%' } }),
           createElement('div', { className: 'bt-skeleton', style: { width: '45%' } }),
         ),
-    // 卡链历史（接力账本的可见面）：懒加载 archived/ 回查，空态诚实
-    createElement(InboxHistory, { t, lang, archivedCount }),
+    // 卡链历史（接力账本的可见面）：懒加载 archived/ 回查，空态诚实；0.26 triage 接线
+    // 增「恢复」动作（归档卡的逆操作出口）
+    createElement(InboxHistory, { t, lang, archivedCount, onRestore: restoreArchived, restoreBusyId }),
+    // 接力总账（0.26 第三波接线）：懒加载 GET state?ledger=1 三源翻账——链/僵尸/闭集计数
+    createElement(RelayLedgerBlock, { t, lang }),
+    // 总线体检明细（0.26 doctor 接线）：有发现才渲染，issues 按严重度分级展示
+    doctor !== undefined && doctorIssues.length > 0 ? createElement(DoctorBlock, { doctor, t }) : null,
   ]
 
   return createElement('div', { className: `bt-panel${bounded === true ? ' bt-bounded' : ''}`, style: themeVars(true), ref: rootRef, onKeyDown: onRootKeyDown },
@@ -3156,12 +3886,14 @@ export function ComposerChip({ t, locale, navigate, sessionId }: {
 }
 
 /** 环境备份卡（0.2.0 wave2）：口令加密打包全家桶 → 预演 diff → 确认还原 → 可回滚。
- * 动作经 /dsh-takeover/env-backup（同队列串行）；清单来自 state.envBackup（目录枚举）。 */
-function EnvPane({ t, backups, reload, setError }: {
+ * 动作经 /dsh-takeover/env-backup（同队列串行）；清单来自 state.envBackup（目录枚举）。
+ * 0.26 snapshot 接线：autoUpgradeSnapshot 在场时附升级保险旁证一行（启动触发器三态如实转述）。 */
+function EnvPane({ t, backups, reload, setError, autoSnapshot }: {
   t: Translate
   backups: NonNullable<TakeoverState['envBackup']>['backups']
   reload: () => void
   setError: (e: string | null) => void
+  autoSnapshot?: NonNullable<TakeoverState['envBackup']>['autoUpgradeSnapshot']
 }): ReturnType<typeof createElement> {
   const [pass, setPass] = useState('')
   const [busy, setBusy] = useState('')
@@ -3206,6 +3938,12 @@ function EnvPane({ t, backups, reload, setError }: {
       }, busy !== '' ? t('envBusy') : t('envBackupNow')),
     ),
     notice !== null ? createElement('div', { className: 'bt-banner', style: { marginTop: 8 } }, notice) : null,
+    // 升级保险快照旁证（0.26 snapshot 接线）：启动触发器最近一次结果（created/same/skipped
+    // 三态如实转述；detail 是 host 半组装的中文事实文本，外壳词走词典）
+    autoSnapshot !== undefined && autoSnapshot !== null && typeof autoSnapshot === 'object'
+      ? createElement('p', { className: 'bt-sub', title: t('autoSnapshotTitle'), style: { marginTop: 8 } },
+          t('autoSnapshotLine', { detail: typeof autoSnapshot.detail === 'string' ? autoSnapshot.detail : '' }))
+      : null,
     createElement('div', { className: 'tk-pane-lead', style: { marginTop: 10 } }, t('envBackupsTitle')),
     backups.length === 0
       ? createElement('p', { className: 'bt-sub' }, t('envNoBackups'))
@@ -3429,9 +4167,9 @@ export function Panel({ t, locale, navigate, slim }: { t: Translate; locale: Loc
       pane('sync',
         createElement(SyncCard, { t, status: state?.syncStatus, setState, setError, generationRef }),
       ),
-      // 环境备份（0.2.0 wave2）：全家桶加密备份 + 预演还原 + 回滚
+      // 环境备份（0.2.0 wave2）：全家桶加密备份 + 预演还原 + 回滚；0.26 snapshot 接线附升级保险旁证
       pane('env',
-        createElement(EnvPane, { t, backups: state?.envBackup?.backups ?? [], reload, setError }),
+        createElement(EnvPane, { t, backups: state?.envBackup?.backups ?? [], reload, setError, autoSnapshot: state?.envBackup?.autoUpgradeSnapshot }),
       ),
     ),
 

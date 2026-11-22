@@ -476,7 +476,10 @@ test('inboxLoad：frontmatter 键含空格的卡成功取件（键净化）且�
     writeFileSync(join(pending, 'ho-badkey-0044.md'), '---\nhandoff: 1\nid: ho-badkey-0044\nmy key: v\n---\n## 目标\n\n含空格键卡\n')
     const r = inboxLoad('ho-badkey-0044', { dir: home })
     assert.equal(r.ok, true, `取件失败：${r.ok ? '' : (r as { error: string }).error}`)
-    assert.equal(readdirSync(pending).length, 0, '取件后 pending 应清空')
+    // 源卡文件不留 pending；0.26 取件即回执——pending 留刚产出的延续回执卡随卡文件
+    const leftover = readdirSync(pending)
+    assert.equal(leftover.filter((f) => f.includes('ho-badkey-0044')).length, 0, '源卡文件不留 pending')
+    assert.ok(leftover.some((f) => f.endsWith('.md')), '取件即回执：pending 留延续回执卡')
     const archivedText = readFileSync(join(home, 'archived', 'ho-badkey-0044.md'), 'utf-8')
     const back = parseCard(archivedText)
     assert.equal((back.extras as Record<string, unknown>)['my_key'], 'v', '键净化后值应保留')

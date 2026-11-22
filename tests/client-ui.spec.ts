@@ -706,4 +706,256 @@ test('WorkspaceBody：历史空态诚实（无归档卡）；拉取失败明说�
   delete stubPlan['/dsh-takeover/history']
 })
 
+
+// ---------------------------------------------------------------- 0.26 集成接线：上下文预警（角标/瓦片/预警条）+ 延续回执标记
+
+test('WorkspaceBody：上下文预警 critical——红角标 + 体检瓦片（91% 语义色）+ 预警条救生艇钮 POST 既有端点', async () => {
+  stateOnce = { ...stateFixture(), contextHealth: { level: 'critical', ratio: 0.912, basis: '最后请求 usage ÷ 广告窗口 = 91%', triggers: ['turn/end reason=max-tokens ×2（输出撞顶）'], action: 'lifeboat' } }
+  stubPlan['/dsh-takeover/lifeboat'] = { body: { ok: true, id: 'ho-lb-0002', detail: '', state: stateOnce } }
+  await render(createElement(client.WorkspaceBody, { t, locale: undefined, navigate, chrome: false, sessionId: 'sess-ctx-7' }))
+  await waitText('待取件 3')
+  assert.ok(container.querySelector('.tk-badge-err') !== null, 'critical 导航角标（红）')
+  const ctxTile = [...container.querySelectorAll('.tk-tile')].find((t) => (t.textContent ?? '').includes('上下文'))
+  assert.ok(ctxTile !== undefined, '体检瓦片应渲染')
+  assert.match(ctxTile?.textContent ?? '', /91%/, '比率取整百分比')
+  assert.ok((ctxTile?.className ?? '').includes('tk-tile-err'), 'critical 瓦片语义色 err')
+  assert.ok(has('上下文体检：'), '预警条前缀')
+  assert.ok(has('最后请求 usage'), '预警条如实引用探针 basis')
+  assert.match(ctxTile?.getAttribute('title') ?? '', /建议：救生艇抢出/, 'critical 建议动作在瓦片悬浮 title（与工具侧同一口径）')
+  resetCalls()
+  await clickButton('救生艇抢出')
+  await flush()
+  assert.deepEqual(lastBody('/dsh-takeover/lifeboat'), { sessionId: 'sess-ctx-7' }, '预警条按钮 POST 既有 lifeboat 端点')
+  delete stubPlan['/dsh-takeover/lifeboat']
+  stateOnce = stateFixture()
+})
+
+test('WorkspaceBody：上下文预警 warn——黄角标 + 寄存钮 POST send 既有端点；无座位挂载只有文字没有按钮', async () => {
+  stateOnce = { ...stateFixture(), contextHealth: { level: 'warn', ratio: 0.734, basis: '最后请求 usage ÷ 广告窗口 = 73%', triggers: [], action: 'deposit' } }
+  stubPlan['/dsh-takeover/send'] = { body: { ok: true } }
+  await render(createElement(client.WorkspaceBody, { t, locale: undefined, navigate, chrome: false, sessionId: 'sess-ctx-8' }))
+  await waitText('待取件 3')
+  assert.ok(container.querySelector('.tk-badge-warn') !== null, 'warn 导航角标（黄）')
+  const ctxTile = [...container.querySelectorAll('.tk-tile')].find((t) => (t.textContent ?? '').includes('上下文'))
+  assert.ok((ctxTile?.className ?? '').includes('tk-tile-warn'), 'warn 瓦片语义色 warn')
+  resetCalls()
+  await clickButton('寄存本会话')
+  await flush()
+  assert.deepEqual(lastBody('/dsh-takeover/send'), { sessionId: 'sess-ctx-8', target: 'any', lang: 'zh' }, 'warn 建议动作 POST 既有 send 端点（寄存当前会话）')
+  await waitText('已投进当前会话')
+  delete stubPlan['/dsh-takeover/send']
+  // 无座位（设置卡/老宿主）：预警条只文字无按钮，角标瓦片照常
+  await render(createElement(client.WorkspaceBody, { t, locale: undefined, navigate, chrome: false }))
+  await waitText('待取件 3')
+  assert.ok(has('上下文体检：'), '预警条文字照常')
+  assert.ok(!has('寄存本会话'), '无座位不渲染寄存钮')
+  assert.ok(container.querySelector('.tk-badge-warn') !== null, '无座位角标照常（无轮询 sessionId 时 host 缺席字段，此处 state 桩直接带）')
+  stateOnce = stateFixture()
+})
+
+test('WorkspaceBody：state.contextHealth 缺席（老 host/无座位轮询）→ 角标瓦片预警条整块不渲染；unknown 不算预警', async () => {
+  stateOnce = stateFixture()
+  await render(createElement(client.WorkspaceBody, { t, locale: undefined, navigate, chrome: false }))
+  await waitText('待取件 3')
+  assert.ok(container.querySelector('.tk-badge-warn') === null && container.querySelector('.tk-badge-err') === null, '字段缺席无角标')
+  assert.ok(!has('上下文体检：'), '字段缺席无预警条')
+  const ctxTile = [...container.querySelectorAll('.tk-tile')].find((t) => (t.textContent ?? '').includes('上下文'))
+  assert.equal(ctxTile, undefined, '字段缺席无体检瓦片')
+  // unknown 是诚实缺省不是预警：不出角标不出条，瓦片如实「—」
+  stateOnce = { ...stateFixture(), contextHealth: { level: 'unknown', basis: '分母缺失：contextWindow 未广告', triggers: [], action: null } }
+  await render(createElement(client.WorkspaceBody, { t, locale: undefined, navigate, chrome: false, sessionId: 'sess-ctx-9' }))
+  await waitText('待取件 3')
+  assert.ok(container.querySelector('.tk-badge-warn') === null && container.querySelector('.tk-badge-err') === null, 'unknown 不出预警角标')
+  assert.ok(!has('上下文体检：'), 'unknown 不出预警条')
+  const uTile = [...container.querySelectorAll('.tk-tile')].find((t) => (t.textContent ?? '').includes('上下文'))
+  assert.match(uTile?.textContent ?? '', /—/, 'unknown 瓦片如实「—」')
+  stateOnce = stateFixture()
+})
+
+test('WorkspaceBody：历史块延续回执标记——回执行显「延续回执」，被指向的源卡行显「已延续」（不新增页签）', async () => {
+  stubPlan['/dsh-takeover/history'] = { body: { ok: true, action: 'history', total: 2, cards: [
+    { id: 'ho-src-0001', title: '源卡甲', pushed_at: '2026-11-13T09:00:00+08:00', stopped: '停在交接' },
+    { id: 'ho-rcpt-0001', title: '延续回执 · ho-src-0001', pushed_at: '2026-11-13T10:00:00+08:00', stopped: '停在取件时刻', receiptFor: 'ho-src-0001' },
+  ] } }
+  await render(createElement(client.WorkspaceBody, { t, locale: undefined, navigate, chrome: false }))
+  await waitText('待取件 3')
+  const headBtn = container.querySelector('.bt-history-head') as HTMLElement | null
+  assert.ok(headBtn)
+  await act(async () => { fireClick(headBtn) })
+  await waitText('源卡甲')
+  assert.ok(has('已延续'), '被指向的源卡行显「已延续」标记')
+  // 行的 title 属性 = 卡 id（historyTitleOf 无人类标题回退 id 的同款数据面）
+  const rcptRow = [...container.querySelectorAll('.bt-history-row')].find((r) => r.getAttribute('title') === 'ho-rcpt-0001')
+  assert.ok(rcptRow !== undefined, '回执行在场')
+  assert.match(rcptRow?.textContent ?? '', /延续回执/, '回执行显「延续回执」徽标与标题')
+  delete stubPlan['/dsh-takeover/history']
+})
+
+// ---------------------------------------------------------------- 0.26 扩展波接线：置顶 / 含正文检索 / 弃置恢复 / 总线体检 / 升级保险旁证
+
+test('WorkspaceBody：置顶标记 + 置顶排序——pins 在场的行浮到最前出「置顶」徽标，展开可取消置顶（POST unpin）', async () => {
+  stateOnce = { ...stateFixture(), pins: ['ho-test-0003'] }
+  await render(createElement(client.WorkspaceBody, { t, locale: undefined, navigate, chrome: false }))
+  await waitText('待取件 3')
+  // 置顶排序：接力卡 B（state.pending 末位）浮到主列表第一行
+  const firstTitle = container.querySelector('.bt-pending .bt-pending-title') as HTMLElement | null
+  assert.ok(firstTitle, '收件箱首行缺失')
+  assert.match(firstTitle?.textContent ?? '', /接力卡 B/, '置顶卡应浮到列表最前')
+  assert.ok(has('置顶'), '置顶徽标缺失')
+  // 展开置顶行 → 取消置顶按钮 → POST /dsh-takeover/unpin
+  await act(async () => { fireClick(firstTitle) })
+  await flush()
+  resetCalls()
+  await clickButton('取消置顶')
+  await flush()
+  const unpinCall = calls.find((c) => c.url === '/dsh-takeover/unpin')
+  assert.ok(unpinCall, 'unpin POST 未发起')
+  assert.equal((JSON.parse(unpinCall?.body ?? '{}') as { id?: string }).id, 'ho-test-0003')
+  stateOnce = stateFixture()
+})
+
+test('WorkspaceBody：置顶动作——未置顶卡展开出「置顶」钮，点击 POST pin 出横幅', async () => {
+  stateOnce = { ...stateFixture(), pins: [] }
+  await render(createElement(client.WorkspaceBody, { t, locale: undefined, navigate, chrome: false }))
+  await waitText('待取件 3')
+  const title = [...container.querySelectorAll('.bt-pending-title')].find((e) => (e.textContent ?? '').includes('交接卡 A'))
+  assert.ok(title, '目标行不存在')
+  await act(async () => { fireClick(title) })
+  await flush()
+  resetCalls()
+  await clickButton('置顶')
+  await flush()
+  const pinCall = calls.find((c) => c.url === '/dsh-takeover/pin')
+  assert.ok(pinCall, 'pin POST 未发起')
+  assert.equal((JSON.parse(pinCall?.body ?? '{}') as { id?: string }).id, 'ho-test-0001')
+  await waitText('已置顶：ho-test-0001')
+  stateOnce = stateFixture()
+})
+
+test('WorkspaceBody：含正文勾选——勾选后 300ms 防抖打 state?q=&includeBody=1，纯正文命中的行在纯 meta 过滤下不该出现却出现，展开给命中行摘要', async () => {
+  stateOnce = {
+    ...stateFixture(),
+    inboxQuery: { query: '泄漏', includeBody: true, scanned: 3, skippedOversize: [], hits: [{ id: 'ho-test-0003', agent: 'dsh', title: '接力卡 B', project: 'demo', where: 'body', lines: ['命中行片段一'] }] },
+  }
+  await render(createElement(client.WorkspaceBody, { t, locale: undefined, navigate, chrome: false }))
+  await waitText('待取件 3')
+  // 输入纯正文词：未勾含正文时客户端 meta 过滤全灭（标题/来源/编号都不含「泄漏」）
+  const filter = container.querySelector('input[type="search"]') as HTMLInputElement | null
+  assert.ok(filter, '过滤框不存在')
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+  await act(async () => {
+    setter?.call(filter!, '泄漏')
+    filter!.dispatchEvent(new window.Event('input', { bubbles: true }))
+  })
+  await flush()
+  assert.ok(!has('接力卡 B'), 'meta 过滤下纯正文词不该命中任何行')
+  // 勾选含正文 → 防抖后服务端检索 → 命中行浮出
+  const boxes = [...container.querySelectorAll('.bt-filterrow input[type="checkbox"]')] as unknown as HTMLInputElement[]
+  const bodyBox = boxes[1] as HTMLInputElement | undefined
+  assert.ok(bodyBox, '「含正文」勾选框不存在（筛选行第二枚复选框）')
+  await act(async () => { fireClick(bodyBox) })
+  // 防抖 300ms + fetch：真等 600ms（client-ui 套件无 fake timers，实等一次可接受）
+  await flush(600)
+  assert.ok(calls.some((c) => c.url.includes('/dsh-takeover/state?q=') && c.url.includes('includeBody=1')), '服务端全文检索未发起')
+  assert.ok(has('接力卡 B'), '服务端正文命中行应浮出（查询词过滤委托给 searchInbox）')
+  // 展开命中行：给命中行摘要
+  const hitTitle = [...container.querySelectorAll('.bt-pending-title')].find((e) => (e.textContent ?? '').includes('接力卡 B'))
+  await act(async () => { fireClick(hitTitle) })
+  await flush()
+  assert.ok(has('正文命中'), '命中行摘要标签缺失')
+  assert.ok(has('命中行片段一'), '服务端给的命中行应原样展示')
+  await act(async () => {
+    setter?.call(filter!, '')
+    filter!.dispatchEvent(new window.Event('input', { bubbles: true }))
+  })
+  await flush()
+  stateOnce = stateFixture()
+})
+
+test('WorkspaceBody：历史行「恢复」——展开归档卡点恢复，POST restore-archived 带卡 id，成功出横幅并 reload', async () => {
+  stubPlan['/dsh-takeover/history'] = { body: historyFixture() }
+  stubPlan['/dsh-takeover/restore-archived'] = { body: { ok: true, moved: 3, action: 'restore-archived' } }
+  await render(createElement(client.WorkspaceBody, { t, locale: undefined, navigate, chrome: false }))
+  await waitText('待取件 3')
+  const headBtn = container.querySelector('.bt-history-head') as HTMLElement | null
+  assert.ok(headBtn)
+  await act(async () => { fireClick(headBtn) })
+  await waitText('早班卡')
+  const row = container.querySelector('.bt-history-row') as HTMLElement | null
+  assert.ok(row)
+  await act(async () => { fireClick(row) })
+  await flush()
+  resetCalls()
+  await clickButton('恢复')
+  await flush()
+  const restoreCall = calls.find((c) => c.url === '/dsh-takeover/restore-archived')
+  assert.ok(restoreCall, 'restore-archived POST 未发起')
+  assert.equal((JSON.parse(restoreCall?.body ?? '{}') as { id?: string }).id, 'ho-arch-0001')
+  await waitText('已恢复到收件箱：ho-arch-0001')
+  delete stubPlan['/dsh-takeover/history']
+  delete stubPlan['/dsh-takeover/restore-archived']
+})
+
+test('WorkspaceBody：总线体检——有发现才出「体检」瓦片与明细块，issues 按严重度分级展示（error 排前），扫描覆盖面如实', async () => {
+  stateOnce = {
+    ...stateFixture(),
+    doctor: {
+      ok: false,
+      issues: [
+        { kind: 'orphan-sidecar', id: 'ho-orphan-0001', detail: '伴生侧车 x.patch 无同名主卡', severity: 'info' },
+        { kind: 'corrupt', id: 'ho-bad-0001', detail: '解析失败：坏 YAML——core 读侧会跳过', severity: 'error' },
+        { kind: 'chain-dangling', id: 'ho-mid-0002', detail: 'supersedes 指向在册不存在的 id', severity: 'warn' },
+      ],
+      scanned: { pendingCards: 3, archivedCards: 5, pendingSidecars: 1, archivedSidecars: 2 },
+    },
+  }
+  await render(createElement(client.WorkspaceBody, { t, locale: undefined, navigate, chrome: false }))
+  await waitText('待取件 3')
+  assert.ok(has('体检 3'), '体检瓦片缺失（发现数=issues 数）')
+  assert.ok(has('总线体检'), '体检明细块头缺失')
+  // 块头是 div[role=button]（与历史块同款）——按文案挑体检块头点击展开
+  const doctorHead = [...container.querySelectorAll('.bt-history-head')].find((e) => (e.textContent ?? '').includes('总线体检')) as HTMLElement | undefined
+  assert.ok(doctorHead, '体检块头节点缺失')
+  await act(async () => { fireClick(doctorHead) })
+  await flush()
+  // 分级展示：error 排最先，标签文案来自词典
+  const block = text()
+  const errAt = block.indexOf('解析失败：坏 YAML')
+  const warnAt = block.indexOf('supersedes 指向在册不存在的 id')
+  const infoAt = block.indexOf('伴生侧车 x.patch 无同名主卡')
+  assert.ok(errAt >= 0 && warnAt >= 0 && infoAt >= 0, '三类发现都应渲染')
+  assert.ok(errAt < warnAt && warnAt < infoAt, '分级排序：error → warn → info')
+  assert.ok(has('corrupt · ho-bad-0001'), '发现应带 kind 与可寻址 id')
+  assert.ok(has('扫描覆盖：pending 卡 3 张'), '扫描覆盖面如实（原始计数口径）')
+  assert.ok(!has('干净'), '零发现文案不适用（有发现态）')
+  stateOnce = stateFixture()
+})
+
+test('WorkspaceBody：总线体检零发现——瓦片与明细块整块不渲染（健康即安静）', async () => {
+  stateOnce = { ...stateFixture(), doctor: { ok: true, issues: [], scanned: { pendingCards: 0, archivedCards: 0, pendingSidecars: 0, archivedSidecars: 0 } } }
+  await render(createElement(client.WorkspaceBody, { t, locale: undefined, navigate, chrome: false }))
+  await waitText('待取件 3')
+  assert.ok(!has('总线体检'), '零发现不出体检块')
+  assert.ok(!has('体检 '), '零发现不出体检瓦片')
+  stateOnce = stateFixture()
+})
+
+test('Panel（设置卡）环境页：升级保险快照旁证一行——启动触发器结果如实转述（0.26 snapshot 接线）', async () => {
+  stateOnce = {
+    ...stateFixture(),
+    envBackup: {
+      backups: [],
+      autoUpgradeSnapshot: { action: 'created', detail: '宿主版本 0.2.1 → 0.2.2，已自动打升级保险快照：auto-upgrade-demo.dshenv（42 个文件）——自动快照只留最近一份，手动备份未动' },
+    },
+  }
+  await render(createElement(client.Panel, { t, locale: undefined, navigate, slim: true }))
+  await waitText('命令速览')
+  await clickButton('环境')
+  await flush()
+  assert.ok(has('升级保险：'), '升级保险旁证行缺失')
+  assert.ok(has('已自动打升级保险快照'), '三态 detail 应如实转述（host 半组装的事实文本）')
+  assert.ok(has('手动备份未动'), '保留策略语义随旁证带出')
+  stateOnce = stateFixture()
+})
+
 after(() => { try { root?.unmount() } catch { /* 已卸载 */ } })

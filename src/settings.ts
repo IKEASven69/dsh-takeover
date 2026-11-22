@@ -15,7 +15,12 @@ import { isLowInfoCardMarkdown } from './lowinfo.ts'
 import { readLifecycleEvents, reasonFromCoreSkip, LIFECYCLE_STATE_MAX } from './lifecycle.ts'
 import { FOREIGN_PROVIDERS, PROVIDER_TO_ADAPTER, type ForeignProvider, type ForeignReaders } from './foreign.ts'
 import { syncStatusOf, type SyncStatus } from './sync.ts'
-import { listBackups, type BackupRow } from './envbackup.ts'
+import { listBackups, type AutoUpgradeSnapshotValue, type BackupRow } from './envbackup.ts'
+import type { ContexthealthReport } from './contexthealth.ts'
+import { listPins, type InboxSearchResult } from './inboxtriage.ts'
+import { scanStore, type DoctorReport } from './sessiondoctor.ts'
+import { readMachineName } from './directed.ts'
+import type { RelayLedger } from './relayledger.ts'
 
 // 停用规范错误值文案在 foreign.ts（disabledError），本模块只管开关存取与状态组装
 
@@ -129,6 +134,11 @@ export interface PendingRow {
   lowInfo: boolean
   /** 接力链：本卡接替的前置卡 id（信封 extras.supersedes——协议设计只随信封走，卡片本体不含；链可视化）。非接力卡缺省 */
   supersedes?: string
+  /** 0.26 第三波接线（directed 立约）：Card.to 自由串原样透传（machine:<机器名> 点名 /
+   * agent 名 / any）。客户端按 machine: 前缀做三桶分组（mine=点名本机 / others=别机点名 /
+   * any=其余；bucketOf 同口径，inbox-view.addressBucketOf 局部实现有一致性钉）。
+   * 空串/缺省不落字段（老 host 缺省，客户端防御式消费）。 */
+  to?: string
 }
 
 /** 预览截断长度（服务端截，避免长卡片把 state 撑大） */
@@ -186,8 +196,52 @@ export interface TakeoverState {
   /** 0.2.0 换机同步状态（零网络：sync.json + sync-state.json + 本地脏计数）。
    * 未启用时缺省——客户端整个换机块不渲染。 */
   syncStatus?: SyncStatus
-  /** 0.2.0 环境备份清单（env-backup/ 目录只读枚举，不解密）；无备份缺省 */
-  envBackup?: { backups: BackupRow[] }
+  /** 0.2.0 环境备份清单（env-backup/ 目录只读枚举，不解密）；无备份缺省。
+   * 0.26 snapshot 接线增 autoUpgradeSnapshot：启动触发器最近一次结果旁证
+   * （created/same/skipped 三态，detail 给人看；index.ts 激活处写入 holder）。 */
+  envBackup?: { backups: BackupRow[]; autoUpgradeSnapshot?: AutoUpgradeSnapshotValue }
+  /** 0.26 上下文预警（contextHealth 探针报告）。**buildState 不探测会话对象**：
+   * 组装保持纯读盘，contextHealth 由路由层展开——GET state / 写侧动作带可选 sessionId
+   * 且会话在场时，路由把 probeContexthealth(session) 展开到本字段（server.ts，
+   * 集成裁定取「路由层展开」而非 buildState 新入参：buildState 的全部既有调用方
+   * （settings.spec / recovery.spec / 面板 30s 轮询）零改动）。无参 / 无会话 /
+   * 探测降级（level='unknown' 照报）之外的抛错路径字段缺省。 */
+  contextHealth?: ContexthealthReport
+  /** 0.26 triage 接线：当前有效置顶卡 id（pins.json 懒清理后的盘面现实，新置顶在前）。
+   * 老 host 缺省——客户端防御式消费（inboxtriage.listPins fail-open：sidecar 损坏回空）。 */
+  pins?: string[]
+  /** 0.26 triage 接线：收件箱检索结果（GET state 带可选 q 参数时由路由层展开，
+   * includeBody=1 时逐卡读正文——inboxtriage.searchInbox 立约：空 query 空命中、
+   * 枚举失败回规范 error 值绝不抛）。无 q 参数字段缺省（无参请求响应零变化）。 */
+  inboxQuery?: InboxSearchResult
+  /** 0.26 doctor 接线：总线只读体检报告（scanStore：损坏段/形态/孤儿侧车/链三查，
+   * issues 按 severity 分级 error/warn/info，ok=true 即零发现）。buildState 每次现扫
+   * （pending+archived 全量只读；与收件箱概览同一量级——ARCHIVED_KEEP=50 封顶）；
+   * 扫描自身异常字段缺省（scanStore 承诺不抛，此处兜绝对意外）。 */
+  doctor?: DoctorReport
+  /** 0.26 第三波接线：本机机器名（<HANDOFF_HOME>/machine.json 的 { name }，缺席/损坏
+   * fail-open 回 os.hostname——directed.readMachineName 立约，fail-open 必 warn 留痕）。
+   * 收件箱点名分组（mine=to=machine:本机名）的判定源；客户端防御式消费。 */
+  machineName?: string
+  /** 0.26 第三波接线：接力总账（aggregateLedger 三源翻账）。**buildState 不算总账**——
+   * 组装保持既有读面，总账由路由层按需展开：GET state 带 ?ledger=1 时
+   * aggregateLedger() 并入本字段（inboxQuery 同款「无参请求响应零变化」扩展）；
+   * 聚合自身承诺绝不抛，路由层仍兜绝对意外字段缺省。 */
+  ledger?: RelayLedger
+}
+
+// ---------------------------------------------------------------------------
+// 升级保险快照旁证 holder（0.26 snapshot 接线）：index.ts 插件激活处的启动触发器
+// fire-and-forget 异步完成，buildState 是同步纯函数拿不到它——经本单槽 holder 交接。
+// 每次启动至多触发一次，后写覆盖前值（进程内单例语义）；进程重启自然重来。
+// ---------------------------------------------------------------------------
+
+let autoUpgradeSnapshotEvidence: AutoUpgradeSnapshotValue | undefined
+
+/** 启动触发器回写最近一次 maybeAutoUpgradeSnapshot 结果（index.ts 激活处调用；
+ * undefined = 清空，如触发器自身异常时让 state 不残留上一进程的旧话） */
+export function setAutoUpgradeSnapshotEvidence(v: AutoUpgradeSnapshotValue | undefined): void {
+  autoUpgradeSnapshotEvidence = v
 }
 /**
  * 组装设置卡状态（纯函数核心，读取层与目录都可注入）：
@@ -249,6 +303,9 @@ export function buildState(readers: ForeignReaders, dir?: string): TakeoverState
         preview: pv.text,
         previewFromDone: pv.fromDone,
         lowInfo: raw !== undefined ? isLowInfoCardMarkdown(raw) : false,
+        // 0.26 第三波接线（directed 立约）：Card.to 原样透传（machine: 点名分组的数据源）；
+        // 空串/缺省不落字段——客户端按「字段缺席=any 桶」防御式消费
+        ...(typeof c.to === 'string' && c.to !== '' ? { to: c.to } : {}),
       }
     })
 
@@ -359,6 +416,23 @@ export function buildState(readers: ForeignReaders, dir?: string): TakeoverState
   const syncStatus = syncStatusOf(dir)
   // 环境备份清单（只读目录枚举，listBackups 自带容错，不拖垮 state）
   const backups = listBackups(dir)
+  // 0.26 triage 接线：当前有效置顶（listPins 自带懒清理 + fail-open 空集，不拖垮 state）
+  let pins: string[] = []
+  try {
+    pins = listPins(dir)
+  } catch { /* 绝对意外兜底：置顶视图缺省，不拦 state */ }
+  // 0.26 doctor 接线：总线体检报告（scanStore 承诺不抛，此处兜绝对意外——字段缺省）
+  let doctor: DoctorReport | undefined
+  try {
+    doctor = scanStore(dir)
+  } catch { /* 体检自身异常：字段缺省（不伪装成零发现） */ }
+  const snapshotEvidence = autoUpgradeSnapshotEvidence
+  // 0.26 第三波接线：本机机器名（readMachineName 自带 fail-open + 损坏 warn 留痕；
+  // 读失败回 hostname 兜底，绝不拖垮 state 组装）
+  let machineName: string | undefined
+  try {
+    machineName = readMachineName(dir)
+  } catch { /* readMachineName 契约不抛；兜绝对意外：字段缺省 */ }
   return {
     home: resolveHome(dir),
     pending,
@@ -371,7 +445,17 @@ export function buildState(readers: ForeignReaders, dir?: string): TakeoverState
     providers,
     ...(rejections !== undefined ? { rejections } : {}),
     ...(syncStatus !== undefined ? { syncStatus } : {}),
-    ...(backups.length > 0 ? { envBackup: { backups } } : {}),
+    ...(backups.length > 0 || snapshotEvidence !== undefined
+      ? {
+          envBackup: {
+            backups,
+            ...(snapshotEvidence !== undefined ? { autoUpgradeSnapshot: snapshotEvidence } : {}),
+          },
+        }
+      : {}),
+    pins,
+    ...(doctor !== undefined ? { doctor } : {}),
+    ...(machineName !== undefined && machineName !== '' ? { machineName } : {}),
   }
 }
 
@@ -427,7 +511,9 @@ export function dismissPending(id: string, dir?: string): { ok: boolean; moved?:
     return { ok: false, error: `archived 目录创建失败（${e instanceof Error ? e.message : String(e)}）` }
   }
   let moved = 0
-  for (const ext of ['.md', '.envelope.json', '.patch', '.patch.gz'] as const) {
+  // 0.26 蒸馏侧车（<id>.hippo.jsonl）入列固定扩展名枚举：侧车随卡同搬，
+  // 不改则 dismiss 后补吸收（handoff_absorb target='hippo-db'）拿不到快照
+  for (const ext of ['.md', '.envelope.json', '.patch', '.patch.gz', '.hippo.jsonl'] as const) {
     const src = join(home, 'pending', safe + ext)
     if (!existsSync(src)) continue
     try {

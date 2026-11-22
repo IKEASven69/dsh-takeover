@@ -216,5 +216,13 @@ test('四轴贯通全链：A 机三轴出卡 → syncNow → B 机拉到三张�
   const listA = inboxList({ dir: A })
   assert.equal(listA.ok, true)
   if (!listA.ok) return
-  assert.equal(listA.cards.length, 0, 'A 机 pending 清空——已消费的卡不在另一台机器重放')
+  // 消费即弃跨机收敛（0.26 更新）：已消费的三张源卡不重放（archived tombstone 拦住）；
+  // B 机取件时产出的延续回执卡是**新卡**，随 sync 正向回流 A 机（接力账本的跨机可见面）——
+  // 回执卡被取件不再产出二次回执，链条到此收敛
+  const srcIds = [configPush.id, memoryPush.id, sessionPush.id]
+  assert.equal(listA.cards.filter((c) => srcIds.includes(c.id)).length, 0, '已消费的源卡不在另一台机器重放（tombstone）')
+  assert.equal(listA.cards.length, 3, 'B 机三张延续回执卡随 sync 回流 A 机（新卡非重放）')
+  for (const c of listA.cards) {
+    assert.match(c.title, /^延续回执 · /, `回流卡应是延续回执卡：${c.title}`)
+  }
 })

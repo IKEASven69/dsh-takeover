@@ -65,6 +65,44 @@ export function sourceFacets(rows: PendingRow[]): Array<{ agent: string; count: 
 }
 
 // ---------------------------------------------------------------------------
+// 三桶分组（0.26 第三波接线 /sendto）：mine（点名本机）/ others（别机点名）/ any
+// ---------------------------------------------------------------------------
+
+/** 三桶闭集（host 半 directed.ts AddressBucket 同构） */
+export type AddressBucketView = 'mine' | 'others' | 'any'
+
+/** machine: 前缀（directed.ts MACHINE_SCHEME 同值——协议字面量，两侧各有一致性钉） */
+const MACHINE_SCHEME_VIEW = 'machine:'
+
+/**
+ * 本模块不 import directed.ts（那是 host 半，带 node:fs/os——客户端包拖不起），
+ * 按 flightcheck 局部净化先例同口径局部实现 bucketOf：to 非 string / 非 machine:
+ * 前缀 / 机器名消毒不过（空名、含路径分隔符）一律归 any；点名比较大小写不敏感；
+ * 本机名缺席（空串）时点名卡归 others（绝不误收）。与立约的一致性由
+ * tests/integration-wiring.spec.ts 的 directed.bucketOf 对照矩阵钉住——改这里
+ * 或改那边都要过同一张对照表。
+ */
+export function addressBucketOf(row: { to?: unknown } | null | undefined, selfName: string): AddressBucketView {
+  const to = row?.to
+  if (typeof to !== 'string') return 'any'
+  const trimmed = to.trim()
+  if (!trimmed.startsWith(MACHINE_SCHEME_VIEW)) return 'any'
+  const name = trimmed.slice(MACHINE_SCHEME_VIEW.length).trim().toLowerCase()
+  if (name === '' || /[\\/]/.test(name)) return 'any'
+  const self = String(selfName ?? '').trim().toLowerCase()
+  return name === self ? 'mine' : 'others'
+}
+
+/** machine: 地址里的点名机器名（展示用；非 machine: / 消毒不过回空串） */
+export function pointedMachineOf(to: unknown): string {
+  if (typeof to !== 'string') return ''
+  const trimmed = to.trim()
+  if (!trimmed.startsWith(MACHINE_SCHEME_VIEW)) return ''
+  const name = trimmed.slice(MACHINE_SCHEME_VIEW.length).trim().toLowerCase()
+  return name === '' || /[\\/]/.test(name) ? '' : name
+}
+
+// ---------------------------------------------------------------------------
 // 相邻重复卡分组
 // ---------------------------------------------------------------------------
 

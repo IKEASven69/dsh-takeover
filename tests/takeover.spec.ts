@@ -80,6 +80,62 @@ test('探测：snapshotEvents 优先，抛错时退回 events 字段', () => {
   assert.equal(fallback.events.length, SAMPLE_EVENTS.length)
 })
 
+test('探测：snapshotEvents 依赖 this 的方法形态——解绑必抛、绑定重试成功（0.26 probe 接线补口，真机 Session 形态）', () => {
+  // 真机形态：snapshotEvents 默认参数读 this.seq（dsh-session lib/index.js:1454）——
+  // 解绑裸调用 this=undefined 必抛；0.26 补口后以 session 为接收者绑定重试成功
+  const log = [
+    { type: 'user/message', time: 1, data: { source: { kind: 'user' }, content: [{ type: 'text', text: '真机形态采集' }] } },
+    { type: 'tool/call', time: 2, data: { name: 'write', arguments: JSON.stringify({ file_path: 'src/x.ts' }) } },
+  ]
+  const session = {
+    id: 'sess-bound-1',
+    seq: 2,
+    inner: log,
+    // 官方签名口径：fromSeq 缺省 = 起点偏移 0；toSeqExclusive 缺省 = this.seq——
+    // 解绑时求值默认参数 this.seq 必抛（这正是补口要修的形态）
+    snapshotEvents(this: { seq: number; inner: unknown[] }, fromSeq = 0, toSeqExclusive = this.seq) {
+      return this.inner.slice(fromSeq, toSeqExclusive)
+    },
+  }
+  const r = probeSessionEvents(session)
+  assert.equal(r.skipped, false, '解绑失败 → 绑定重试命中（官方 API 的正确调用形态）')
+  assert.equal(r.events.length, 2)
+  // 绑定也失败（返回非数组）→ 落 events 字段既有兜底，分级不变
+  const deadBound = probeSessionEvents({
+    seq: 1,
+    events: SAMPLE_EVENTS,
+    snapshotEvents(this: unknown) { return 'not-an-array' },
+  })
+  assert.equal(deadBound.skipped, false)
+  assert.equal(deadBound.events.length, SAMPLE_EVENTS.length)
+})
+
+test('收集：真机 this 形态经 pushHandoff 全链路成立——绑定重试后事件事实照常蒸馏', () => {
+  const dir = tmpHome()
+  try {
+    const log = [
+      { type: 'user/message', time: 1, data: { source: { kind: 'user' }, content: [{ type: 'text', text: '绑定重试后的接力寄存' }] } },
+      { type: 'tool/call', time: 2, data: { name: 'edit', arguments: JSON.stringify({ file_path: 'src/bound.ts' }) } },
+    ]
+    const session = {
+      id: 'sess-bound-2',
+      seq: 2,
+      inner: log,
+      snapshotEvents(this: { seq: number; inner: unknown[] }, fromSeq = 0, toSeqExclusive = this.seq) {
+        return this.inner.slice(fromSeq, toSeqExclusive)
+      },
+    }
+    const r = pushHandoff(session, {}, { dir })
+    assert.equal(r.ok, true)
+    if (!r.ok) return
+    assert.equal(r.skipped, false, 'handoff_push 的事件采集不再静默降级（0.25 已装构建带病形态的修复钉）')
+    const card = parseCard(readFileSync(join(dir, 'pending', `${r.id}.md`), 'utf-8'))
+    assert.match(card.sections.goal, /绑定重试后的接力寄存/, '事件事实随绑定重试进卡（非兜底骨架）')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('收集：用户消息 / 写文件 / 命令 / todo 都被蒸馏', () => {
   const facts = collectFacts(SAMPLE_EVENTS)
   assert.equal(facts.userMessages.at(-1)?.text, '帮我把收件箱做完')
@@ -185,9 +241,15 @@ test('inbox：list 只读不消费，load 消费即弃，二次取件报规范�
     // cwd 是本仓库（git 仓库），核验要么无 mismatch 要么有具体说明，但不允许抛错
     assert.ok(Array.isArray(loaded.mismatches))
 
-    // 消费即弃：pending 空、archived 有
-    assert.equal(listPending(dir).length, 0)
+    // 消费即弃：源卡进 archived；0.26 取件即回执——pending 恰剩刚产出的延续回执卡
+    //（回执卡被取件不再产出二次回执，链条到此收敛）
     assert.equal(listArchived(dir).length, 1)
+    const after = inboxList({ dir })
+    assert.equal(after.ok, true)
+    if (!after.ok) return
+    assert.equal(after.cards.length, 1, 'pending 恰剩一张：取件即回执的延续回执卡')
+    assert.equal(after.cards[0]?.title, `延续回执 · ${pushed.id}`, '回执卡标题带源卡 id（接力链可溯）')
+    assert.equal(listPending(dir).length, 1)
 
     // 二次取件：规范错误值，不抛异常
     const again = inboxLoad(pushed.id, { dir })
@@ -508,4 +570,195 @@ test('宿主通知：服务缺席/形态不符/ask 抛错（NO_PROVIDER、DELEGA
   // ask reject（NO_PROVIDER / DELEGATED_CALLER / ASK_ABORTED）
   await handoffHostNotice({ ask: async () => { throw new Error('NO_PROVIDER') } }, 'push', 'ho-x', {})
   await handoffHostNotice({ ask: async () => { throw new Error('DELEGATED_CALLER') } }, 'load', 'ho-x', {})
+})
+
+// ---------- 0.26 集成接线：接力体检（extras.flight / 拒收诊断）+ 上下文预警旁证 ----------
+
+test('pushHandoff：出卡盖接力体检章（extras.flight）——cleared 四项；cautioned 摘要并入读者警告段', () => {
+  const dir = tmpHome()
+  // file_ref 检查以卡 cwd 为基准解析 files 段的相对路径——fixture 自建独立工作区并造出
+  // 被引用文件（经 args.cwd 传入），断言不随测试运行目录漂移（门禁可从仓外目录起跑）
+  const ws = mkdtempSync(join(tmpdir(), 'dsh-flight-ws-'))
+  mkdirSync(join(ws, 'src'), { recursive: true })
+  writeFileSync(join(ws, 'src', 'tools.ts'), '// file_ref fixture\n', 'utf-8')
+  try {
+    const r = pushHandoff(fakeSession(SAMPLE_EVENTS), { goal: '体检 cleared 验证', done: '手写完成项（CURRENT_OBSERVED）', stopped: '停在测试', files: 'src/tools.ts', cwd: ws }, { dir })
+    assert.equal(r.ok, true)
+    if (!r.ok) return
+    const card = parseCard(readFileSync(join(dir, 'pending', `${r.id}.md`), 'utf-8'))
+    const flight = (card.extras as Record<string, unknown>)['flight'] as { verdict?: string; checks?: unknown[] } | undefined
+    assert.ok(flight !== undefined, '出卡应盖 extras.flight 章（集成接线 §5.1②）')
+    assert.equal(flight?.verdict, 'cleared')
+    assert.equal(Array.isArray(flight?.checks) ? (flight?.checks as unknown[]).length : -1, 4, '四检查项固定顺序（file_ref/secret/skeleton/claim_cmd）')
+
+    // cautioned：files 段声称不存在的路径 → file_ref 诊断升级档位，摘要随警告段持久化
+    //（no-such/dir 在任何运行目录都不存在——两档判据对 cwd 稳定）
+    const r2 = pushHandoff(fakeSession(SAMPLE_EVENTS), { goal: '体检 cautioned 验证', files: 'no-such/dir/File.ts', cwd: ws }, { dir })
+    assert.equal(r2.ok, true)
+    if (!r2.ok) return
+    const card2 = parseCard(readFileSync(join(dir, 'pending', `${r2.id}.md`), 'utf-8'))
+    const flight2 = (card2.extras as Record<string, unknown>)['flight'] as { verdict?: string } | undefined
+    assert.equal(flight2?.verdict, 'cautioned', '声称路径不存在 → cautioned（真实落盘卡只有 cleared/cautioned 两档）')
+    assert.match(card2.sections.warnings, /接力体检 cautioned/, 'cautioned 摘要并入读者警告段随卡持久化')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+    rmSync(ws, { recursive: true, force: true })
+  }
+})
+
+test('pushHandoff：密钥闸拒收路径附体检 blocked 诊断（拒收反馈与 lifecycle detail 同落，无卡可落）', () => {
+  const dir = tmpHome()
+  try {
+    // 密钥样例运行时拼装（不在测试源码留下活的密钥形态字面量——本文件是未提交改动，
+    // 字面量会进工作树补丁被 cwd=仓库的 patch 扫描捞到，把全文件 push 全部毒成密钥闸拒收）
+    const secretSample = `ghp_${'x'.repeat(24)}1234567890abcd`
+    const r = pushHandoff(fakeSession(SAMPLE_EVENTS), { goal: `带密验证 ${secretSample}` }, { dir })
+    assert.equal(r.ok, false)
+    if (r.ok) return
+    assert.match(r.error, /密钥闸/, '既有闸行为零改动')
+    assert.match(r.error, /拒收诊断：/, 'blocked 诊断进拒收反馈')
+    assert.match(r.error, /接力体检 blocked/)
+    const lifecycle = readFileSync(join(dir, 'lifecycle.jsonl'), 'utf-8')
+    assert.match(lifecycle, /"reason":"secret_gate"/)
+    assert.match(lifecycle, /接力体检 blocked/, 'blocked 诊断进 lifecycle detail')
+    assert.equal(existsSync(join(dir, 'pending', 'ho-')), false, '拒收路径无卡可落（诊断不落卡面）')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('pushHandoff：空壳闸拒收路径同样附体检 blocked 诊断', () => {
+  const dir = tmpHome()
+  try {
+    // 空壳拒收的现场 = 无会话环境（session null，事件流探测降级 → 六段全兜底占位）
+    const r = pushHandoff(null, {}, { dir })
+    assert.equal(r.ok, false)
+    if (r.ok) return
+    assert.match(r.error, /空壳卡守门/, '既有闸行为零改动')
+    assert.match(r.error, /拒收诊断：/, 'blocked 诊断进拒收反馈')
+    const lifecycle = readFileSync(join(dir, 'lifecycle.jsonl'), 'utf-8')
+    assert.match(lifecycle, /"reason":"skeleton_gate"/)
+    assert.match(lifecycle, /接力体检 blocked/, 'blocked 诊断进 lifecycle detail')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('pushHandoff：上下文预警旁证——critical 会话出卡随结果带 contextHealth；ok/unknown 不占字段', () => {
+  const dir = tmpHome()
+  try {
+    const hot = {
+      id: 'sess-hot',
+      header: { cwd: dir },
+      snapshotEvents: () => [{ type: 'assistant/message', seq: 1, data: { usage: { totalTokens: 900 } } }],
+      requestContext: () => ({ contextWindow: 1000 }),
+    }
+    const r = pushHandoff(hot, { goal: '预警旁证验证' }, { dir })
+    assert.equal(r.ok, true)
+    if (!r.ok) return
+    assert.equal(r.contextHealth?.level, 'critical', 'critical 随结果带出（写侧旁证与缓存，呈现走 GET state）')
+    assert.equal(r.contextHealth?.action, 'lifeboat')
+    const calm = pushHandoff(fakeSession(SAMPLE_EVENTS), { goal: '无预警验证' }, { dir })
+    assert.equal(calm.ok, true)
+    if (calm.ok) assert.equal(calm.contextHealth, undefined, 'ok/unknown 不占字段（不制造噪音）')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('pushHandoff：tokenMeter 投影贯通（0.26 probe 接线）——官方 contextPressure 直读随旁证透传；缺席诚实「不可达」', () => {
+  const dir = tmpHome()
+  try {
+    const hot = {
+      id: 'sess-proj',
+      header: { cwd: dir },
+      snapshotEvents: () => [{ type: 'assistant/message', seq: 1, data: { usage: { totalTokens: 900 } } }],
+      requestContext: () => ({ contextWindow: 1000 }),
+    }
+    // 宿主 tokenMeter 在手（集成面 safeTokenMeter/tokenMeterOf 同形态）：投影数值原样透传，绝不自算
+    const withMeter = pushHandoff(hot, { goal: '投影贯通验证' }, { dir, tokenMeter: { contextPressure: () => ({ pressureTokens: 880, contextWindow: 1000 }) } })
+    assert.equal(withMeter.ok, true)
+    if (!withMeter.ok) return
+    assert.equal(withMeter.contextHealth?.projection?.pressureTokens, 880, '官方投影直读透传')
+    assert.equal(withMeter.contextHealth?.projection?.contextWindow, 1000)
+    assert.match(withMeter.contextHealth?.basis ?? '', /tokenMeter\.contextPressure 直读，未参与分级/)
+    assert.equal(withMeter.contextHealth?.level, 'critical', '投影只是参考字段，绝不参与分级')
+
+    // 未传 tokenMeter（精简 profile / 老宿主）：projection 缺席 + basis 如实注明不可达
+    const noMeter = pushHandoff(hot, { goal: '投影缺席验证' }, { dir })
+    assert.equal(noMeter.ok, true)
+    if (!noMeter.ok) return
+    assert.equal(noMeter.contextHealth?.projection, undefined, '不可达 → 投影键缺席（不编数值）')
+    assert.match(noMeter.contextHealth?.basis ?? '', /代价投影不可达，未接入/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// ---------- 0.26 triage 接线：handoff_inbox 新动作（pin/unpin/restore/search）工具位 ----------
+
+test('handoff_inbox triage 四动作：pin/unpin 幂等两态、restore 恢复往返、search 元字段+正文两态（render 同面）', async () => {
+  const { mkdirSync, rmSync, writeFileSync } = await import('node:fs')
+  const { registerInboxTool, renderInbox } = await import('../src/tools.ts')
+  const dir = tmpHome()
+  mkdirSync(join(dir, 'pending'), { recursive: true })
+  process.env.HANDOFF_HOME = dir
+  try {
+    writeFileSync(
+      join(dir, 'pending', 'ho-tool-0001.md'),
+      ['---', 'handoff: 1', 'id: ho-tool-0001', 'from:', '  agent: dsh', '  session: s1', '---', '## 目标', '', '工具位往返钉 BODYWORD', '', '## 涉及文件', '', '- x', '', '## 做到哪', '', '- a', '', '## 还差什么', '', '- b', '', '## 停在哪', '', '- c', '', '## 读者警告', '', '- d', ''].join('\n'),
+      'utf-8',
+    )
+    const registered: Array<{ name: string; def: { execute: (args: Record<string, unknown>, exec?: unknown) => Promise<unknown> } }> = []
+    const ctx = { tools: { register(def: { name: string }): void { registered.push({ name: def.name, def: def as never }) } } }
+    registerInboxTool(ctx as never)
+    const execute = registered[0]!.def.execute
+
+    // pin：ok；unpin：ok；unpin 未置顶：规范错误值
+    assert.deepEqual(await execute({ action: 'pin', id: 'ho-tool-0001' }), { ok: true, action: 'pin', id: 'ho-tool-0001' })
+    assert.deepEqual(await execute({ action: 'unpin', id: 'ho-tool-0001' }), { ok: true, action: 'unpin', id: 'ho-tool-0001' })
+    const unAgain = await execute({ action: 'unpin', id: 'ho-tool-0001' }) as { ok: boolean; error?: string }
+    assert.equal(unAgain.ok, false)
+    assert.match(unAgain.error ?? '', /未置顶/)
+    // id 消毒在工具位同口径：路径分隔符剥掉
+    const pinPath = await execute({ action: 'pin', id: 'a/b' }) as { ok: boolean; id?: string }
+    assert.equal(pinPath.ok, true)
+    assert.equal(pinPath.id, 'ab')
+
+    // search：元字段命中 + includeBody 正文命中两态；空 query 空命中
+    const metaHit = await execute({ action: 'search', q: 'ho-tool' }) as { ok: boolean; hits: Array<{ id: string; where: string }> }
+    assert.equal(metaHit.ok, true)
+    assert.equal(metaHit.hits.length, 1)
+    assert.equal(metaHit.hits[0]?.where, 'meta')
+    const bodyHit = await execute({ action: 'search', q: 'BODYWORD', includeBody: true }) as { ok: boolean; hits: Array<{ id: string; where: string; lines: string[] }> }
+    assert.equal(bodyHit.hits.length, 1, 'includeBody:true → 纯正文词命中')
+    assert.equal(bodyHit.hits[0]?.where, 'body')
+    assert.ok(bodyHit.hits[0]?.lines.some((l) => l.includes('BODYWORD')))
+    const empty = await execute({ action: 'search', q: '   ' }) as { ok: boolean; hits: unknown[] }
+    assert.deepEqual(empty.hits, [], '空 query 空命中（不做全量枚举）')
+
+    // restore：pending 无形态 → 规范错误；dismiss 后整卡搬回
+    const restoreMiss = await execute({ action: 'restore', id: 'ho-tool-0001' }) as { ok: boolean; error?: string }
+    assert.equal(restoreMiss.ok, false, '还在 pending（archived 无形态）→ 规范错误值')
+    const { dismissPending } = await import('../src/settings.ts')
+    assert.equal(dismissPending('ho-tool-0001').ok, true)
+    const restored = await execute({ action: 'restore', id: 'ho-tool-0001' }) as { ok: boolean; moved?: number }
+    assert.equal(restored.ok, true)
+    assert.ok((restored.moved ?? 0) >= 1)
+    assert.equal(existsSync(join(dir, 'pending', 'ho-tool-0001.md')), true, '恢复后重新可取件')
+
+    // render 面：pin/restore/search 各自一句话回执（真实返回值喂入）
+    const pinRender = renderInbox({}, { ok: true, action: 'pin', id: 'ho-x' })
+    assert.match(pinRender[0]?.text ?? '', /已置顶：ho-x/)
+    const restoreRender = renderInbox({}, { ok: true, action: 'restore', id: 'ho-x', moved: 3 })
+    assert.match(restoreRender[0]?.text ?? '', /搬回 pending：ho-x（3 份/)
+    const searchRender = renderInbox({}, { ok: true, action: 'search', query: 'q', includeBody: true, scanned: 2, skippedOversize: [], hits: [{ id: 'ho-x', agent: 'dsh', title: 'T', project: '', where: 'body', lines: ['l1'] }] })
+    assert.match(searchRender[0]?.text ?? '', /含正文/)
+    assert.match(searchRender[0]?.text ?? '', /l1/)
+    // 未知 action：参数 schema 层先拦（枚举闸在 defineTool 包装层，比分支兜底更强）
+    await assert.rejects(() => execute({ action: 'garbage' }), /must be one of/)
+  } finally {
+    delete process.env.HANDOFF_HOME
+    rmSync(dir, { recursive: true, force: true })
+  }
 })

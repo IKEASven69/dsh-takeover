@@ -1,10 +1,20 @@
 /**
  * host 侧 /dsh-takeover/ JSON API（webServer 路由桥）：
- *   GET  /dsh-takeover/state           设置卡状态（收件箱概览 + 支持矩阵）
+ *   GET  /dsh-takeover/state           设置卡状态（收件箱概览 + 支持矩阵；可选 ?sessionId=
+ *                                      附当前会话上下文预警 contextHealth——0.26 集成接线，
+ *                                      无参/会话缺席时字段缺省，无参请求响应零变化；
+ *                                      可选 ?ledger=1 附接力总账 state.ledger——0.26 第三波
+ *                                      接线（aggregateLedger 三源翻账），无参请求响应零变化）
  *   GET  /dsh-takeover/history         卡链历史 ?project=&cwd=（archived/ 已归档卡回查，
  *                                      与 handoff_inbox action=history 同一读取层）
- *   GET  /dsh-takeover/sessions        外部会话浏览列表 ?provider=&limit=（轻量发现层，不读内容）
+ *   GET  /dsh-takeover/sessions        外部会话浏览列表 ?provider=&limit=（轻量发现层，不读内容；
+ *                                      响应附 runningIds——「被本机接管且接管会话仍存活」的
+ *                                      正向运行证据集，0.26 第三波接线；服务缺席=空集不编）
  *   GET  /dsh-takeover/session-preview 单会话结构化预览 ?provider=&reference=（摘要+骨架素材，不吐原文轮次）
+ *   GET  /dsh-takeover/preflight       接管预检 ?provider=&reference=（foreign_session_read show
+ *                                      之后 assessForeignTakeover 三档判定卡——面板「接管」
+ *                                      按钮的前置闸，0.26 第三波接线；预检绝不拦真实接管：
+ *                                      端点异常由客户端 fail-open 放行）
  *   POST /dsh-takeover/takeover        一键接管/取件 {mode, provider?, reference?}——宿主会话控制器建新会话并投递指令
  *   POST /dsh-takeover/provider        切 provider 开关 {provider, enabled}
  *   POST /dsh-takeover/clear-archived  清空 archived/
@@ -17,19 +27,23 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { randomUUID } from 'node:crypto'
-import { closeSync, existsSync, openSync, readSync } from 'node:fs'
+import { closeSync, existsSync, openSync, readFileSync, readSync } from 'node:fs'
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: pulls the Context.webServer merge（宿主由 web bundle 提供，不打进产物）。
 import type {} from '@deepseek-ai/dsh-host-webserver'
-import { defaultForeignReaders, foreignResolveOne, foreignSessionPreview, foreignSessionsList, type ForeignProvider } from './foreign.ts'
+import { defaultForeignReaders, foreignResolveOne, foreignSessionRead, foreignSessionPreview, foreignSessionsList, PROVIDER_TO_ADAPTER, type ForeignProvider } from './foreign.ts'
 import { depositCommand, outboundCommand, OUTBOUND_LABELS, takeoverCommand, type Lang, type SessionRowLike } from './browser-view.ts'
-import { writeRelayProvenance } from './relay-records.ts'
+import { relayProvenancePath, writeRelayProvenance } from './relay-records.ts'
 import { pushMemoryCard, scanMemorySources } from './memory.ts'
 import { pushHandoff, inboxHistory } from './tools.ts'
 import { recordLifecycleEvent } from './lifecycle.ts'
+import { probeContexthealth, type ContexthealthReport } from './contexthealth.ts'
+import { restoreFromArchived, searchInbox, setPin, unsetPin, type InboxSearchResult } from './inboxtriage.ts'
 import { buildState, clearArchived, dismissPending, isProviderEnabled, setProviderEnabled } from './settings.ts'
 import { loadSyncConfig, syncNow, syncPull, syncPush, syncSetup, type SyncOutcome } from './sync.ts'
 import { applyRestore, createBackup, dryRunRestore, listBackups, rollbackRestore } from './envbackup.ts'
+import { aggregateLedger, type RelayLedger } from './relayledger.ts'
+import { assessForeignTakeover, type PreflightCard } from './preflight.ts'
 
 function sendJson(response: ServerResponse, code: number, body: unknown): void {
   response.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
@@ -96,6 +110,76 @@ export function isLoopbackRemote(remoteAddress: string | undefined): boolean {
  * （同时停 A/B 只停了 B），链式串行消除同进程竞态。 */
 let providerWriteQueue: Promise<unknown> = Promise.resolve()
 
+// ---------------------------------------------------------------------------
+// 运行证据（0.26 第三波接线，需求缺口「2 千会话里找运行中的」hkkz9522#61 + context#266）：
+// 外部家会话文件不携带「正在运行」标志，原生侧运行状态**不可知**——能拿到的唯一
+// 正向证据是「该外部会话被本机接管过，且承接它的宿主会话此刻还活着」（宿主
+// sessions 存活面 × relay/<sessionId>.json 溯源）。这里只产出正向证据集：
+// 不在场 = 无证据 = 不作任何断言，UI 一律「状态不可知」，绝不编否定也绝不把
+// 「接管会话存活」夸成「正在运行」（面板口径行如实写判定依据）。
+// ---------------------------------------------------------------------------
+
+/** 存活会话枚举封顶（防御式：宿主会话库异常膨胀时不放大读） */
+export const RUNNING_LIVE_MAX = 500
+
+/**
+ * 运行证据集（纯函数，可脱离路由单测）：存活宿主会话对象数组 × 溯源读取器 →
+ * 被本机接管且接管会话仍存活的外部会话 id 集（relay sourceId，字典序去重）。
+ * 会话对象缺 id / 溯源缺席（旧宿主、接管前落盘失败）→ 该项无证据，跳过不编。
+ */
+export function runningSourceIdsOf(
+  liveSessions: readonly unknown[],
+  sourceIdOf: (sessionId: string) => string,
+): string[] {
+  const out = new Set<string>()
+  for (const s of liveSessions.slice(0, RUNNING_LIVE_MAX)) {
+    const id = s !== null && typeof s === 'object' ? (s as { id?: unknown }).id : undefined
+    if (typeof id !== 'string' || id === '') continue
+    const src = sourceIdOf(id)
+    if (src !== '') out.add(src)
+  }
+  return [...out].sort()
+}
+
+/** 溯源读取（尽力而为，IO 壳）：relay/<sessionId>.json 的 sourceId；
+ * 缺文件 / 坏 JSON / 形态不符 / sourceId 非串 → 空串（无证据），绝不抛。 */
+export function relaySourceIdOf(sessionId: string): string {
+  try {
+    const p = relayProvenancePath(sessionId)
+    if (existsSync(p) !== true) return ''
+    const o: unknown = JSON.parse(readFileSync(p, 'utf-8'))
+    if (o === null || typeof o !== 'object' || Array.isArray(o)) return ''
+    const v = (o as Record<string, unknown>)['sourceId']
+    return typeof v === 'string' ? v : ''
+  } catch {
+    return ''
+  }
+}
+
+/** 列表响应附运行证据（纯函数，可单测）：ok:true 的列表响应原样带上 runningIds
+ * （供数函数注入，路由传 runningIdsOf）；ok:false 失败值不附（没有列表就没有证据位）。
+ * 供数意外（宿主服务抛错等）→ 字段缺省不拦列表——证据是增益，不是列表的前置。 */
+export function attachRunningIds<T>(res: T, runningIdsOf: () => string[]): T {
+  try {
+    if (res !== null && typeof res === 'object' && (res as { ok?: unknown }).ok === true) {
+      ;(res as { runningIds?: string[] }).runningIds = runningIdsOf()
+    }
+  } catch { /* 证据计算意外：字段缺省 */ }
+  return res
+}
+
+/**
+ * env-backup 写队列入队（0.26 snapshot 接线）：启动旁路的升级保险快照触发器与面板
+ * 手动备份/还原共用同一条串行队列（createBackup/还原都是重 I/O，不并发互踩）。
+ * fn 自身的异常被吞进队列链（队列健康优先，不毒化后续写），异常经返回的 promise 透传
+ * 给调用方（index.ts 兜 fail-open 降级）。
+ */
+export function enqueueEnvBackupWrite<T>(fn: () => T): Promise<T> {
+  const queued = providerWriteQueue.then(fn) as Promise<T>
+  providerWriteQueue = queued.catch(() => { /* 队列健康优先 */ })
+  return queued
+}
+
 /** 同源守卫：带 Origin 的请求必须与 Host 一致，且 Host 必须回环（防跨站 POST 与 rebinding）。
  * 不再裸比 `new URL(origin).host === Host`——Host 头客户端完全可控，等价于没防。 */
 function sameOrigin(request: { headers: { origin?: string; host?: string } }): boolean {
@@ -157,6 +241,47 @@ async function stateBody(): Promise<ReturnType<typeof buildState>> {
   return buildState(await defaultForeignReaders())
 }
 
+/**
+ * state + 上下文预警展开（0.26 集成接线 §5.1①，裁定取「路由层展开」而非 buildState
+ * 新入参——buildState 保持纯读盘，全部既有调用方零改动）：会话对象在场时把
+ * probeContexthealth 结果展开到 state.contextHealth。0.26 probe 接线：第二参传宿主
+ * tokenMeter 服务（官方代价投影直读；缺席即投影「不可达」诚实两态，探针绝不自算）。
+ * 探针自身承诺绝不抛，此处仍兜绝对意外——探测异常时字段缺省，绝不拖垮 state。
+ */
+function withContextHealth<T extends ReturnType<typeof buildState>>(state: T, session: unknown, tokenMeter: unknown): T {
+  try {
+    ;(state as { contextHealth?: ContexthealthReport }).contextHealth = probeContexthealth(session, tokenMeter)
+  } catch { /* 探测异常：字段缺省 */ }
+  return state
+}
+
+/**
+ * state + 收件箱检索展开（0.26 triage 接线）：GET state 带可选 q 参数时把
+ * searchInbox 结果展开到 state.inboxQuery（includeBody=1 时逐卡读正文）。
+ * 检索层承诺绝不抛出（枚举失败回规范 error 值），此处仍兜绝对意外——异常字段缺省。
+ * 无 q 参数不走本函数（无参请求响应零变化钉不受影响）。
+ */
+function withInboxQuery<T extends ReturnType<typeof buildState>>(state: T, q: string, includeBody: boolean): T {
+  try {
+    ;(state as { inboxQuery?: InboxSearchResult }).inboxQuery = searchInbox(q, { includeBody })
+  } catch { /* 检索异常：字段缺省 */ }
+  return state
+}
+
+/**
+ * state + 接力总账展开（0.26 第三波接线）：GET state 带 ?ledger=1 时把
+ * aggregateLedger 三源翻账展开到 state.ledger（面板「接力总账」懒加载块的数据源——
+ * 30s 轮询的主请求不背这笔账，展开式扩展同 inboxQuery：无参请求响应零变化）。
+ * 聚合层承诺绝不抛（底层读取器全 fail-open，聚合面再兜绝对意外），此处仍兜——
+ * 异常字段缺省，不编数字。
+ */
+function withLedger<T extends ReturnType<typeof buildState>>(state: T): T {
+  try {
+    ;(state as { ledger?: RelayLedger }).ledger = aggregateLedger()
+  } catch { /* 聚合异常：字段缺省 */ }
+  return state
+}
+
 // ---------------------------------------------------------------------------
 // 一键接管：宿主会话控制器的最小面 + 投递核心。
 // 访问形态与官方包同款（dsh-schedule 直接 ctx.sessionController；cordis 对
@@ -174,6 +299,14 @@ export interface SessionControllerLike {
     content: Array<{ type: 'text'; text: string }>
     clientTimeZone?: string
   }, signal?: AbortSignal): Promise<{ accepted: true }>
+}
+
+/** 宿主存活会话服务最小面（SessionStore 结构子集，多退少补）：
+ * get 按 id 查存活会话；list 枚举全部存活会话（0.26 第三波接线运行证据用——
+ * 旧宿主可能没有，缺席即枚举面降级，get 面不受影响）。 */
+export interface LiveSessionsLike {
+  get?: (id: string) => unknown
+  list?: () => unknown
 }
 
 /** 防御式取宿主会话控制器：服务挂在根 ctx（本插件 ctx 未 inject 该服务名，
@@ -321,19 +454,65 @@ export function registerTakeoverRoutes(
   ctx: Context,
   opts?: { takeoverEnv?: { isEnabled: (p: ForeignProvider) => boolean } },
 ): void {
-  /** 会话查找（防御式）：增益层的接力溯源追加用。走 root 上的 sessions 服务
-   * （每次属性访问独立 try——注入纪律代理会抛），缺席即整体跳过增益层；
-   * 保底溯源写盘不经过这里，投递不受影响。 */
-  const rootSessionsOf = (): { get?: (id: string) => unknown } | undefined => {
+  /** 会话查找（防御式）：增益层的接力溯源追加 + 运行证据枚举用。走 root 上的 sessions
+   * 服务（每次属性访问独立 try——注入纪律代理会抛），缺席即整体跳过；get 在手即返回
+   * （list 可选——旧宿主没有时运行证据枚举面降级，查找面不受影响）。 */
+  const rootSessionsOf = (): LiveSessionsLike | undefined => {
     const read = (get: () => unknown): unknown => { try { return get() } catch { return undefined } }
     const rootObj = read(() => (ctx as unknown as { root?: unknown }).root) as unknown
     const rootSessions = read(() => (rootObj as { sessions?: unknown })?.sessions)
-    const ctxSessions = read(() => (ctx as unknown as { sessions?: unknown }).sessions)
-    const cand = (rootSessions ?? ctxSessions) as { get?: unknown } | undefined
-    if (cand && typeof cand.get === 'function') return cand as { get: (id: string) => unknown }
+    const ctxSessions = read(() => (ctx as unknown as { sessions?: unknown })?.sessions)
+    const cand = (rootSessions ?? ctxSessions) as { get?: unknown; list?: unknown } | undefined
+    if (cand && typeof cand.get === 'function') {
+      return {
+        get: cand.get as (id: string) => unknown,
+        ...(typeof cand.list === 'function' ? { list: cand.list as () => unknown } : {}),
+      }
+    }
     return undefined
   }
+  /** 运行证据集（0.26 第三波接线）：宿主存活会话 × relay 溯源 → 外部会话 id 集。
+   * 服务缺席 / list 缺席（旧宿主）/ 枚举抛错 → 空集（诚实零，不编）。 */
+  const runningIdsOf = (): string[] => {
+    const sessions = rootSessionsOf()
+    let live: unknown[] = []
+    try {
+      const listed = sessions?.list?.()
+      if (Array.isArray(listed)) live = listed
+    } catch { /* 注入纪律代理可能抛：按无枚举面 */ }
+    return runningSourceIdsOf(live, relaySourceIdOf)
+  }
   const env = opts?.takeoverEnv ?? { isEnabled: (p: ForeignProvider) => isProviderEnabled(p) }
+  /** 会话按 id 查找（0.26 集成接线 §5.1①）：与救生艇同款 rootSessionsOf().get 先例，
+   * get 自身抛错（注入纪律代理）也按会话缺席处理；空 id 直接缺席。 */
+  const sessionById = (sessionId: string): unknown => {
+    const id = sessionId.trim()
+    if (id === '') return undefined
+    try {
+      return rootSessionsOf()?.get?.(id) ?? undefined
+    } catch {
+      return undefined
+    }
+  }
+  /** 宿主 tokenMeter 服务的防御式取用（0.26 probe 接线）：@deepseek-ai/dsh-token-meter
+   * 由 dsh-base bundle 挂载在根层（ctx.root.tokenMeter）；cordis 对未挂载服务的属性访问
+   * 会抛（精简 profile 可能缺席）——root 层优先、本层兜底，两层都不可达回 undefined
+   * （探针侧投影走「不可达，未接入」诚实两态，绝不自算）。 */
+  const tokenMeterOf = (): unknown => {
+    const layers: Array<() => unknown> = [
+      () => (ctx as unknown as { root?: unknown }).root,
+      () => ctx,
+    ]
+    for (const read of layers) {
+      try {
+        const layer = read()
+        if (layer === null || typeof layer !== 'object') continue
+        const tm: unknown = (layer as { tokenMeter?: unknown }).tokenMeter
+        if (tm !== null && tm !== undefined) return tm
+      } catch { /* 该层未挂载（纪律代理抛错）：试下一层 */ }
+    }
+    return undefined
+  }
   // S8 短窗去重：同 (mode|provider|reference) 5 秒内的重复点击复用同一次投递——
   // 双标签页/快速重试不再产生 N 个重复会话；admitTakeover 永不 reject，缓存安全
   const takeoverMemo = new Map<string, { at: number; run: Promise<TakeoverOutcome> }>()
@@ -363,8 +542,24 @@ export function registerTakeoverRoutes(
             sendJson(response, 403, { error: '仅接受本机同源读取' })
             return
           }
+          // 0.26 集成接线 §5.1①：可选 ?sessionId=（救生艇同款会话查找）——有参有会话时
+          // 附 contextHealth（主挂点：客户端 30s 轮询呈现的预警真相走这条链）；无参/
+          // 无会话/探测异常 → 字段缺省，无参请求响应零变化（向后兼容扩展）。
+          // 0.26 triage 接线：可选 ?q=（&includeBody=1 读正文）——带检索词时附 inboxQuery。
+          // 0.26 第三波接线：可选 ?ledger=1——带参时附接力总账 state.ledger（aggregateLedger
+          // 三源翻账，面板「接力总账」懒加载块按需拉，30s 轮询主请求不背这笔账）。
+          const q = new URL(request.url ?? '/', 'http://localhost').searchParams
+          const session = sessionById(q.get('sessionId') ?? '')
+          const searchQ = q.get('q') ?? ''
+          const includeBody = q.get('includeBody') === '1'
+          const wantLedger = q.get('ledger') === '1'
           void stateBody().then(
-            (state) => { sendJson(response, 200, state) },
+            (state) => {
+              let out = session !== undefined && session !== null ? withContextHealth(state, session, tokenMeterOf()) : state
+              if (searchQ.trim() !== '') out = withInboxQuery(out, searchQ, includeBody)
+              if (wantLedger) out = withLedger(out)
+              sendJson(response, 200, out)
+            },
             (error: unknown) => { sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) }) },
           )
           return
@@ -418,7 +613,7 @@ export function registerTakeoverRoutes(
                       if (t !== '') r.title = t
                     }
                   }
-                  return res
+                  return attachRunningIds(res, runningIdsOf)
                 })
               })()
             : foreignSessionPreview(
@@ -430,6 +625,45 @@ export function registerTakeoverRoutes(
             (r) => { sendJson(response, 200, r) },
             (error: unknown) => { sendJson(response, 500, { ok: false, error: error instanceof Error ? error.message : String(error) }) },
           )
+          return
+        }
+
+        if (sub === 'preflight') {
+          // 接管预检（0.26 第三波接线）：foreign_session_read action=show 取回规范值之后
+          // assessForeignTakeover 出三档判定卡——面板「接管」按钮的前置闸。只读面与
+          // session-preview 同级敏感（wounds 含涉及文件路径），过同一读守卫。
+          // 判定模块契约级绝不抛，读取层规范值返回（含 ok:false）——此处只兜绝对意外。
+          if (request.method !== 'GET') {
+            response.writeHead(405, { allow: 'GET' })
+            response.end()
+            return
+          }
+          if (!readGuard(request)) {
+            sendJson(response, 403, { error: '仅接受本机同源读取' })
+            return
+          }
+          const q = new URL(request.url ?? '/', 'http://localhost').searchParams
+          void (async () => {
+            try {
+              const provider = q.get('provider') ?? ''
+              const read = await foreignSessionRead(
+                { provider, action: 'show', reference: q.get('reference') ?? '' },
+                undefined,
+                env,
+              )
+              // 读取器适配注记（preflight reader 检查项数据源）：provider 门内才有适配器名
+              // 可查；读取器面缺席/未知 provider → 注记缺省（该项落 unknown 诚实降级）
+              let adapterNote: { supported: boolean; note: string } | undefined
+              try {
+                const adapter = PROVIDER_TO_ADAPTER[provider.trim().toLowerCase() as ForeignProvider]
+                if (adapter !== undefined) adapterNote = (await defaultForeignReaders()).adapterNote(adapter)
+              } catch { /* 读取器面缺席：注记缺省 */ }
+              const card: PreflightCard = assessForeignTakeover({ read, adapterNote, now: new Date() })
+              sendJson(response, 200, { ok: true, card })
+            } catch (e) {
+              sendJson(response, 500, { ok: false, error: e instanceof Error ? e.message : String(e) })
+            }
+          })()
           return
         }
 
@@ -461,9 +695,25 @@ export function registerTakeoverRoutes(
                 const reference = String(body['reference'] ?? '')
                 const lang = body['lang'] === 'en' ? 'en' : 'zh'
                 const key = `${mode}|${provider}|${reference}`
+                // 成功响应附全量 state（0.26 §5.2 集成：lifeboat/provider/sync 端点同款
+                // 「免等 30s 轮询」）——预警态（contextHealth，body 带 sessionId 且会话在场时
+                // 随 state 展开）随投递响应即时回显；state 组装失败不吞投递结果（降级不带 state）
+                const sendResult = (r: TakeoverOutcome): Promise<void> => (async () => {
+                  if (!r.ok) {
+                    sendJson(response, 200, r)
+                    return
+                  }
+                  let state: ReturnType<typeof buildState> | undefined
+                  try {
+                    const session = sessionById(String(body['sessionId'] ?? ''))
+                    const base = await stateBody()
+                    state = session !== undefined && session !== null ? withContextHealth(base, session, tokenMeterOf()) : base
+                  } catch { /* 降级：不带 state */ }
+                  sendJson(response, 200, { ...r, ...(state !== undefined ? { state } : {}) })
+                })()
                 const cached = takeoverMemo.get(key)
                 if (cached !== undefined && Date.now() - cached.at < 5000) {
-                  void cached.run.then((r) => { sendJson(response, 200, r) })
+                  void cached.run.then(sendResult)
                   return
                 }
                 const run = admitTakeover(controller, { mode: mode as TakeoverMode, provider, reference, lang }, { env, sessions: rootSessionsOf() })
@@ -471,7 +721,7 @@ export function registerTakeoverRoutes(
                 // 结果落地 10s 后清条目（去重窗 5s 之内仍可命中）：Map 不随使用历史无界增长
                 void run.then(
                   (r) => {
-                    sendJson(response, 200, r)
+                    void sendResult(r)
                     setTimeout(() => {
                       const cur = takeoverMemo.get(key)
                       if (cur !== undefined && cur.run === run) takeoverMemo.delete(key)
@@ -644,8 +894,69 @@ export function registerTakeoverRoutes(
           void readJsonBody(request).then(
             (body) => {
               try {
-                const r = dismissPending(String(body['id'] ?? ''))
+                const rawId = String(body['id'] ?? '')
+                const r = dismissPending(rawId)
+                if (r.ok) {
+                  // 延续账本（0.26 集成接线 §5.2）：弃置也是账本事件——未取件即清落
+                  // abandoned（receipt.ts 模块头立约的落账形态；target 落卡 id，无正文）
+                  recordLifecycleEvent({ stage: 'pickup', reason: 'abandoned', target: rawId.trim().replace(/[\\/]/g, ''), detail: 'dismiss 未取件' })
+                }
                 sendJson(response, r.ok ? 200 : 400, r)
+              } catch (e) {
+                sendJson(response, 500, { ok: false, error: e instanceof Error ? e.message : String(e) })
+              }
+            },
+            (error: unknown) => { sendJson(response, 400, { ok: false, error: error instanceof Error ? error.message : String(error) }) },
+          )
+          return
+        }
+
+        if (sub === 'pin' || sub === 'unpin') {
+          // 置顶 / 取消置顶（0.26 triage 接线）：pins.json 本机视图 sidecar（新置顶在前）。
+          // 卡被取件/弃置后 pin 由 listPins 懒清理自动失效——两个端点都是幂等的本机便利
+          // 视图写侧，sameOrigin 门 + id 消毒（inboxtriage 模块内同 dismissPending 口径）
+          if (request.method !== 'POST') {
+            response.writeHead(405, { allow: 'POST' })
+            response.end()
+            return
+          }
+          if (!sameOrigin(request)) {
+            sendJson(response, 403, { error: '仅接受同源请求' })
+            return
+          }
+          void readJsonBody(request).then(
+            (body) => {
+              try {
+                const id = String(body['id'] ?? '')
+                const r = sub === 'pin' ? setPin(id) : unsetPin(id)
+                sendJson(response, r.ok ? 200 : 400, { ...r, action: sub })
+              } catch (e) {
+                sendJson(response, 500, { ok: false, error: e instanceof Error ? e.message : String(e) })
+              }
+            },
+            (error: unknown) => { sendJson(response, 400, { ok: false, error: error instanceof Error ? error.message : String(error) }) },
+          )
+          return
+        }
+
+        if (sub === 'restore-archived') {
+          // 弃置恢复（0.26 triage 接线）：archived/ 整卡按 dismiss 同一扩展名枚举反向搬回
+          // pending/（取件中断/弃置后悔的逆操作出口）。pending 已有同名文件时一次都不搬
+          //（预检拒绝覆盖）；成功落 lifecycle 'restored' 正向回执。
+          if (request.method !== 'POST') {
+            response.writeHead(405, { allow: 'POST' })
+            response.end()
+            return
+          }
+          if (!sameOrigin(request)) {
+            sendJson(response, 403, { error: '仅接受同源请求' })
+            return
+          }
+          void readJsonBody(request).then(
+            (body) => {
+              try {
+                const r = restoreFromArchived(String(body['id'] ?? ''))
+                sendJson(response, r.ok ? 200 : 400, { ...r, action: 'restore-archived' })
               } catch (e) {
                 sendJson(response, 500, { ok: false, error: e instanceof Error ? e.message : String(e) })
               }
@@ -770,7 +1081,8 @@ export function registerTakeoverRoutes(
                     sendJson(response, 200, { ok: false, error: `会话 ${sessionId} 不在场（宿主会话服务未挂载或会话已关闭）——救生艇需要活的会话事件流` })
                     return
                   }
-                  const result = pushHandoff(session, { confirmSkeleton: true })
+                  // 0.26 probe 接线：写侧探测同享官方代价投影（tokenMeter 在手即传，缺席诚实降级）
+                  const result = pushHandoff(session, { confirmSkeleton: true }, { tokenMeter: tokenMeterOf() })
                   if (!result.ok) {
                     // 写侧闸拒收（密钥闸等）：规范错误值原样回，拦截理由不隐瞒
                     //（闸内已自记 lifecycle 事件，这里不重复记）
@@ -793,9 +1105,10 @@ export function registerTakeoverRoutes(
                     await queued
                   }
                   // 带全量 state：新卡即刻在收件箱可见，免等 30s 轮询（provider/sync 端点同款）；
-                  // state 组装失败不吞卡——state 缺席由前端退回 30s 轮询补
+                  // state 组装失败不吞卡——state 缺席由前端退回 30s 轮询补。
+                  // 0.26 集成接线：state 展开 contextHealth（会话在手，预警态随动作响应即时回显）
                   let state: ReturnType<typeof buildState> | undefined
-                  try { state = await stateBody() } catch { /* 降级：不带 state */ }
+                  try { state = withContextHealth(await stateBody(), session, tokenMeterOf()) } catch { /* 降级：不带 state */ }
                   sendJson(response, 200, {
                     ok: true,
                     id: result.id,
@@ -813,7 +1126,7 @@ export function registerTakeoverRoutes(
           return
         }
 
-        sendJson(response, 404, { error: `未知路由：/dsh-takeover/${sub}（支持 state / history / sessions / session-preview / takeover / provider / clear-archived / dismiss-pending / sync / env-backup / lifeboat）` })
+        sendJson(response, 404, { error: `未知路由：/dsh-takeover/${sub}（支持 state / history / sessions / session-preview / preflight / takeover / send / memory-scan / memory-push / provider / clear-archived / dismiss-pending / pin / unpin / restore-archived / sync / env-backup / lifeboat）` })
       },
     }))
   })

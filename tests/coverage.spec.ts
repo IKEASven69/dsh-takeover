@@ -277,6 +277,10 @@ test('push：信封各段随卡截断（长段进卡 128K 上限内，进信封�
 
 test('push：典型蒸馏文本下信封总 JSON ≤1200 字（目标口径）', () => {
   const dir = tmpHome()
+  // 尺寸口径的对象是「典型六段文本 + 信封裁剪面」，不得随运行目录漂移：显式给干净空 cwd，
+  // 否则卡 cwd 落在 process.cwd()（本仓根），仓里任何未跟踪文件都会进信封 untracked 清单
+  // 把总字数推过容限（0.26 集成期实测：仓根 cwd 1411 字 vs 干净 cwd 718 字，同一份文本）
+  const cleanCwd = mkdtempSync(join(tmpdir(), 'dsh-coverage-clean-cwd-'))
   try {
     const r = pushHandoff(null, {
       title: '收件箱开发',
@@ -286,6 +290,7 @@ test('push：典型蒸馏文本下信封总 JSON ≤1200 字（目标口径）',
       stopped: '停在 handoff_push 工具调用时刻',
       warnings: '本卡片全部内容为推送时刻的历史快照，执行前先核对 git 状态',
       files: '- write: src/tools.ts\n- edit: src/index.ts\n- bash: npm run check',
+      cwd: cleanCwd,
     }, { dir })
     assert.equal(r.ok, true)
     if (!r.ok) return
@@ -294,6 +299,7 @@ test('push：典型蒸馏文本下信封总 JSON ≤1200 字（目标口径）',
     assert.ok(raw.length <= 1250, `典型信封 ${raw.length} 字，超出 1250 容限（目标 1200）`)
   } finally {
     rmSync(dir, { recursive: true, force: true })
+    rmSync(cleanCwd, { recursive: true, force: true })
   }
 })
 
@@ -311,7 +317,10 @@ test('load：信封随卡同步消失，envelopeChars 为落盘字节数，pendi
     if (!loaded.ok) return
     assert.equal(loaded.envelopeChars, before.length)
     assert.equal(existsSync(p), false, '取件后信封应同步删除')
-    assert.equal(readdirSync(join(dir, 'pending')).length, 0, 'pending 应清空（.md 与信封都不留）')
+    // 源卡的 .md 与信封都不留 pending；0.26 取件即回执——pending 留刚产出的延续回执卡
+    const leftover = readdirSync(join(dir, 'pending')).filter((f) => f.startsWith(r.id))
+    assert.equal(leftover.length, 0, '源卡 .md 与信封都不留 pending')
+    assert.ok(readdirSync(join(dir, 'pending')).some((f) => f.endsWith('.md')), '取件即回执：pending 留延续回执卡')
     assert.equal(existsSync(join(dir, 'archived', `${r.id}.md`)), true)
 
     const text = String(renderInbox({}, loaded)[0]?.text)
@@ -362,7 +371,9 @@ test('load：外写 .md + 手放信封也被同步消费（信封生命周期归
     if (!loaded.ok) return
     assert.equal(loaded.envelopeChars, envRaw.length)
     assert.equal(existsSync(join(dir, 'pending', 'ho-manual-0001.envelope.json')), false)
-    assert.equal(readdirSync(join(dir, 'pending')).length, 0)
+    // 源卡文件全走；0.26 取件即回执——pending 留刚产出的延续回执卡（标题指向源卡）
+    assert.equal(readdirSync(join(dir, 'pending')).filter((f) => f.includes('ho-manual-0001')).length, 0, '源卡文件不留 pending')
+    assert.ok(readdirSync(join(dir, 'pending')).some((f) => f.endsWith('.md')), '取件即回执：pending 留延续回执卡')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

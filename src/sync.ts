@@ -44,6 +44,8 @@ const SYNC_GITIGNORE = [
   'pending/*.claim',
   '*.tmp',
   'sync-state.json',
+  // 机器身份（/sendto 点名寻址，src/directed.ts）：绝不入同步端点——否则两台机同名互 claim
+  'machine.json',
 ].join('\n')
 
 // ---------- 配置（sync.json，独立于 config.json：loadSwitches 只认开关字段，会丢弃未知键） ----------
