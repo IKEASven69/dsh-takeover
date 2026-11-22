@@ -1,6 +1,6 @@
 {
   "name": "@cold777/dsh-takeover",
-  "version": "0.25.0",
+  "version": "0.26.0",
   "description": "会话接管插件：拉取二十三家外部 agent 会话（/resume-*）、把当前 DSH 会话按 handoff: 1 开放协议寄存进 ~/.handoff/pending/、开局取件接着干",
   "type": "module",
   "main": "./lib/index.js",
@@ -30,7 +30,7 @@
   ],
   "scripts": {
     "build": "tsdown && node scripts/build-client.mjs",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "node node_modules/typescript/bin/tsc -p tsconfig.json --noEmit",
     "test": "node --import tsx/esm --test tests/*.spec.ts",
     "check": "npm run typecheck && npm test && npm run build"
   },

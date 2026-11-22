@@ -4,7 +4,7 @@
 
 **把任何 agent 干到一半的活接过来继续干——二十三家 CLI 会话只读拉取、一键寄存、开局取件，会话和记忆都能交接。**
 
-[![npm](https://img.shields.io/npm/v/@cold777/dsh-takeover)](https://www.npmjs.com/package/@cold777/dsh-takeover) ![tests](https://img.shields.io/badge/tests-460%20passing-brightgreen) ![DSH](https://img.shields.io/badge/DSH-%3E%3D0.2.0--rc.2-orange) ![Node](https://img.shields.io/badge/node-%3E%3D22-green) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
+[![npm](https://img.shields.io/npm/v/@cold777/dsh-takeover)](https://www.npmjs.com/package/@cold777/dsh-takeover) ![tests](https://img.shields.io/badge/tests-passing-brightgreen) ![DSH](https://img.shields.io/badge/DSH-%3E%3D0.2.0--rc.2-orange) ![Node](https://img.shields.io/badge/node-%3E%3D22-green) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
 
 - **接过来**：Claude Code 里干到一半的任务，`/resume-claude` 一条命令——六段交接卡注入当前会话，模型直接接着干；
 - **交出去**：会话太长想换环境？`/handoff` 把当前会话寄存成一张卡，任何 agent 开局取件继续；
@@ -39,7 +39,7 @@ dsh plugin --profile web add github:IKEASven69/dsh-takeover
 | 接管别家会话 | `/resume-claude`（或自然语言："把 Claude Code 最新的会话接过来"） | 只读拉取 → 六段交接卡注入当前轮 → 模型接着干 |
 | 交接当前会话 | `/handoff` | 当前会话蒸馏成协议卡寄存进共享收件箱，未提交改动自动附补丁 |
 | 开局取件 | `/inbox` | 列出待取件 → 挑一张核验签收 → 上下文注入继续干 |
-| 浏览了再接 | 点输入框工具行的「接力」按钮 | 浮出工作台：二十三家最近会话浏览、一键接管 / 交接出去、记忆快照 |
+| 浏览了再接 | 点输入框工具行的「接力」按钮 | 浮出工作台：二十三家最近会话浏览（「运行中」筛选按接管存活证据判，原生侧不可知如实标注）、一键接管（接管前先出五项预检判定卡：可直接接管 / 带伤接管列伤 / 建议放弃）/ 交接出去、记忆快照；收件箱置顶 / 含正文检索 / 弃置恢复 / 点名卡「点名给我」分组，另有上下文余量预警、总线只读体检（会话医生）、接力总账与宿主升级自动保险快照 |
 | 记忆一起交接 | 工作台 → 记忆快照 → 勾选打包 | CLAUDE.md / AGENTS.md 等打包成卡，取件方按卡吸收进自己的记忆文件 |
 
 ## 它怎么工作（60 秒）
@@ -50,7 +50,7 @@ dsh plugin --profile web add github:IKEASven69/dsh-takeover
 
 **信任长在文件里。** 首次寄存自动生成总线密钥，卡片带机器签名；取件侧三态裁决 `ok / tampered / no-key`，篡改可检出、跨信任域不误报。
 
-**读取零写入；写回仅记忆/配置且两步确认、原物可回滚。** 拉取与取件对外部 agent 的会话库零写入、不回放历史工具调用，原文不进卡片、卡里只有指针。写回只有两个显式动作：`handoff_absorb`（已取件的记忆卡落进目标记忆文件——confirm 两步、按条目去重、写前快照）与 `handoff_env inject`（备份包内 MCP/skills 合并进目标配置——confirm 两步、只新增不覆盖、checkpoint 可回滚）；外部会话存储永不写（威胁模型 T8 硬线），hooks/权限/插件登记语义不等价、明确不做。
+**读取零写入；写回仅记忆/配置且两步确认、原物可回滚。** 拉取与取件对外部 agent 的会话库零写入、不回放历史工具调用，原文不进卡片、卡里只有指针。写回只有两个显式动作：`handoff_absorb`（已取件的记忆卡落进目标记忆文件——confirm 两步、按条目去重、写前快照）与 `handoff_env inject`（备份包内 MCP/skills 合并进目标配置——confirm 两步、只新增不覆盖、checkpoint 可回滚）；gemini 的 skills 写回走用户级主名 `~/.gemini/skills/`（上游 Storage.getUserSkillsDir；别名 `~/.agents/skills` 为发现侧兼容、后加载同名优先，写回走主名避免歧义），项目级 `.gemini/skills/` 不做；外部会话存储永不写（威胁模型 T8 硬线），hooks/权限/插件登记语义不等价、明确不做。
 
 ## 支持面与分层承诺
 
@@ -83,7 +83,7 @@ dsh plugin --profile web add github:IKEASven69/dsh-takeover
 |---|---|
 | `foreign_session_read` | 只读拉取二十三家会话。`action=list` 列候选（标题/时间/轮数）；`action=show` 按引用（空/latest/id/前缀/路径/标题关键词，歧义返回候选不猜）返回结构化摘要：标题、轮数、首条请求、尾部进展、涉及文件 top15、六段卡素材。原文仅在显式传 `limit` 时分页给出；探测/解析失败返回 `{ ok: false, error }` 不抛 |
 | `handoff_push` | 当前会话寄存为协议卡。六段文本可选传入，留空段从会话事件流确定性兜底（不调 LLM）；未提交改动自动附补丁；返回 `{ ok, id, path, coverage, patch? }` |
-| `handoff_inbox` | `action=list` 列待取件；`action=load` 取件（消费即弃，附签名与 git 核验的 MISMATCH / UNAVAILABLE 警告） |
+| `handoff_inbox` | `action=list` 列待取件；`action=load` 取件（消费即弃，附签名与 git 核验的 MISMATCH / UNAVAILABLE 警告）；`action=search` 检索待取件（`includeBody:true` 加读卡全文并给命中行摘要）；`action=pin` / `unpin` 置顶开关（本机视图，卡被取件/弃置后自动失效）；`action=restore` 弃置恢复（archived 整卡搬回 pending 重新可取件，pending 已有同名文件时拒绝覆盖） |
 | `handoff_sync` | 换机同步：`action=setup` 启用（git 仓库地址，凭据走系统 git 不入插件）；`action=now` 拉推一步到位；`push`/`pull`/`status` 单向与只读。已消费的卡经 archived tombstone 不在另一台机器重放 |
 | `handoff_env` | 环境备份/恢复：全家桶（设置/插件登记/会话库/用户 skills/工作区登记/.mcp.json）打包成单个 AES-256-GCM 加密文件随同步跨机；`dry` 预演三态 diff → `apply`（confirm 确认，被覆盖原物自动 checkpoint）→ `rollback` 可逆；`inject` 配置写回（显式授权动作）：备份包内 .mcp.json（MCP servers）与 .agents/skills 条目合并进目标 harness 配置（confirm 两步逐条确认、只新增不覆盖、checkpoint 可回滚；hooks/权限/插件登记语义不等价明确不做） |
 | `handoff_memory` | 记忆快照。`action=scan` 只读列各 agent 记忆文件（含大小/预览）；`action=push` 勾选打包成卡寄存，取件方按「建议加载」吸收 |
@@ -96,6 +96,9 @@ dsh plugin --profile web add github:IKEASven69/dsh-takeover
 | `/resume-*`（二十三家） | 解析引用 → 只读拉取 → 四态标注（外来历史一律不可信、不覆盖当前指令）→ 六段卡注入当前轮 → 末尾问一句「要不要顺手寄存进收件箱」 |
 | `/handoff` | 按协议语义六条（证据账本四态、原文不进卡、产物只引路径、redact、建议加载段、反向锚定+剪枝）把当前会话蒸馏成卡寄存 |
 | `/inbox` | 列 pending 让用户挑；取件后注入当前轮，强调卡片是 HISTORY_REPORTED，执行前先核对 git 状态 |
+| `/ledger` | 接力总账：relay 取件记录 × lifecycle 账本 × 在册卡面三源翻账成屏——链 / 僵尸（救生艇抢出卡区分标注）/ 闭集计数行原样；确定性翻账，绝不计算延续率或评分 |
+| `/sendto <机器名>` | 点名投递：六段协议卡 `to=machine:<机器名>` 寄存，随换机同步点名交给指定机器（目标机收件箱归「点名给我」组，别机不冒领）；约定寻址无在线握手，回报只说「已投递到同步」，不声明对方已收到 |
+| `/almanac` | 接力年鉴：这台机器的真实接力史编成一页可分享可审计的 markdown——理由直方图 / 救生艇抢出 / 接力来源家 / 归档窗口，每项单源可对账；只计数不评分 |
 
 ## 跨机器接力
 
