@@ -15,6 +15,9 @@ docs/全场景测试文档.md
 docs/*
 # 例外：开发路线图入库（跨机同步靠 git，另一台机器要能拿到）
 !docs/ROADMAP-2026Q4.md
+# 例外：0.27 规划与调研（用户拍板入库，作为版本决策依据）
+!docs/PLAN-0.27.md
+!docs/RESEARCH-0.27-*.md
 benchmark.cases.json
 
 # 本地工具脚本：不入库
