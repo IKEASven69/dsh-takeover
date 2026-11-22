@@ -341,12 +341,12 @@ test('summarizeTurns：cwd 为空时骨架 warnings 追加确认目录警告，�
 
 // ---------- skill 注册形态 ----------
 
-test('skill 注册面：/handoff /inbox + /resume-* 二十三条，共 25 条', () => {
+test('skill 注册面：/handoff /inbox /ledger /sendto /almanac + /resume-* 二十三条，共 28 条', () => {
   const regs = skillRegistrations()
-  assert.equal(regs.length, 25)
+  assert.equal(regs.length, 28)
   const names = regs.map((r) => r.name)
   assert.deepEqual(names, [
-    'handoff', 'inbox',
+    'handoff', 'inbox', 'ledger', 'sendto', 'almanac',
     'resume-claude', 'resume-codex', 'resume-opencode', 'resume-zcode', 'resume-pi', 'resume-workbuddy',
     'resume-cursor', 'resume-grok', 'resume-gemini',
     'resume-kimi', 'resume-codebuddy', 'resume-qoder', 'resume-kiro',
