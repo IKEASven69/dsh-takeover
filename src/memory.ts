@@ -53,8 +53,10 @@ export const MEMORY_SOURCES: readonly MemorySourceDef[] = [
  * 优先 HIPPO_DATA_DIR 环境变量，其次 ~/.hippo/data-dir.txt 内容（hippo 把自己的
  * 数据目录写在该文件），最后回退 ~/.hippo。探测对象是 <数据目录>/memories（zvec
  * 目录）存在性；数据根下的 memories.db 是旧版引擎遗留文件，不作判断依据。
+ * 导出给 distill 生产端共用（src/distill.ts hippoEntriesFile / env 钉同源）：
+ * 扫描、出卡、蒸馏导出三方共享同一套三级解析，不重复实现。
  */
-function hippoDataDir(home: string): string {
+export function hippoDataDir(home: string): string {
   const env = process.env['HIPPO_DATA_DIR']
   if (env !== undefined && env.trim() !== '') return env.trim()
   try {
@@ -126,13 +128,16 @@ export const MEMORY_STORES: readonly MemoryStoreDef[] = [
     id: 'hippo-db',
     label: 'dsh-hippo 记忆库',
     // 导出约定路径：<数据目录>/hippo-memory.jsonl（row.path 是 <数据目录>/memories，
-    // 取其父目录即数据目录根——与扫描同一套三级解析，不重复实现）
+    // 取其父目录即数据目录根——与扫描同一套三级解析，不重复实现；
+    // distill 生产端（src/distill.ts hippoEntriesFile）也经本函数解析同一约定路径，
+    // 注册表是路径约定的单点真源）
     entriesFile: (row) => join(dirname(row.path), 'hippo-memory.jsonl'),
     guidance: [
       '（dsh-hippo 记忆库是 zvec 原生目录（proxima 向量索引 + rocksdb FTS），二进制不随卡直带。官方互通通路走 hippo CLI 的 JSONL 导出/导入：',
-      '- 源机：`hippo export -f jsonl -o hippo-memory.jsonl`（在 hippo 数据目录下执行）导出全库 JSONL 快照到约定路径 <数据目录>/hippo-memory.jsonl——重新出卡即自动按条目随卡携带；',
+      '- 源机：`hippo export -f jsonl -o hippo-memory.jsonl`（在 hippo 数据目录下执行）导出全库 JSONL 快照到约定路径 <数据目录>/hippo-memory.jsonl——装了 hippo CLI 的机器，dsh-takeover 出卡会自动跑导出并挂侧车随卡；',
+      '- 源机两态（本卡即回退态）：未装 hippo CLI → 装好 dsh-hippo 后重新出卡即自动导出；CLI 在场但导出失败（非零退出/超时/文件未落）→ 按出卡回执的手动命令补跑 `hippo export -f jsonl -o hippo-memory.jsonl` 再重新出卡；',
       '- 取件方若装了 dsh-hippo：`hippo import hippo-memory.jsonl` 幂等导入（自动重嵌入；重复条目强化合并、不覆盖已有记录）。',
-      '本卡先携带来源清单与交接意图，JSONL 快照按上面两步补齐。）',
+      '本卡先携带来源清单与交接意图，JSONL 快照按上面几步补齐。）',
     ].join('\n'),
   },
 ]

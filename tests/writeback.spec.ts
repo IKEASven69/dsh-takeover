@@ -7,6 +7,9 @@
  * - 会话存储零写入（负向断言）：全树 diff 只允许记忆/配置目标变化；target 闭集 + 结构守门
  * - inject 只新增不覆盖：同名 MCP / 已存在 skill 文件一律跳过，如实报告
  * - 诚实边界：无映射的家（codex TOML / cursor skills）明确不做，不半吊子写
+ * - gemini 行值消毒（0.26）：$/% 引用预解析成终态（解析不出 skip+报告）、别名禁下划线、
+ *   timeout 毫秒形态；SKILL.md frontmatter 闸（上游 skillLoader 口径，不合格整目录跳过）；
+ *   写后 schema 派生结构校验（增强非闸）
  * 全部走临时 home（源机与目标机分开）+ 临时 HANDOFF_HOME，不碰真实用户目录。
  */
 import assert from 'node:assert/strict'
@@ -22,6 +25,7 @@ import { collectScopeFiles, createBackup, listBackups, readBackupEntryBlobs, rol
 import { scanMemorySources, pushMemoryCard, type MemorySourceRow } from '../src/memory.ts'
 import { inboxLoad, pushHandoff, registerEnvBackupTool, renderInbox } from '../src/tools.ts'
 import { readLifecycleEvents } from '../src/lifecycle.ts'
+import { gateGeminiSkills, geminiSkillFrontmatterOk, sanitizeGeminiMcpTable, schemaCheckMcpServer } from '../src/configinject.ts'
 
 const PASS = 'correct-horse-8'
 
@@ -110,7 +114,7 @@ test('absorb：confirm:true 落盘——条目进目标记忆文件、absorbed-w
     const target = join(home, '.claude', 'CLAUDE.md')
     const r = absorbCard({ id, target: 'claude-user', confirm: true }, { dir: handoff, home })
     assert.equal(r.ok, true, `absorb 失败：${r.ok ? '' : r.error}`)
-    if (!r.ok) return
+    if (!r.ok || 'sidecar' in r) return // hippo-db 变体（0.26 记忆闭环并行面）与本用例无关；tsgo 对 target 判别收窄不可靠，用 in 结构收窄
     assert.equal(r.path, target)
     // 目标原本不存在 → snapshot 缺省；卡内重复行只追加一次（appended=2、卡内去重=1）
     assert.equal(r.appended, 2)
@@ -129,7 +133,7 @@ test('absorb：confirm:true 落盘——条目进目标记忆文件、absorbed-w
     const before = readFileSync(target, 'utf-8')
     const r2 = absorbCard({ id, target: 'claude-user', confirm: true }, { dir: handoff, home })
     assert.equal(r2.ok, true)
-    if (!r2.ok) return
+    if (!r2.ok || 'sidecar' in r2) return
     assert.equal(r2.appended, 0, '重复 absorb 必须全去重')
     assert.equal(r2.deduped, 3, '三条条目（含卡内重复）全命中既有内容')
     assert.equal(readFileSync(target, 'utf-8'), before, '去重不重写：文件逐字节不变')
@@ -155,7 +159,7 @@ test('absorb：既有目标写前原物快照进 archived/absorb-backup/，用�
     writeFileSync(target, original, 'utf-8')
     const r = absorbCard({ id, target: 'claude-user', confirm: true }, { dir: handoff, home })
     assert.equal(r.ok, true, r.ok ? '' : r.error)
-    if (!r.ok) return
+    if (!r.ok || 'sidecar' in r) return
     assert.equal(r.appended, 1, '推卡后本机改过的目标不含卡条目 → 应追加 1 条')
     assert.ok(r.snapshot, '既有目标应有快照')
     if (r.snapshot === undefined) return
@@ -175,7 +179,7 @@ test('absorb：既有目标写前原物快照进 archived/absorb-backup/，用�
     const snap1 = r.snapshot
     const r2 = absorbCard({ id: id2, target: 'claude-user', confirm: true }, { dir: handoff, home })
     assert.equal(r2.ok, true)
-    if (!r2.ok || r2.snapshot === undefined) return
+    if (!r2.ok || 'sidecar' in r2 || r2.snapshot === undefined) return
     assert.notEqual(r2.snapshot, snap1, '快照按卡 id 各留一份')
     assert.equal(readFileSync(snap1, 'utf-8'), original, '首个快照不被后续写入覆盖')
     assert.equal(readFileSync(r2.snapshot, 'utf-8'), original, '新快照 = 该次写盘前的最新原物（回滚后的原物）')
@@ -198,7 +202,7 @@ test('absorb：同一张卡多目标落盘——各写各的记忆文件、事�
     const b = absorbCard({ id, target: 'zcode-user', confirm: true }, { dir: handoff, home })
     assert.equal(a.ok, true, a.ok ? '' : a.error)
     assert.equal(b.ok, true, b.ok ? '' : b.error)
-    if (!a.ok || !b.ok) return
+    if (!a.ok || !b.ok || 'sidecar' in a || 'sidecar' in b) return
     assert.match(readFileSync(a.path, 'utf-8'), /跨家共享的一条。/)
     assert.match(readFileSync(b.path, 'utf-8'), /跨家共享的一条。/)
     assert.match(readFileSync(b.path, 'utf-8'), /zcode 既有约定。/, '既有 zcode 记忆不丢失')
@@ -625,6 +629,241 @@ test('inject：同一分钟两次注入不覆盖既有 checkpoint——首次写
     const rolled1 = rollbackRestore(r1.checkpointDir ?? '', handoff, home)
     assert.equal(rolled1.ok, true)
     assert.equal(readFileSync(join(home, '.claude.json'), 'utf-8'), `${original}\n`, 'rollback(r1) 回到首次注入前原物')
+  } finally {
+    rmRf(root); rmRf(handoff); rmRf(home)
+  }
+})
+
+// --------------------------------------------------------------- inject gemini 行：值消毒三条 + skills frontmatter 闸（0.26）
+
+/** gemini 端到端源机 root：覆盖值消毒三态/别名/timeout/skills 闸各靶子；返回备份文件名 */
+function makeGeminiBackup(handoff: string, root: string): string {
+  const mk = (rel: string, content: string): void => {
+    mkdirSync(dirname(join(root, rel)), { recursive: true })
+    writeFileSync(join(root, rel), content, 'utf-8')
+  }
+  mk('.mcp.json', JSON.stringify({
+    mcpServers: {
+      'plain-srv': { command: 'node', args: ['x.js'], env: { A: 'plain-value' }, timeout: 30000 },
+      'esc-srv': { command: '$BIN_DIR/node', env: { TOKEN: '$MY_TOKEN' } },
+      'def-srv': { command: 'node', env: { U: '${UNSET_ZZZ:-fallback-val}' } },
+      'skip-srv': { command: 'node', env: { K: '$MISSING_ZZZ_NO_DEFAULT' } },
+      'my_server': { command: 'x' },
+      't-str-srv': { command: 'node', timeout: '5000' },
+      't-bad-srv': { command: 'node', timeout: '30s' },
+    },
+  }))
+  mk('.agents/skills/goodskill/SKILL.md', '---\nname: good-skill\ndescription: 消毒端到端用的合格 skill。\n---\n\n# 正文\n')
+  mk('.agents/skills/goodskill/scripts/run.sh', 'echo hi\n')
+  mk('.agents/skills/badskill/SKILL.md', '---\nname: bad-skill\n---\n\n缺 description。\n')
+  mk('.agents/skills/nodeskill/SKILL.md', '# 没有 frontmatter 的文件\n')
+  mk('.agents/skills/orphan/notes.txt', '孤儿目录资源文件\n')
+  const r = createBackup(PASS, handoff, root)
+  assert.equal(r.ok, true)
+  return listBackups(handoff)[0]!.file
+}
+
+const GEMINI_ENV: Record<string, string> = { MY_TOKEN: 'tok-123', BIN_DIR: '/usr/local/bin', WINVAR_OK: 'win-resolved' }
+
+test('inject gemini：注册表行带 skills 主名映射与消毒声明；$ 值消毒三态 plan 可见', () => {
+  const home = tmpDir('v-home')
+  try {
+    const gemini = INJECT_TARGETS.find((t) => t.key === 'gemini')
+    assert.ok(gemini, 'gemini 行在册')
+    if (gemini === undefined) return
+    assert.equal(gemini.skills?.(home), join(home, '.gemini', 'skills'), 'skills 写用户级主名 ~/.gemini/skills/')
+    assert.equal(gemini.mcpSanitize, true)
+    assert.equal(gemini.skillGate, true)
+    assert.match(gemini.limits, /主名/)
+    assert.match(gemini.limits, /项目级不做/)
+    // 纯函数面：$ 三态（原样 / 预解析 / 不可解析 skip）在一处可见
+    const san = sanitizeGeminiMcpTable(
+      {
+        'a': { env: { X: 'no-dollar' } },
+        'b': { env: { X: '$MY_TOKEN' } },
+        'c': { env: { X: '${UNSET_ZZZ:-dflt}' } },
+        'd': { env: { X: '$UNSET_ZZZ' } },
+        'e': { env: { X: '嵌套 ${UNSET_ZZZ:-$MY_TOKEN} 默认值' } },
+      },
+      { env: GEMINI_ENV, win: false },
+    )
+    assert.deepEqual((san.table['a'] as { env: { X: string } }).env.X, 'no-dollar', '无 $ 原样')
+    assert.deepEqual((san.table['b'] as { env: { X: string } }).env.X, 'tok-123', '可解析 → 预解析终态')
+    assert.deepEqual((san.table['c'] as { env: { X: string } }).env.X, 'dflt', '默认值分支同上游口径')
+    assert.equal(san.table['d'], undefined, '未定义且无默认 → 整 server skip')
+    assert.equal(san.table['e'], undefined, '默认值内嵌 $ 解析后仍含引用 → 非终态 skip')
+    assert.ok(san.notes.some((n) => n.includes('my_server') === false && n.includes('a』') === false))
+    assert.ok(san.notes.some((n) => /「d」.*\$UNSET_ZZZ_NO_DEFAULT|「d」.*\$UNSET_ZZZ/.test(n)), `skip 有报告：${san.notes.join('；')}`)
+  } finally {
+    rmRf(home)
+  }
+})
+
+test('inject gemini：confirm 落盘——消毒值写入、skip 如实报告、只新增不覆盖、幂等二次注入、checkpoint 可回滚', () => {
+  const root = tmpDir('w-src')
+  const handoff = tmpDir('w-handoff')
+  const home = tmpDir('w-dst')
+  try {
+    const original = JSON.stringify({ theme: 'keep-me', mcpServers: { 'plain-srv': { command: 'node-other' } } }, null, 2)
+    mkdirSync(join(home, '.gemini'), { recursive: true })
+    writeFileSync(join(home, '.gemini', 'settings.json'), `${original}\n`, 'utf-8')
+    const file = makeGeminiBackup(handoff, root)
+    const args = { file, passphrase: PASS, target: 'gemini', confirm: true }
+    const deps = { dir: handoff, home, env: GEMINI_ENV, winEnvExpand: false }
+    const p = planInject({ file, passphrase: PASS, target: 'gemini' }, deps)
+    assert.equal(p.ok, true, p.ok ? '' : p.error)
+    if (p.ok) {
+      assert.deepEqual(p.items.filter((i) => i.action === 'add').map((i) => i.name).sort(), ['def-srv', 'esc-srv', 't-str-srv'], '消毒后的表才进计划（plain-srv 同名冲突走 skip-conflict）')
+      assert.ok(p.items.some((i) => i.name === 'plain-srv' && i.action === 'skip-conflict'), '同名不同值 = 冲突跳过不覆盖')
+      assert.ok(p.notes.some((n) => /「skip-srv」.*\$MISSING_ZZZ_NO_DEFAULT 在目标机当前环境未定义且无默认值/.test(n)), `不可解析 skip 报告：${p.notes.join('；')}`)
+      assert.ok(p.notes.some((n) => /「my_server」别名含下划线/.test(n)), `别名 skip 报告：${p.notes.join('；')}`)
+      assert.ok(p.notes.some((n) => /「t-bad-srv」.*timeout.*30s/.test(n)), `timeout skip 报告：${p.notes.join('；')}`)
+      assert.ok(p.notes.some((n) => /「t-str-srv」.*timeout.*5000/.test(n)), `timeout 转换留痕：${p.notes.join('；')}`)
+      assert.ok(p.notes.some((n) => /「esc-srv」.*预解析/.test(n)), `预解析留痕：${p.notes.join('；')}`)
+    }
+    const r = applyInject(args, deps)
+    assert.equal(r.ok, true, r.ok ? '' : r.error)
+    if (!r.ok) return
+    assert.deepEqual(r.mcpAdded.sort(), ['def-srv', 'esc-srv', 't-str-srv'], 'plain-srv 同名冲突跳过；消毒 skip 三家不入')
+    assert.equal(r.mcpSkipped, 1)
+    assert.match(r.detail, /别名含下划线/)
+    assert.match(r.detail, /schema 派生结构校验（上游 settings.schema.json 实抓快照）：新增 3 个 server 全部通过/)
+    // 落盘值断言：消毒终态写入；既有顶层键与冲突 server 原样保住
+    const cfg = JSON.parse(readFileSync(join(home, '.gemini', 'settings.json'), 'utf-8')) as { theme?: string; mcpServers: Record<string, { command?: string; env?: Record<string, string>; timeout?: number }> }
+    assert.equal(cfg.theme, 'keep-me', '既有非 mcpServers 键保住')
+    assert.deepEqual(cfg.mcpServers['plain-srv'], { command: 'node-other' }, '同名冲突不覆盖')
+    assert.equal(cfg.mcpServers['esc-srv']?.command, '/usr/local/bin/node', 'command 的 $ 引用预解析成终态')
+    assert.deepEqual(cfg.mcpServers['esc-srv']?.env, { TOKEN: 'tok-123' })
+    assert.deepEqual(cfg.mcpServers['def-srv']?.env, { U: 'fallback-val' }, '默认值分支同上游展开口径')
+    assert.equal(cfg.mcpServers['t-str-srv']?.timeout, 5000, 'timeout 数字字符串转毫秒 number')
+    assert.equal(cfg.mcpServers['skip-srv'], undefined, '不可解析条目不落盘')
+    assert.equal(cfg.mcpServers['my_server'], undefined, '下划线别名不落盘')
+    assert.equal(cfg.mcpServers['t-bad-srv'], undefined, 'timeout 形态不合格不落盘')
+    assert.match(r.detail ?? '', /checkpoint/)
+    // 回滚找回注入前原物
+    const rolled = rollbackRestore(r.checkpointDir ?? '', handoff, home)
+    assert.equal(rolled.ok, true)
+    assert.equal(readFileSync(join(home, '.gemini', 'settings.json'), 'utf-8'), `${original}\n`)
+    // 重建注入态（回滚后重新注入 = 幂等性验证的前置）
+    const r1 = applyInject(args, deps)
+    assert.equal(r1.ok, true)
+    if (!r1.ok) return
+    // 幂等：消毒值与落盘值逐字节一致 → 全部 skip-same 零写盘（消毒后比对是幂等的前提）
+    const r2 = applyInject(args, deps)
+    assert.equal(r2.ok, true)
+    if (!r2.ok) return
+    assert.deepEqual(r2.mcpAdded, [])
+    assert.deepEqual(r2.skillsCreated, [])
+    assert.match(r2.detail, /未写任何盘/)
+  } finally {
+    rmRf(root); rmRf(handoff); rmRf(home)
+  }
+})
+
+test('inject gemini：skills frontmatter 闸——合格目录整组写入，缺/坏/无 SKILL.md 整目录跳过并报告', () => {
+  const root = tmpDir('x-src')
+  const handoff = tmpDir('x-handoff')
+  const home = tmpDir('x-dst')
+  try {
+    const file = makeGeminiBackup(handoff, root)
+    const deps = { dir: handoff, home, env: GEMINI_ENV, winEnvExpand: false }
+    const p = planInject({ file, passphrase: PASS, target: 'gemini' }, deps)
+    assert.equal(p.ok, true, p.ok ? '' : p.error)
+    if (p.ok) {
+      assert.deepEqual(p.items.filter((i) => i.kind === 'skill' && i.action === 'create').map((i) => i.name).sort(), ['goodskill/SKILL.md', 'goodskill/scripts/run.sh'], '合格 skill 整组（含资源文件）进计划')
+      assert.ok(p.notes.some((n) => /「badskill」SKILL.md frontmatter 取不到 name\/description/.test(n)), `坏 frontmatter 报告：${p.notes.join('；')}`)
+      assert.ok(p.notes.some((n) => /「nodeskill」SKILL.md 无 frontmatter/.test(n)), `无 frontmatter 报告：${p.notes.join('；')}`)
+      assert.ok(p.notes.some((n) => /「orphan」无一级 SKILL\.md/.test(n)), `孤儿目录报告：${p.notes.join('；')}`)
+    }
+    const r = applyInject({ file, passphrase: PASS, target: 'gemini', confirm: true }, deps)
+    assert.equal(r.ok, true, r.ok ? '' : r.error)
+    if (!r.ok) return
+    // 落盘断言：只有合格组落地
+    assert.ok(existsSync(join(home, '.gemini', 'skills', 'goodskill', 'SKILL.md')))
+    assert.equal(readFileSync(join(home, '.gemini', 'skills', 'goodskill', 'scripts', 'run.sh'), 'utf-8'), 'echo hi\n')
+    assert.ok(!existsSync(join(home, '.gemini', 'skills', 'badskill')), '不合格 skill 整目录不写')
+    assert.ok(!existsSync(join(home, '.gemini', 'skills', 'nodeskill')), '无 frontmatter 整目录不写')
+    assert.ok(!existsSync(join(home, '.gemini', 'skills', 'orphan')), '无 SKILL.md 的目录不写死字节')
+    // 纯函数面：行解析口径——上游兜底解析器同样接受的形态不比上游严（name: 123 按文本提取）
+    assert.equal(geminiSkillFrontmatterOk('---\nname: 123\ndescription: 数字名按上游兜底口径是文本。\n---\n').ok, true)
+    assert.equal(geminiSkillFrontmatterOk('---\nname: "quoted"\ndescription: \'单引号也剥\'\n---\n').ok, true, '引号剥离同上游 stripOuterQuotes')
+    assert.equal(geminiSkillFrontmatterOk('---\nname: fold\ndescription: >\n  续行一\n  续行二\n---\n').ok, true, '块指示符续行同上游')
+    // gateGeminiSkills 根组：根级 SKILL.md 过闸放行、坏根级只跳过该文件、根级散文件放行
+    const g = gateGeminiSkills([
+      { rel: 'SKILL.md', content: Buffer.from('---\nname: root\ndescription: 根级 skill。\n---\n') },
+      { rel: 'loose.txt', content: Buffer.from('loose') },
+    ])
+    assert.deepEqual(g.keep.map((e) => e.rel), ['SKILL.md', 'loose.txt'])
+    const gBad = gateGeminiSkills([{ rel: 'SKILL.md', content: Buffer.from('没有 frontmatter') }])
+    assert.deepEqual(gBad.keep.map((e) => e.rel), [], '坏根级 SKILL.md 跳过')
+    assert.ok(gBad.notes[0]?.includes('根级 SKILL.md'))
+  } finally {
+    rmRf(root); rmRf(handoff); rmRf(home)
+  }
+})
+
+test('inject gemini：Windows %VAR% 口径（连接期 env/headers 展开）——win:true 预解析、未定义 skip；win:false 原样放行', () => {
+  const root = tmpDir('y-src')
+  const handoff = tmpDir('y-handoff')
+  const homeWin = tmpDir('y-dst-win')
+  const homePosix = tmpDir('y-dst-posix')
+  try {
+    mkdirSync(join(root, '.agents', 'skills'), { recursive: true })
+    writeFileSync(join(root, '.mcp.json'), JSON.stringify({
+      mcpServers: {
+        'win-srv': { command: 'node', env: { P: '%WINVAR_OK%' }, headers: { H: '%WINVAR_OK%' } },
+        'win-miss-srv': { command: 'node', env: { Q: '%WINVAR_MISSING%' } },
+        'pct-srv': { command: 'node', url: 'https://x.example/a%22b' },
+      },
+    }), 'utf-8')
+    assert.equal(createBackup(PASS, handoff, root).ok, true)
+    const file = listBackups(handoff)[0]!.file
+    // Windows 口径：env/headers 的 %VAR% 预解析成终态；未定义 %VAR% skip（上游会静默清空）；url 不在 % 展开面（仅 $ 面）
+    const depsWin = { dir: handoff, home: homeWin, env: { WINVAR_OK: 'win-resolved' }, winEnvExpand: true }
+    const r = applyInject({ file, passphrase: PASS, target: 'gemini', confirm: true }, depsWin)
+    assert.equal(r.ok, true, r.ok ? '' : r.error)
+    if (!r.ok) return
+    const cfg = JSON.parse(readFileSync(join(homeWin, '.gemini', 'settings.json'), 'utf-8')) as { mcpServers: Record<string, { env?: Record<string, string>; headers?: Record<string, string>; url?: string }> }
+    assert.deepEqual(cfg.mcpServers['win-srv']?.env, { P: 'win-resolved' }, '%VAR% 预解析成终态')
+    assert.deepEqual(cfg.mcpServers['win-srv']?.headers, { H: 'win-resolved' }, 'headers 同在连接期展开面')
+    assert.equal(cfg.mcpServers['win-miss-srv'], undefined, '未定义 %VAR% 落盘会被上游展开为空串——skip')
+    assert.equal(cfg.mcpServers['pct-srv']?.url, 'https://x.example/a%22b', 'url 非 % 展开面（仅 $ 面）原样保留')
+    // 非 Windows 口径：%VAR% 上游不展开——原样放行写入
+    const depsPosix = { dir: handoff, home: homePosix, env: { WINVAR_OK: 'win-resolved' }, winEnvExpand: false }
+    const p2 = applyInject({ file, passphrase: PASS, target: 'gemini', confirm: true }, depsPosix)
+    assert.equal(p2.ok, true)
+    if (!p2.ok) return
+    const cfg2 = JSON.parse(readFileSync(join(homePosix, '.gemini', 'settings.json'), 'utf-8')) as { mcpServers: Record<string, { env?: Record<string, string> }> }
+    assert.deepEqual(cfg2.mcpServers['win-miss-srv']?.env, { Q: '%WINVAR_MISSING%' }, 'win:false 口径 % 引用原样放行')
+  } finally {
+    rmRf(root); rmRf(handoff); rmRf(homeWin); rmRf(homePosix)
+  }
+})
+
+test('inject gemini：schema 派生结构校验（增强非闸）——闭集外字段/类型不符只报告不拒写不回滚', () => {
+  // 纯函数面：契约逐条
+  assert.deepEqual(schemaCheckMcpServer({ command: 'node', env: { A: '1' }, timeout: 1000 }), [], '合规条目零报告')
+  assert.ok(schemaCheckMcpServer({ command: 'node', unknownField: 1 }).some((v) => /unknownField 不在上游 schema 闭集/.test(v)), '闭集外字段报告')
+  assert.ok(schemaCheckMcpServer({ command: 'node', timeout: '30s' }).some((v) => /timeout 应为 number/.test(v)), '类型不符报告')
+  assert.ok(schemaCheckMcpServer({ command: 'node', env: { A: 1 } }).some((v) => /env 应为/.test(v)), 'env 非字符串值报告')
+  assert.ok(schemaCheckMcpServer({ env: { A: '1' } }).some((v) => /缺 command\/url\/httpUrl/.test(v)), '缺传输字段报告')
+  // 端到端面：带未知字段的 server 照写（增强非闸），detail 如实标注不符
+  const root = tmpDir('z-src')
+  const handoff = tmpDir('z-handoff')
+  const home = tmpDir('z-dst')
+  try {
+    mkdirSync(join(root, '.agents', 'skills'), { recursive: true })
+    writeFileSync(join(root, '.mcp.json'), JSON.stringify({ mcpServers: { 'odd-srv': { command: 'node', claudeOnly: true } } }), 'utf-8')
+    assert.equal(createBackup(PASS, handoff, root).ok, true)
+    const file = listBackups(handoff)[0]!.file
+    const r = applyInject({ file, passphrase: PASS, target: 'gemini', confirm: true }, { dir: handoff, home, env: {}, winEnvExpand: false })
+    assert.equal(r.ok, true, 'schema 校验是增强不是闸——不拒写')
+    if (!r.ok) return
+    assert.deepEqual(r.mcpAdded, ['odd-srv'])
+    assert.match(r.detail, /schema 派生结构校验不符 1 处（增强非闸，已写值未回滚）/)
+    assert.match(r.detail, /claudeOnly 不在上游 schema 闭集/)
+    const cfg = JSON.parse(readFileSync(join(home, '.gemini', 'settings.json'), 'utf-8')) as { mcpServers: Record<string, unknown> }
+    assert.deepEqual(cfg.mcpServers['odd-srv'], { command: 'node', claudeOnly: true }, '不符条目照写不回滚')
   } finally {
     rmRf(root); rmRf(handoff); rmRf(home)
   }

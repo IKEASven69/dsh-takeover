@@ -20,7 +20,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { resolveHome } from '@agent-handoff/core'
 
-/** 生命周期阶段：write=寄存闸拒收 + 写回正向回执（absorbed-write / config-injected） read=读侧（坏卡跳过 + memory 卡吸收回执） pickup=取件核验异常 */
+/** 生命周期阶段：write=寄存闸拒收 + 写回正向回执（absorbed-write / config-injected） read=读侧（坏卡跳过 + memory 卡吸收回执） pickup=取件核验异常 + 延续端点（continued=取件并产出回执 / abandoned=未取件即清） */
 export type LifecycleStage = 'write' | 'read' | 'pickup'
 
 /** 闭集理由：开集字符串无法聚合出死亡地图。新增理由 = 改这里 + 测试 */
@@ -33,9 +33,15 @@ export const LIFECYCLE_REASONS = [
   'memory-absorbed', // 读侧（正向回执）：memory 轴卡被取件消费——记忆已随卡注入，按建议加载段吸收
   'absorbed-write', // 写侧（正向回执）：handoff_absorb 把已取件记忆卡的条目写进目标记忆文件（confirm 两步后）
   'config-injected', // 写侧（正向回执）：handoff_env action=inject 把备份包内 MCP/skills 条目合并进目标配置（confirm 两步后）
+  'restored', // 写侧（正向回执）：restoreFromArchived 把已弃置卡（dismiss 落 abandoned 的那一步）整卡从 archived/ 搬回 pending/——弃置的逆操作落账；target=卡 id，detail=搬运份数
   'drift_mismatch', // 取侧：git 核验 MISMATCH
   'git_unavailable', // 取侧：git 核验不可用（非仓/无 git）
   'sig_tampered', // 取侧：信封 HMAC 验签失败（内容与写侧签名不符）
+  // ── 0.26 特色功能 · 延续账本（真实延续率数据面；候选 C 评分待账本成熟后另议，不做）──
+  // 与 eval 轴 backtest 的 continued 布尔（push 后有无提交的回测推断）不同数据面：
+  // 这里是取件端点的真实落账，回执卡在（archived/ 带 extras.receipt.for）即 continued 的证据。
+  'continued', // 取侧（正向回执）：源卡被取件并产出延续回执卡（receipt.ts 落账；target=源卡 id，detail=回执卡 id + evidence 条数）
+  'abandoned', // 取侧：pending 卡未取件即被弃置清掉（dismiss-pending 路由落账；target=卡 id，detail=dismiss 未取件）
   'unknown',
 ] as const
 export type LifecycleReason = (typeof LIFECYCLE_REASONS)[number]

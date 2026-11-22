@@ -182,6 +182,20 @@ test('scanMemorySources：hippo 目录三级回退——data-dir.txt 内容 > ~/
   }
 })
 
+test('scanMemorySources：hippo 第四态——env 与 data-dir.txt 均缺席、~/.hippo/memories 也不在盘 → exists:false（蒸馏闭环数据面的诚实空态，0.26 集成入册）', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'dsh-mem-hippo-empty-'))
+  try {
+    mkdirSync(join(tmp, '.hippo'), { recursive: true }) // .hippo 在但 memories/ 不在
+    withHippoEnv({ HIPPO_DATA_DIR: undefined }, () => {
+      const rows = scanMemorySources({ home: tmp })
+      const hippo = rows.find((r) => r.key === 'hippo-db')
+      assert.equal(hippo?.exists, false, '回退目录也不在场 = 诚实空态（非错误）')
+    })
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+})
+
 // ---------- memory.ts 组装与出卡 ----------
 
 const fakeRow = (over: Partial<MemorySourceRow>): MemorySourceRow => ({
@@ -243,6 +257,33 @@ test('readStoreEntries：逐行解析 {text, tags?}——坏行/缺 text 跳过�
     const empty = join(tmp, 'empty.jsonl')
     writeFileSync(empty, 'not json\n{"nope":1}\n')
     assert.equal(readStoreEntries(empty), undefined)
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+})
+
+test('readStoreEntries 对 v2 侧车形态（0.26.1）：meta 行不算条目、v2 字段不进卡面（六段卡面协议不动）', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'dsh-mem-v2-'))
+  try {
+    const p = join(tmp, 'v2-sidecar.jsonl')
+    // v2 形态 = 文件头 meta 行（无 text）+ 条目行带 workspace/weight/section
+    writeFileSync(p, [
+      '{"meta":"dsh-takeover-distill","version":2,"at":"2026-11-19T00:00:00.000Z","entries":2,"workspace":"D:/proj/x"}',
+      `${JSON.stringify({ text: 'v2 条目一', tags: ['t'], workspace: 'D:/proj/x', weight: 3 })}`,
+      `${JSON.stringify({ text: 'v2 条目二', workspace: 'D:/proj/x', weight: 1, section: 'dead_ends' })}`,
+    ].join('\n'))
+    const r = readStoreEntries(p)
+    assert.ok(r, '有效条目在场应返回结果')
+    if (!r) return
+    // meta 行被按「缺 text 坏行」口径跳过；v2 字段不进条目（卡面「建议加载」段保持 v1 渲染）
+    assert.deepEqual(r.entries, [
+      { text: 'v2 条目一', tags: ['t'] },
+      { text: 'v2 条目二' },
+    ])
+    // 纯 meta 文件 = 零有效条目 → undefined（调用方退回指引文案，诚实空态）
+    const metaOnly = join(tmp, 'meta-only.jsonl')
+    writeFileSync(metaOnly, '{"meta":"dsh-takeover-distill","version":2,"at":"2026-11-19T00:00:00.000Z","entries":0}\n')
+    assert.equal(readStoreEntries(metaOnly), undefined)
   } finally {
     rmSync(tmp, { recursive: true, force: true })
   }

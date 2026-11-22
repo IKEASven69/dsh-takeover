@@ -9,6 +9,19 @@
  *   Codex 的 MCP 配置是 config.toml（TOML），JSON 合并语义不等价——明确不做。
  * - skills：目标闭集 = 带 skills 映射的家（用户级 skills 目录惯例）。
  *
+ * 值消毒（0.26 扩展，仅 gemini 行——上游口径来自实现期实抓的 gemini-cli 源码/文档，
+ * 其余 harness 材料缺失不假造，经 InjectTargetDef.mcpSanitize/skillGate 按行声明）：
+ * - `$VAR`/`${VAR}`/`${VAR:-DEF}` 上游两级展开（settings 加载全对象一次展开 + MCP 连接期对
+ *   env/headers 再展开、Windows 另展开 `%VAR%`）——写值预解析成终态（落盘即不被再展开），
+ *   引用解析不出（未定义且无默认）的 server 整条 skip 并如实报告；
+ * - server 别名禁下划线（工具 FQN `mcp_<别名>_<工具>` 按首个下划线切分，策略引擎会误判
+ *   server 身份——上游文档明文告诫）；
+ * - timeout 以毫秒 number 写入（上游 schema 口径；数字字符串原样转 number，非数字单位无
+ *   出处不代换）；
+ * - SKILL.md 写回前按上游 skillLoader 口径校验 frontmatter name/description（零依赖按上游
+ *   兜底行解析实现——放行集是上游可发现集的子集，宁 skip 不写坏）；
+ * - 写回后按上游 schemas/settings.schema.json 派生最小结构校验（增强非闸：不符只报告不回滚）。
+ *
  * 安全纪律（THREAT-MODEL T8 · 与 handoff_absorb 同款硬线）：
  * 1. confirm 两步强制：缺 confirm 一律拒绝，并把「将写什么」逐条列出回显；
  * 2. 只新增不覆盖：同名 MCP server / 已存在的 skill 文件一律跳过（同内容 skip-same、
@@ -32,11 +45,16 @@ import { createHash } from 'node:crypto'
 import { recordLifecycleEvent } from './lifecycle.ts'
 import { envBackupDir, listBackups, readBackupEntryBlobs, validateRelPath } from './envbackup.ts'
 
-/** inject 依赖注入（测试用：dir=HANDOFF_HOME、home=user home、now=事件时刻） */
+/** inject 依赖注入（测试用：dir=HANDOFF_HOME、home=user home、now=事件时刻；
+ * env=值消毒用的环境快照（缺省取当前 process.env 的字符串键值——inject 在目标机执行，
+ * 该环境即 gemini 启动时将看到的口径）；winEnvExpand=是否按 Windows 口径消毒 %VAR%
+ * （缺省 process.platform==='win32'——上游仅 Windows 在 MCP 连接期展开 %VAR%）） */
 export interface InjectDeps {
   dir?: string
   home?: string
   now?: Date
+  env?: Record<string, string>
+  winEnvExpand?: boolean
 }
 
 /** MCP 合并目标：JSON 配置路径 + 服务器表键名（事实标准均为 mcpServers） */
@@ -53,6 +71,12 @@ export interface InjectTargetDef {
   mcp?: InjectMcpMapping
   /** 用户级 skills 目录目标；undefined = 无公开惯例，明确不做 */
   skills?: (home: string) => string
+  /** mcpServers 值消毒三条 + 写后 schema 派生校验（上游口径按行声明——目前只有 gemini 行，
+   *  其余家上游行为未调研不假造）。undefined = 不消毒，保持 0.25 既有合并语义 */
+  mcpSanitize?: boolean
+  /** SKILL.md frontmatter name/description 写回前闸（上游 skillLoader 口径按行声明——
+   *  claude/zcode 的 skill 装载口径未调研，不假造套用）。undefined = 不设闸 */
+  skillGate?: boolean
   /** 不做项的诚实标注（渲染给模型/用户看） */
   limits: string
 }
@@ -61,7 +85,10 @@ export interface InjectTargetDef {
  * 配置写回目标注册表（事实标准口径，路径全部可注入测试）：
  * - claude：MCP 用户级在 ~/.claude.json 顶层 mcpServers；用户 skills 目录 ~/.claude/skills。
  * - cursor：MCP 全局在 ~/.cursor/mcp.json；skills 无用户级目录公开惯例——不做。
- * - gemini：MCP 在 ~/.gemini/settings.json 的 mcpServers；skills 无公开惯例——不做。
+ * - gemini：MCP 在 ~/.gemini/settings.json 的 mcpServers；skills 写用户级主名 ~/.gemini/skills/
+ *   （上游 Storage.getUserSkillsDir；别名 ~/.agents/skills 是发现侧兼容、skillManager 后加载
+ *   且同名优先——写回走主名避免歧义，主名必被发现），项目级 .gemini/skills/ 不做（inject 是
+ *   用户级备份恢复通路）；该行带 mcpSanitize + skillGate（上游口径见模块头）。
  * - codex：MCP 是 ~/.codex/config.toml（TOML），与 { mcpServers } JSON 合并语义不等价——
  *   不做；skills 无公开惯例——不做。
  * - zcode：用户 skills 即 ~/.agents/skills 事实标准目录（源即目标，注入天然幂等去重）；
@@ -86,7 +113,10 @@ export const INJECT_TARGETS: readonly InjectTargetDef[] = [
     key: 'gemini',
     agent: 'Gemini CLI',
     mcp: { path: (h) => join(h, '.gemini', 'settings.json'), key: 'mcpServers' },
-    limits: 'skills 无公开惯例，不做；hooks/权限语义不等价，不做',
+    skills: (h) => join(h, '.gemini', 'skills'),
+    mcpSanitize: true,
+    skillGate: true,
+    limits: 'hooks/权限语义不等价，不做；skills 只写用户级主名 ~/.gemini/skills/（上游 Storage.getUserSkillsDir；别名 ~/.agents/skills 为发现侧兼容不写），项目级不做',
   },
   {
     key: 'codex',
@@ -195,6 +225,321 @@ function loadSourceEntries(file: string, passphrase: string, deps?: InjectDeps):
   return { mcpServers, skills }
 }
 
+// ------------------------------------------------------- gemini 行值消毒（0.26 · 上游口径实现期实抓）
+
+/** 上游 envVarResolver.ts 同款展开正则：$VAR / ${VAR} / ${VAR:-DEFAULT}（settings 加载期全对象一次展开） */
+const GEMINI_ENVVAR_REGEX = /\$(?:(\w+)|{([^}]+?)(?::-([^}]*))?})/g
+/** 上游 envExpansion.ts 同款 Windows 形态：%VAR%（仅 Windows、仅 env/headers 在 MCP 连接期展开） */
+const GEMINI_WINVAR_REGEX = /%(\w+)%/g
+
+/** 值消毒的执行口径（deps → 环境快照 + Windows %VAR% 闸） */
+interface GeminiSanitizeOpts {
+  env: Record<string, string>
+  win: boolean
+}
+
+function sanitizeOptsOf(deps?: InjectDeps): GeminiSanitizeOpts {
+  const env = deps?.env ?? Object.fromEntries(Object.entries(process.env).filter((e): e is [string, string] => typeof e[1] === 'string'))
+  return { env, win: deps?.winEnvExpand ?? process.platform === 'win32' }
+}
+
+/**
+ * 单字符串按上游两级展开口径做一次预解析：可解析 → { value }（落盘即终态，上游两级展开皆空转）；
+ * 有引用解析不出 → { unresolved }（整 server skip 的依据）。
+ *
+ * 语义依据（实现期实抓上游源码，0.69.0/main 双对）：
+ * - settings 加载：resolveEnvVarsInObject 对整个 settings 对象一次展开（packages/cli/src/config/
+ *   settings.ts:924）；未定义且无默认 → 占位符原样保留（envVarResolver.ts）——对写回即「裸 $ 落盘」，
+ *   且环境一变就会被展开，违反「写值规避上游展开」不变量 → 判不可解析；
+ * - MCP 连接：env/headers 值再经 dotenv-expand 二次展开（packages/core/src/tools/mcp-client.ts:1015/:2420），
+ *   Windows 另把 %VAR% 展开、未定义解析为空串（packages/core/src/utils/envExpansion.ts:28-31）——
+ *   未定义 %VAR% 落盘会被静默清空 → 同判不可解析。
+ * 转义口径说明：上游无任何转义语法（`\$` 不被两级展开链识别），「按上游口径转义」的唯一落地
+ * = 预解析成终态值——与上游启动时用同一环境展开的结果逐字节一致，且此后不再随环境漂移。
+ */
+function resolveGeminiString(s: string, opts: GeminiSanitizeOpts, winScope: boolean): { value: string; refs: string[] } | { unresolved: string } {
+  const refs: string[] = []
+  const missing: string[] = []
+  let out = s.replace(GEMINI_ENVVAR_REGEX, (match, v1?: string, v2?: string, def?: string): string => {
+    const name = v1 ?? v2 ?? ''
+    if (name === '') return match
+    const val = opts.env[name]
+    if (val !== undefined && (val !== '' || def === undefined)) {
+      refs.push(`$${name}（${clipVal(match)}）`)
+      return val
+    }
+    if (def !== undefined) {
+      refs.push(`$${name}（默认值）`)
+      return def
+    }
+    missing.push(match)
+    return match // 上游口径：未定义且无默认原样保留——写回判不可解析（skip 依据）
+  })
+  if (missing.length > 0) {
+    return { unresolved: `${missing.join('、')} 在目标机当前环境未定义且无默认值` }
+  }
+  if (out.match(GEMINI_ENVVAR_REGEX) !== null) {
+    // 预解析结果仍含 $ 引用（如默认值里嵌 $B）——上游加载期还会再展开，落盘非终态
+    return { unresolved: `解析后仍含 $ 引用（${clipVal(out)}）` }
+  }
+  if (winScope && opts.win) {
+    out = out.replace(GEMINI_WINVAR_REGEX, (match, name: string): string => {
+      const val = opts.env[name]
+      if (val !== undefined) {
+        refs.push(`%${name}%`)
+        return val
+      }
+      return match // 交由下方复扫判不可解析（上游会解析为空串——静默清空不可接受）
+    })
+    const leftover = out.match(GEMINI_WINVAR_REGEX)
+    if (leftover !== null) {
+      return { unresolved: `${leftover[0]} 在目标机当前环境未定义（上游 Windows 口径会展开为空串——静默清空不可接受）` }
+    }
+  }
+  return { value: out, refs }
+}
+
+/** 展开引用的出处标注（值本身可能超长，截到 40 字符） */
+function clipVal(v: string): string {
+  const t = v.length > 40 ? `${v.slice(0, 40)}…` : v
+  return JSON.stringify(t)
+}
+
+export type GeminiServerSanitize =
+  | { ok: true; value: Record<string, unknown>; resolved: string[] }
+  | { ok: false; reason: string }
+
+/**
+ * gemini 行单条 MCP server 配置消毒：别名闸（下划线/空）→ timeout 毫秒形态 → 深走值预解析。
+ * 任何一条不满足 → 整 server skip（只新增不覆盖纪律下，改写/丢弃字段都等于动用户配置——
+ * 与「配置不是对象跳过」同款按条跳过并报告）。
+ */
+export function sanitizeGeminiMcpServer(alias: string, cfg: unknown, opts: GeminiSanitizeOpts): GeminiServerSanitize {
+  // 别名闸：FQN mcp_<别名>_<工具> 按首个下划线切分（docs/reference/policy-engine.md 明文告诫
+  // 「Do not use underscores in your MCP server names」——下划线别名会让策略引擎误判 server 身份，
+  // 通配规则与安全策略静默失效）；空别名上游 FQN 解析为空 server 组件（tool-names.ts 显式拒绝）同拒。
+  // 不静默改名——别名是用户配置身份，改名即越权。
+  if (alias === '') return { ok: false, reason: '别名为空（上游工具 FQN 解析不出 server 组件）' }
+  if (alias.includes('_')) return { ok: false, reason: `别名含下划线——上游工具 FQN mcp_<别名>_<工具> 按首个下划线切分，策略引擎会误判 server 身份（上游文档明文告诫）` }
+  if (cfg === null || typeof cfg !== 'object' || Array.isArray(cfg)) return { ok: false, reason: '配置不是对象，形态不认识' }
+
+  const resolved: string[] = []
+  const src = cfg as Record<string, unknown>
+
+  // timeout 毫秒形态（上游 schemas/settings.schema.json:4114-4116「Timeout in milliseconds」type=number；
+  // docs/tools/mcp-server.md「Request timeout in milliseconds (default: 600,000ms)」——单位口径有出处，
+  // 示例值材料截断未到手，故只做形态合规不做任何单位换算/示例编造）：
+  // number 原样；纯数字字符串原数字转 number（形态合规，不换算单位）；其余（"30s" 等）skip。
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(src)) {
+    if (k === 'timeout' && v !== undefined) {
+      if (typeof v === 'number' && Number.isFinite(v)) { out[k] = v; continue }
+      if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) {
+        out[k] = Number(v)
+        resolved.push(`timeout ${JSON.stringify(v)}→${Number(v)}（毫秒 number 形态，数字原样不换算）`)
+        continue
+      }
+      return { ok: false, reason: `timeout 值 ${JSON.stringify(v)} 不是毫秒数字——上游 schema 口径 timeout 为毫秒 number，单位换算无出处不代做` }
+    }
+    out[k] = v
+  }
+
+  // 值深走预解析：$ 形态全字段；%VAR% 仅 env/headers 子树且仅 Windows 口径（上游连接期只对这两块
+  // 做 dotenv-expand + %VAR% 预处理；settings 加载期虽全对象展开 $，但 % 只在连接期——scope 忠实上游）
+  const walk = (v: unknown, path: string, winScope: boolean): { ok: true; value: unknown } | { ok: false; reason: string } => {
+    if (typeof v === 'string') {
+      const r = resolveGeminiString(v, opts, winScope)
+      if ('unresolved' in r) return { ok: false, reason: `${path} 的 ${r.unresolved}——落盘会被上游展开/静默清空，inject 不写不可解析值（如为有意透传请手写在目标配置）` }
+      for (const ref of r.refs) resolved.push(`${path}=${ref}`)
+      return { ok: true, value: r.value }
+    }
+    if (Array.isArray(v)) {
+      const arr: unknown[] = []
+      for (let i = 0; i < v.length; i++) {
+        const r = walk(v[i], `${path}[${i}]`, winScope)
+        if (!r.ok) return r
+        arr.push(r.value)
+      }
+      return { ok: true, value: arr }
+    }
+    if (v !== null && typeof v === 'object') {
+      const obj: Record<string, unknown> = {}
+      for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+        // 上游只展开值不展开键（resolveEnvVarsInObject 逐键 resolve 值）——键名原样保留
+        const sub = winScope || k === 'env' || k === 'headers'
+        const r = walk(val, path === '' ? k : `${path}.${k}`, sub)
+        if (!r.ok) return r
+        obj[k] = r.value
+      }
+      return { ok: true, value: obj }
+    }
+    return { ok: true, value: v }
+  }
+  const w = walk(out, '', false)
+  if (!w.ok) return { ok: false, reason: w.reason }
+  return { ok: true, value: w.value as Record<string, unknown>, resolved }
+}
+
+/** gemini 行整表消毒：逐条 sanitize，skip 条目进 notes（与「配置不是对象跳过」同款按条报告） */
+export function sanitizeGeminiMcpTable(servers: Record<string, unknown>, opts: GeminiSanitizeOpts): { table: Record<string, unknown>; notes: string[] } {
+  const table: Record<string, unknown> = {}
+  const notes: string[] = []
+  for (const [alias, cfg] of Object.entries(servers)) {
+    const r = sanitizeGeminiMcpServer(alias, cfg, opts)
+    if (!r.ok) {
+      notes.push(`MCP server「${alias}」${r.reason}，跳过`)
+      continue
+    }
+    if (r.resolved.length > 0) notes.push(`MCP server「${alias}」${r.resolved.length} 处 $/% 引用已按目标机当前环境预解析写入（落盘即终态，上游启动/连接期展开不再生效）：${r.resolved.join('、')}`)
+    table[alias] = r.value
+  }
+  return { table, notes }
+}
+
+// ------------------------------------------------------- gemini 行 SKILL.md frontmatter 闸
+
+/** 上游 skillLoader.ts:35-36 FRONTMATTER_REGEX 同款（BOM 容忍 + --- 界定） */
+const SKILL_FRONTMATTER_REGEX = /^\uFEFF?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n([\s\S]*))?$/
+
+function stripOuterQuotes(value: string): string {
+  if (value.length >= 2 && ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))) return value.slice(1, -1)
+  return value
+}
+
+/**
+ * SKILL.md frontmatter 闸（上游 packages/core/src/skills/skillLoader.ts parseFrontmatter 口径）：
+ * name/description 双 string 取不到 → 上游根本不发现该 skill（loadSkillFromFile 返回 null），
+ * 写了也是死文件——「不写坏 skill」的落法是写回前 skip 并如实报告。
+ *
+ * 零依赖口径说明：上游先 YAML（js-yaml）后兜底简单行解析；本仓零依赖无 YAML 解析器，
+ * 按上游兜底行解析实现（逐行 name:/description: 提取、剥外层引号、description 支持续行与
+ * >| 块指示符）。关键性质：上游 YAML 分支失败即落到同一套行解析——本闸的放行集 ⊆ 上游
+ * 可发现集（凡本闸放行上游必能发现）；仅极端 YAML 形态（YAML 成而行解析不成）会保守 skip，
+ * 如实报告优于写坏。注意行解析口径下 `name: 123` 等标量按文本提取为 string——上游兜底口径
+ * 同样接受（YAML 分支类型不符后落到行解析），本闸不比上游严。
+ */
+export function geminiSkillFrontmatterOk(content: string): { ok: true } | { ok: false; reason: string } {
+  const m = content.match(SKILL_FRONTMATTER_REGEX)
+  if (m === null) return { ok: false, reason: '无 frontmatter（上游 skillLoader 需 --- 界定的 name/description 才发现 skill）' }
+  const lines = m[1]?.split(/\r?\n/) ?? []
+  let name: string | undefined
+  let description: string | undefined
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? ''
+    const nameMatch = line.match(/^[ \t]*name[ \t]*:/i)
+    if (nameMatch !== null && name === undefined) {
+      name = stripOuterQuotes(line.slice(nameMatch[0].length).trim())
+      continue
+    }
+    const descMatch = line.match(/^([ \t]*)description[ \t]*:/i)
+    if (descMatch !== null && description === undefined) {
+      const descIndent = descMatch[1]?.length ?? 0
+      const firstLine = line.slice(descMatch[0].length).trim()
+      const descLines = /^[>|][-+]?$/.test(firstLine) ? [] : [firstLine]
+      // 续行：缩进更深、非已知键/注释（上游 parseSimpleFrontmatter 同款判定）
+      while (i + 1 < lines.length) {
+        const next = lines[i + 1] ?? ''
+        const nextIndent = next.match(/^[ \t]*/)?.[0].length ?? 0
+        const isNonEmpty = nextIndent < next.length
+        const isKnownKey = /^[ \t]*(?:name|description)[ \t]*:/i.test(next)
+        const isComment = /^[ \t]*#/.test(next)
+        const isOtherKey = nextIndent <= descIndent && /^[ \t]*[a-zA-Z0-9_-]+[ \t]*:/.test(next)
+        if (isNonEmpty && !isKnownKey && !isComment && !isOtherKey) {
+          descLines.push(next.trim())
+          i++
+        } else break
+      }
+      description = stripOuterQuotes(descLines.filter(Boolean).join(' '))
+      continue
+    }
+  }
+  if (name === undefined || description === undefined) return { ok: false, reason: 'frontmatter 取不到 name/description 双 string 键（上游 skillLoader 口径不发现该 skill）' }
+  return { ok: true }
+}
+
+/**
+ * gemini 行 skills 整树闸：skill = 目录 + 可被上游发现的 SKILL.md（上游 glob 只认根级与一级
+ * 子目录的 SKILL.md）。分组规则：rel 首段为组；组内 SKILL.md 闸判定全组去留——
+ * - SKILL.md 闸不过 → 整目录跳过（skill 无有效入口，只写资源文件是死字节）；
+ * - 组内无一级 SKILL.md → 整目录跳过（上游不发现，同上）；
+ * - 根级散文件（无目录的 rel）原样放行（上游本就不解析它们，写回无害，与既有只新增语义一致）。
+ */
+export function gateGeminiSkills(entries: Array<{ rel: string; content: Buffer }>): { keep: Array<{ rel: string; content: Buffer }>; notes: string[] } {
+  const groups = new Map<string, Array<{ rel: string; content: Buffer }>>()
+  for (const e of entries) {
+    const i = e.rel.indexOf('/')
+    const g = i === -1 ? '' : e.rel.slice(0, i)
+    const list = groups.get(g) ?? []
+    list.push(e)
+    groups.set(g, list)
+  }
+  const keep: Array<{ rel: string; content: Buffer }> = []
+  const notes: string[] = []
+  for (const [g, list] of groups) {
+    if (g === '') {
+      // 根组：仅根级 SKILL.md 是 skill 入口需闸；其余散文件放行
+      for (const e of list) {
+        if (e.rel === 'SKILL.md') {
+          const r = geminiSkillFrontmatterOk(e.content.toString('utf-8'))
+          if (r.ok) keep.push(e)
+          else notes.push(`根级 SKILL.md ${r.reason}，跳过`)
+        } else keep.push(e)
+      }
+      continue
+    }
+    const entryMd = list.find((e) => e.rel === `${g}/SKILL.md`)
+    if (entryMd === undefined) {
+      notes.push(`skill「${g}」无一级 SKILL.md——上游只发现根级与一级子目录的 SKILL.md，整目录跳过 ${list.length} 个文件`)
+      continue
+    }
+    const r = geminiSkillFrontmatterOk(entryMd.content.toString('utf-8'))
+    if (r.ok) keep.push(...list)
+    else notes.push(`skill「${g}」SKILL.md ${r.reason}，整目录跳过 ${list.length} 个文件`)
+  }
+  return { keep, notes }
+}
+
+// ------------------------------------------------------- 写后 schema 派生校验（增强非闸）
+
+/** 上游 schemas/settings.schema.json $defs/MCPServerConfig 的字段闭集（2026-11-19 实抓 main，
+ * additionalProperties:false——未知字段上游 Zod 校验告警并 coerce 剥除） */
+const SCHEMA_MCP_FIELDS: Record<string, 'string' | 'boolean' | 'number' | 'stringArray' | 'stringRecord' | 'object'> = {
+  command: 'string', url: 'string', httpUrl: 'string', cwd: 'string', description: 'string',
+  authProviderType: 'string', targetAudience: 'string', targetServiceAccount: 'string', tcp: 'string', type: 'string',
+  trust: 'boolean', timeout: 'number',
+  args: 'stringArray', includeTools: 'stringArray', excludeTools: 'stringArray',
+  env: 'stringRecord', headers: 'stringRecord',
+  oauth: 'object', extension: 'object',
+}
+
+/**
+ * 写回后结构校验（增强非闸）：按实现期实抓的上游 schemas/settings.schema.json 派生的最小
+ * 结构契约——非完整 JSON Schema 校验、无网络依赖（schema 随上游演进而变时以「只新增不覆盖 +
+ * checkpoint 可回滚」为降级面）。返回不符描述列表（空 = 通过）；只报告不回滚、不拒写。
+ */
+export function schemaCheckMcpServer(cfg: unknown): string[] {
+  if (cfg === null || typeof cfg !== 'object' || Array.isArray(cfg)) return ['配置不是对象']
+  const src = cfg as Record<string, unknown>
+  const viols: string[] = []
+  for (const [k, v] of Object.entries(src)) {
+    const kind = SCHEMA_MCP_FIELDS[k]
+    if (kind === undefined) {
+      viols.push(`字段 ${k} 不在上游 schema 闭集（MCPServerConfig additionalProperties:false，上游会告警并剥除）`)
+      continue
+    }
+    if (kind === 'string' && typeof v !== 'string') viols.push(`字段 ${k} 应为 string，实际 ${typeof v}`)
+    else if (kind === 'boolean' && typeof v !== 'boolean') viols.push(`字段 ${k} 应为 boolean，实际 ${typeof v}`)
+    else if (kind === 'number' && (typeof v !== 'number' || !Number.isFinite(v))) viols.push(`字段 ${k} 应为 number，实际 ${typeof v}`)
+    else if (kind === 'stringArray' && (!Array.isArray(v) || !v.every((x) => typeof x === 'string'))) viols.push(`字段 ${k} 应为 string[]，实际形态不符`)
+    else if (kind === 'stringRecord' && (v === null || typeof v !== 'object' || Array.isArray(v) || !Object.values(v as Record<string, unknown>).every((x) => typeof x === 'string'))) viols.push(`字段 ${k} 应为 { [k]: string }，实际形态不符`)
+    else if (kind === 'object' && (v === null || typeof v !== 'object' || Array.isArray(v))) viols.push(`字段 ${k} 应为 object，实际 ${typeof v}`)
+  }
+  if (src['command'] === undefined && src['url'] === undefined && src['httpUrl'] === undefined) {
+    viols.push('缺 command/url/httpUrl 任一传输字段（上游运行时无法建立连接）')
+  }
+  return viols
+}
+
 /**
  * 注入预演（纯读零写盘）：目标闭集校验 → 源条目解密读取 → 逐条比对出计划。
  * planInject 的任何失败都回 { ok: false, error }；成功返回逐条计划（add/create 才会写）。
@@ -231,6 +576,14 @@ export function planInject(args: InjectArgs, deps?: InjectDeps): InjectPlanResul
       mcpConfigPath = def.mcp.path(home)
       assertNotSessionStore(mcpConfigPath)
       if (mcpServers !== null) {
+        // 值消毒先行（gemini 行声明）：消毒后的表才是「将写入的值」——same/conflict 判定、
+        // 落盘值都用它（同名同消毒值 = skip-same，二次 inject 幂等）；skip 条目进 notes
+        let effective = mcpServers
+        if (def.mcpSanitize === true) {
+          const san = sanitizeGeminiMcpTable(mcpServers, sanitizeOptsOf(deps))
+          notes.push(...san.notes)
+          effective = san.table
+        }
         let current: Record<string, unknown> = {}
         try {
           const st = statSync(mcpConfigPath)
@@ -250,7 +603,9 @@ export function planInject(args: InjectArgs, deps?: InjectDeps): InjectPlanResul
         const table = (current[def.mcp.key] !== undefined && typeof current[def.mcp.key] === 'object' && current[def.mcp.key] !== null && !Array.isArray(current[def.mcp.key]))
           ? current[def.mcp.key] as Record<string, unknown>
           : {}
-        for (const [server, cfg] of Object.entries(mcpServers)) {
+        for (const [server, cfg] of Object.entries(effective)) {
+          // 非消毒行（claude/cursor）保持 0.25 语义：非对象形态按条跳过；消毒行（gemini）
+          // 该情况已在 sanitizeGeminiMcpTable 内 skip 并进 notes，此分支天然不触发
           if (cfg === null || typeof cfg !== 'object' || Array.isArray(cfg)) {
             notes.push(`MCP server ${server} 配置不是对象，跳过（形态不认识）`)
             continue
@@ -270,7 +625,14 @@ export function planInject(args: InjectArgs, deps?: InjectDeps): InjectPlanResul
     if (def.skills !== undefined) {
       skillsDir = def.skills(home)
       assertNotSessionStore(skillsDir)
-      for (const s of skills) {
+      // frontmatter 闸先行（gemini 行声明）：上游发现不了的 skill 写了也是死文件——整组 skip 进 notes
+      let effectiveSkills = skills
+      if (def.skillGate === true) {
+        const gate = gateGeminiSkills(skills)
+        notes.push(...gate.notes)
+        effectiveSkills = gate.keep
+      }
+      for (const s of effectiveSkills) {
         const targetPath = join(skillsDir, ...s.rel.split('/'))
         let have: Buffer | undefined
         try {
@@ -287,6 +649,9 @@ export function planInject(args: InjectArgs, deps?: InjectDeps): InjectPlanResul
 
     const writable = items.filter((i) => i.action === 'add' || i.action === 'create')
     if (writable.length === 0 && items.length === 0) {
+      if (notes.length > 0) {
+        return { ok: false, error: `${def.agent} 无可写入条目——${notes.join('；')}（本次明确不做，不写任何盘）` }
+      }
       return { ok: false, error: `${def.agent} 无可注入的等价映射（${def.limits}）——本次明确不做，不写任何盘` }
     }
     return { ok: true, target: targetKey, agent: def.agent, file: name, items, ...(mcpConfigPath !== undefined ? { mcpConfigPath } : {}), ...(skillsDir !== undefined ? { skillsDir } : {}), notes }
@@ -351,6 +716,11 @@ export function applyInject(args: InjectArgs, deps?: InjectDeps): InjectResult {
     const def = INJECT_TARGETS.find((t) => t.key === plan.target)!
     const home = deps?.home ?? homedir()
     const { mcpServers, skills } = loadSourceEntries(plan.file, args.passphrase ?? '', deps)
+    // 与 planInject 同一套消毒（同一次调用的环境快照一致）：写盘值必须用消毒后的终态——
+    // 计划里 add 条目的 same/conflict 判定基于消毒值，写裸值会让「计划与落盘不一致」
+    const effectiveMcp = (def.mcpSanitize === true && mcpServers !== null)
+      ? sanitizeGeminiMcpTable(mcpServers, sanitizeOptsOf(deps)).table
+      : mcpServers
 
     let checkpointDir: string | undefined
     const mcpAdded: string[] = []
@@ -375,7 +745,7 @@ export function applyInject(args: InjectArgs, deps?: InjectDeps): InjectResult {
         ? doc[def.mcp.key] as Record<string, unknown>
         : {}
       for (const item of adds) {
-        const cfg = mcpServers[item.name]
+        const cfg = effectiveMcp?.[item.name]
         if (cfg === undefined) continue // 预演到执行之间包内容不可能变（同一次解密）；防御式跳过
         table[item.name] = cfg
         mcpAdded.push(item.name)
@@ -420,6 +790,8 @@ export function applyInject(args: InjectArgs, deps?: InjectDeps): InjectResult {
     skillsSkipped = plan.items.filter((i) => i.kind === 'skill' && (i.action === 'skip-same' || i.action === 'skip-conflict')).length
 
     if (mcpAdded.length === 0 && skillsCreated.length === 0) {
+      // 消毒 skip 条目（notes）不是计划 item——「未写任何盘」的口径里必须如实点名，否则静默不可见
+      const sanitizeTail = plan.notes.length > 0 ? `；${plan.notes.join('；')}` : ''
       return {
         ok: true,
         action: 'inject',
@@ -430,9 +802,19 @@ export function applyInject(args: InjectArgs, deps?: InjectDeps): InjectResult {
         mcpSkipped,
         skillsCreated,
         skillsSkipped,
-        detail: `目标已是备份内容或全部条目冲突跳过（只新增不覆盖）：MCP 跳过 ${mcpSkipped}、skills 跳过 ${skillsSkipped}——未写任何盘`,
+        detail: `目标已是备份内容或全部条目冲突跳过（只新增不覆盖）：MCP 跳过 ${mcpSkipped}、skills 跳过 ${skillsSkipped}——未写任何盘${sanitizeTail}`,
       }
     }
+
+    // 写后 schema 派生校验（增强非闸，仅消毒行）：只报告不回滚——发现的相符/不符都如实进 detail
+    const schemaNotes: string[] = []
+    if (def.mcpSanitize === true && mcpAdded.length > 0) {
+      const viols = mcpAdded.flatMap((n) => schemaCheckMcpServer(effectiveMcp?.[n]).map((v) => `server「${n}」${v}`))
+      schemaNotes.push(viols.length === 0
+        ? `schema 派生结构校验（上游 settings.schema.json 实抓快照）：新增 ${mcpAdded.length} 个 server 全部通过`
+        : `schema 派生结构校验不符 ${viols.length} 处（增强非闸，已写值未回滚）：${viols.join('；')}`)
+    }
+    const sanitizeTail = (plan.notes.length > 0 || schemaNotes.length > 0) ? `；${[...plan.notes, ...schemaNotes].join('；')}` : ''
 
     recordLifecycleEvent({
       stage: 'write',
@@ -455,7 +837,7 @@ export function applyInject(args: InjectArgs, deps?: InjectDeps): InjectResult {
       detail: [
         `已合并进 ${plan.agent}：MCP 新增 ${mcpAdded.length} 个${mcpAdded.length > 0 ? `（${mcpAdded.join('、')}）` : ''}、skills 新建 ${skillsCreated.length} 个；跳过 MCP ${mcpSkipped}/skills ${skillsSkipped}（同内容或冲突——只新增不覆盖）`,
         checkpointDir !== undefined ? `被改的既有配置原物快照在 ${checkpointDir}（handoff_env action=rollback file=<checkpoint 目录名> 可回滚）` : '无既有文件被改，无需回滚',
-      ].join('；'),
+      ].join('；') + sanitizeTail,
     }
   } catch (e) {
     return { ok: false, error: readable(e) }
